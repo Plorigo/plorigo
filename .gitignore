@@ -1,0 +1,72 @@
+# ============================================================
+# Plorigo .gitignore
+# ============================================================
+
+# ---- Private / local context (NEVER commit) ----
+.context/
+.env
+.env.*
+!.env.example
+*.local
+secrets/
+*.pem
+*.key
+*.p12
+*-credentials.json
+
+# ---- Go ----
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.txt
+coverage.html
+profile.cov
+go.work
+go.work.sum
+/vendor/
+
+# ---- Node / Frontend (apps/web) ----
+node_modules/
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+!.yarn/plugins
+!.yarn/sdks
+!.yarn/versions
+build/
+.vite/
+.turbo/
+*.tsbuildinfo
+.eslintcache
+.cache/
+
+# ---- Generated code ----
+# Protobuf / ConnectRPC output (buf generate)
+/proto/gen/
+# (sqlc output is typically committed; ignore here only if you generate locally)
+
+# ---- Local infra / Docker ----
+.docker-data/
+*.tar.gz
+*.tgz
+
+# ---- Logs ----
+*.log
+logs/
+
+# ---- Editors / OS ----
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.swp
+*.swo
+.DS_Store
+Thumbs.db

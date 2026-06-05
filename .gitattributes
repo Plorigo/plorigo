@@ -1,0 +1,38 @@
+# Normalize line endings across platforms
+* text=auto eol=lf
+
+# Source — always LF
+*.go      text eol=lf
+go.mod    text eol=lf
+go.sum    text eol=lf
+*.sh      text eol=lf
+*.ts      text eol=lf
+*.tsx     text eol=lf
+*.js      text eol=lf
+*.jsx     text eol=lf
+
+# Windows scripts — CRLF
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+
+# Generated code — collapse in diffs and exclude from language stats
+*.pb.go        linguist-generated=true
+*_connect.go   linguist-generated=true
+proto/gen/**   linguist-generated=true
+**/*.gen.go    linguist-generated=true
+go.sum         linguist-generated=true
+pnpm-lock.yaml linguist-generated=true
+
+# Documentation
+docs/**   linguist-documentation=true
+
+# Binary assets
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.svg   text
+*.woff  binary
+*.woff2 binary
+*.pdf   binary

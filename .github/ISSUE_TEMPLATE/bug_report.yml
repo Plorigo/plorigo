@@ -1,0 +1,106 @@
+name: 🐛 Bug report
+description: Report a problem with Plorigo
+title: "[Bug]: "
+labels: ["type/bug", "status/triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report!
+        ⚠️ **Security vulnerabilities must not be reported here** — see our
+        [Security Policy](https://github.com/Plorigo/plorigo/security/policy).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear and concise description of the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Plorigo version / commit
+      placeholder: e.g. v0.1.0 or a commit SHA
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment-method
+    attributes:
+      label: How are you running Plorigo?
+      options:
+        - Self-hosted
+        - Cloud (managed)
+        - Local development
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected component
+      options:
+        - Control plane (API / dashboard backend)
+        - Server agent
+        - CLI
+        - Dashboard (web UI)
+        - Deployments / build
+        - Domains / SSL (Caddy)
+        - Secrets / env vars
+        - Databases / resources
+        - Backups / restore
+        - Logs / metrics
+        - Terminal
+        - AI / MCP
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Server OS & version
+      placeholder: e.g. Ubuntu 24.04
+  - type: input
+    id: docker
+    attributes:
+      label: Docker version
+      placeholder: output of `docker --version`
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: Paste build/runtime logs. **Redact any secrets before posting.**
+      render: shell
+  - type: dropdown
+    id: ai-usage
+    attributes:
+      label: Was AI used to help create this report or a related change?
+      options:
+        - "No"
+        - "Yes"
+    validations:
+      required: true
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I have searched existing issues and this is not a duplicate.
+          required: true
+        - label: I agree to follow this project's [Code of Conduct](https://github.com/Plorigo/plorigo/blob/main/CODE_OF_CONDUCT.md).
+          required: true

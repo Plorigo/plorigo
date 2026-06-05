@@ -1,0 +1,59 @@
+name: ✨ Feature request
+description: Suggest an idea or improvement for Plorigo
+title: "[Feature]: "
+labels: ["type/feature", "status/triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea! For open-ended brainstorming, consider starting a
+        [Discussion](https://github.com/Plorigo/plorigo/discussions) instead.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the pain point or use case ("I'm always frustrated when ...").
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Deployments
+        - Server agent
+        - CLI
+        - Dashboard
+        - Domains / SSL
+        - Secrets
+        - Databases / resources
+        - Backups
+        - Logs / metrics / alerts
+        - Teams / RBAC
+        - AI / MCP
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to help implement this.
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree to follow this project's [Code of Conduct](https://github.com/Plorigo/plorigo/blob/main/CODE_OF_CONDUCT.md).
+          required: true

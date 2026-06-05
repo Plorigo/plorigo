@@ -1,0 +1,37 @@
+version: 2
+updates:
+  # GitHub Actions — active now (scans .github/workflows)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["type/chore", "area/ci"]
+
+  # Go modules — activates once a go.mod exists
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      go-dependencies:
+        patterns: ["*"]
+    labels: ["type/chore", "area/dependencies"]
+
+  # Dashboard (npm/pnpm) — activates once apps/web has a manifest
+  - package-ecosystem: "npm"
+    directory: "/apps/web"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      web-dependencies:
+        patterns: ["*"]
+    labels: ["type/chore", "area/dashboard"]
+
+  # Docker — activates once deploy/ has Dockerfiles/compose
+  - package-ecosystem: "docker"
+    directory: "/deploy"
+    schedule:
+      interval: "weekly"
+    labels: ["type/chore", "area/ci"]

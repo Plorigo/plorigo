@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Questions & Discussions
+    url: https://github.com/Plorigo/plorigo/discussions
+    about: Ask questions, share ideas, and get help from the community.
+  - name: 🔐 Report a security vulnerability
+    url: https://github.com/Plorigo/plorigo/security/advisories/new
+    about: Please report security issues privately — do NOT open a public issue.
+  - name: 📖 Documentation
+    url: https://github.com/Plorigo/plorigo/tree/main/docs
+    about: Read the project documentation.

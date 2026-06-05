@@ -1,0 +1,40 @@
+# Plorigo code owners
+# Maps paths to the owner(s) responsible for reviewing changes. Code-owner review is
+# required on protected branches. The LAST matching pattern takes precedence.
+# Replace @ismatBabirli with the @Plorigo/maintainers team once it exists.
+
+# Default owner for everything in the repo
+*                       @ismatBabirli
+
+# Meta / community / CI
+/.github/               @ismatBabirli
+/CONTRIBUTING.md        @ismatBabirli
+/SECURITY.md            @ismatBabirli
+/CODE_OF_CONDUCT.md     @ismatBabirli
+/LICENSE                @ismatBabirli
+/CLA.md                 @ismatBabirli
+/TRADEMARK.md           @ismatBabirli
+
+# Go binaries
+/cmd/controlplane/      @ismatBabirli
+/cmd/agent/             @ismatBabirli
+/cmd/cli/               @ismatBabirli
+
+# Internal modules — security-sensitive areas get extra scrutiny
+/internal/secrets/      @ismatBabirli
+/internal/policy/       @ismatBabirli
+/internal/agents/       @ismatBabirli
+/internal/deployments/  @ismatBabirli
+/internal/backups/      @ismatBabirli
+/internal/ai/           @ismatBabirli
+/internal/mcp/          @ismatBabirli
+
+# API contracts
+/proto/                 @ismatBabirli
+
+# Dashboard
+/apps/web/              @ismatBabirli
+
+# Deploy / infra / migrations
+/deploy/                @ismatBabirli
+/migrations/            @ismatBabirli

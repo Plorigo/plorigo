@@ -1,0 +1,22 @@
+name: 📖 Documentation
+description: Report a problem or gap in the documentation
+title: "[Docs]: "
+labels: ["type/docs", "status/triage"]
+body:
+  - type: textarea
+    id: page
+    attributes:
+      label: Which docs / page?
+      description: Link or path to the documentation that needs work.
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: What's wrong or missing?
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested improvement (optional)

@@ -1,0 +1,57 @@
+name: CodeQL
+
+# Static analysis for security vulnerabilities. Path filters mean this only runs once
+# real source code exists, so the empty/scaffolding state has no failing runs.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.go"
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.js"
+      - "**/*.jsx"
+      - ".github/workflows/codeql.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "**/*.go"
+      - "**/*.ts"
+      - "**/*.tsx"
+      - "**/*.js"
+      - "**/*.jsx"
+  schedule:
+    - cron: "27 3 * * 1" # weekly, Monday 03:27 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["go", "javascript-typescript"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          language: ${{ matrix.language }}
+          queries: security-and-quality
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
