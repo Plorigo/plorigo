@@ -1,12 +1,15 @@
 <div align="center">
 
-# Plorigo
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/plorigo-logo-white.png">
+  <img alt="Plorigo" src="assets/brand/plorigo-logo-black.png" width="340">
+</picture>
 
-### Deploy apps to servers you control — without the DevOps pain.
+### Launch with control.
 
-A Vercel-like deployment platform for developers, teams, agencies, and AI-built apps.
-Get previews, domains, SSL, logs, databases, backups, rollbacks, and production safety —
-on infrastructure **you** own, without surprise platform bills.
+Deploy apps to servers **you** control — a Vercel-like deployment platform for developers,
+teams, agencies, and AI-built apps. Get previews, domains, SSL, logs, databases, backups,
+rollbacks, and production safety — on infrastructure you own, without surprise platform bills.
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](./LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
