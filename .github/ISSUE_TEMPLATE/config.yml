@@ -1,3 +1,6 @@
+# Issue template chooser configuration.
+# blank_issues_enabled: false forces contributors to pick a template (or a contact link)
+# instead of opening an empty issue.
 blank_issues_enabled: false
 contact_links:
   - name: 💬 Questions & Discussions
