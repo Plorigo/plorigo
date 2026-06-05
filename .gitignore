@@ -76,3 +76,6 @@ logs/
 *.swo
 .DS_Store
 Thumbs.db
+
+# ---- Agent/CLI runtime artifacts (committed config like .claude/settings.json is fine) ----
+.claude/*.lock
