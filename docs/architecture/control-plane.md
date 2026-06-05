@@ -27,9 +27,10 @@ modules under `internal/`:
 
 | Module | Owns |
 |---|---|
-| `auth` | Users, sessions, API tokens |
+| `auth` | Users, sessions, API tokens, email verification & password reset — see [auth.md](./auth.md) |
 | `audit` | The append-only audit trail of sensitive actions |
-| `projects` | Projects and workspace membership |
+| `projects` | Projects and the workspace aggregate: workspaces, membership/roles, and invitations (**writes**) |
+| `membership` | Read-only role lookup over workspace membership — the port `policy` consumes (provider-only, like `audit`) |
 | `environments` | Environments (preview / staging / production) |
 | `deployments` | Deployment records and orchestration — see [deployment-engine.md](./deployment-engine.md) |
 | `servers` | Connected servers and their metadata |

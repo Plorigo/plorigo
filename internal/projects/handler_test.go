@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/plorigo/plorigo/internal/platform/database"
 	"github.com/plorigo/plorigo/internal/platform/problem"
 	controlplanev1 "github.com/plorigo/plorigo/proto/gen/controlplane/v1"
 )
@@ -28,6 +29,23 @@ func (f *fakeService) Get(_ context.Context, _ string) (Project, error) {
 func (f *fakeService) ListByWorkspace(_ context.Context, _ string) ([]Project, error) {
 	return f.list, f.err
 }
+
+// Workspace/membership methods — stubbed; exercised through the service tests.
+func (f *fakeService) CreateWorkspace(context.Context, CreateWorkspaceInput) (Workspace, error) {
+	return Workspace{}, f.err
+}
+func (f *fakeService) CreateInitialWorkspace(context.Context, database.Tx, string, string, string) (string, error) {
+	return "", f.err
+}
+func (f *fakeService) ListMyWorkspaces(context.Context, string) ([]Workspace, error) {
+	return nil, f.err
+}
+func (f *fakeService) InviteMember(context.Context, InviteMemberInput) error { return f.err }
+func (f *fakeService) ListMembers(context.Context, ListMembersInput) ([]Member, error) {
+	return nil, f.err
+}
+func (f *fakeService) ChangeMemberRole(context.Context, ChangeRoleInput) error { return f.err }
+func (f *fakeService) RemoveMember(context.Context, RemoveMemberInput) error   { return f.err }
 
 func TestHandler_CreateProject(t *testing.T) {
 	h := &handler{svc: &fakeService{}}
@@ -62,5 +80,14 @@ func TestHandler_MapsAlreadyExistsToConnectCode(t *testing.T) {
 	}
 	if connect.CodeOf(err) != connect.CodeAlreadyExists {
 		t.Errorf("code = %v, want AlreadyExists", connect.CodeOf(err))
+	}
+}
+
+func TestWorkspaceHandler_CreateWorkspace(t *testing.T) {
+	h := &workspaceHandler{svc: &fakeService{}}
+	_, err := h.CreateWorkspace(context.Background(),
+		connect.NewRequest(&controlplanev1.CreateWorkspaceRequest{Name: "Acme"}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

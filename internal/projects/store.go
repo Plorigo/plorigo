@@ -12,6 +12,15 @@ type Store interface {
 	InsertProject(ctx context.Context, tx database.Tx, p Project) (Project, error)
 	GetProject(ctx context.Context, id string) (Project, error)
 	ListByWorkspace(ctx context.Context, workspaceID string) ([]Project, error)
+
+	InsertWorkspace(ctx context.Context, tx database.Tx, name, slug string) (Workspace, error)
+	AddMember(ctx context.Context, tx database.Tx, workspaceID, userID, role string) error
+	MemberRole(ctx context.Context, workspaceID, userID string) (role string, ok bool, err error)
+	ListWorkspacesForUser(ctx context.Context, userID string) ([]Workspace, error)
+	ListMembers(ctx context.Context, workspaceID string) ([]Member, error)
+	UpdateMemberRole(ctx context.Context, tx database.Tx, workspaceID, userID, role string) error
+	RemoveMember(ctx context.Context, tx database.Tx, workspaceID, userID string) error
+	UserIDByEmail(ctx context.Context, email string) (userID string, ok bool, err error)
 }
 
 // TxRunner runs fn inside one transaction. Implemented by *database.DB; declared
@@ -22,7 +31,6 @@ type TxRunner interface {
 
 // Recorder is the CONSUMER-DEFINED port for what projects needs from the audit
 // module. *audit.Service satisfies it structurally — projects never imports audit.
-// This is what lets depguard forbid all cross-module imports (see .golangci.yml).
 type Recorder interface {
 	Record(ctx context.Context, tx database.Tx, action, targetType, targetID, workspaceID, actor string) error
 }

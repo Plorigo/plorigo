@@ -12,8 +12,20 @@ sql:
         emit_empty_slices: true
         emit_pointers_for_null_types: true
         # Keep IDs as strings across domain/proto/DB (see docs/architecture/modules.md).
+        # Nullable columns use Go pointers (*string / *time.Time) so a NULL is a nil —
+        # consistent with how nullable text already maps via emit_pointers_for_null_types.
         overrides:
           - db_type: uuid
             go_type: string
+          - db_type: uuid
+            nullable: true
+            go_type:
+              type: string
+              pointer: true
           - db_type: timestamptz
             go_type: time.Time
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              type: time.Time
+              pointer: true

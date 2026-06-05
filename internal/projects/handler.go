@@ -23,8 +23,6 @@ func (h *handler) CreateProject(ctx context.Context, req *connect.Request[contro
 	p, err := h.svc.Create(ctx, CreateInput{
 		WorkspaceID: req.Msg.GetWorkspaceId(),
 		Name:        req.Msg.GetName(),
-		// Actor is "system" until auth lands; then it becomes the authenticated caller.
-		Actor: "system",
 	})
 	if err != nil {
 		return nil, problem.ToConnect(err)

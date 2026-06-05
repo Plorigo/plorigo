@@ -52,6 +52,12 @@ func AlreadyExists(format string, args ...any) *Error {
 	return &Error{Kind: KindAlreadyExists, Message: fmt.Sprintf(format, args...)}
 }
 
+// PermissionDenied builds an authorization error. The message is safe to show the
+// caller; it must not reveal whether the target resource exists.
+func PermissionDenied(format string, args ...any) *Error {
+	return &Error{Kind: KindPermissionDenied, Message: fmt.Sprintf(format, args...)}
+}
+
 // Internalf wraps cause as an internal error with a safe message.
 func Internalf(cause error, format string, args ...any) *Error {
 	return &Error{Kind: KindInternal, Message: fmt.Sprintf(format, args...), cause: cause}

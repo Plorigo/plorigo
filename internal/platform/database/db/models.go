@@ -8,14 +8,38 @@ import (
 	"time"
 )
 
+type ApiToken struct {
+	ID          string
+	UserID      string
+	Name        string
+	TokenHash   []byte
+	TokenPrefix string
+	CreatedAt   time.Time
+	LastUsedAt  *time.Time
+	ExpiresAt   *time.Time
+	RevokedAt   *time.Time
+}
+
 type AuditEvent struct {
 	ID          string
-	WorkspaceID string
+	WorkspaceID *string
 	Actor       string
 	Action      string
 	TargetType  string
 	TargetID    string
 	CreatedAt   time.Time
+}
+
+type Invitation struct {
+	ID          string
+	WorkspaceID string
+	Email       string
+	Role        string
+	TokenHash   []byte
+	InvitedBy   string
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
+	AcceptedAt  *time.Time
 }
 
 type Project struct {
@@ -26,10 +50,33 @@ type Project struct {
 	CreatedAt   time.Time
 }
 
+type Session struct {
+	ID         string
+	UserID     string
+	TokenHash  []byte
+	UserAgent  string
+	CreatedAt  time.Time
+	LastUsedAt time.Time
+	ExpiresAt  time.Time
+	RevokedAt  *time.Time
+}
+
 type User struct {
-	ID        string
-	Email     string
-	CreatedAt time.Time
+	ID            string
+	Email         string
+	CreatedAt     time.Time
+	PasswordHash  *string
+	EmailVerified bool
+}
+
+type UserToken struct {
+	ID         string
+	UserID     string
+	Purpose    string
+	TokenHash  []byte
+	CreatedAt  time.Time
+	ExpiresAt  time.Time
+	ConsumedAt *time.Time
 }
 
 type Workspace struct {

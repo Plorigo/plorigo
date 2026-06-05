@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// Identity for the control plane: email/password users, browser sessions (set as
+// an HttpOnly cookie by the handler), and API tokens for the CLI/agent. See
+// docs/architecture/auth.md. Authorization lives in the policy module.
+
+message User {
+  string id = 1;
+  string email = 2;
+  bool email_verified = 3;
+  string created_at = 4; // RFC 3339
+}
+
+// APIToken is the non-secret metadata of an API token (never the raw value).
+message APIToken {
+  string id = 1;
+  string name = 2;
+  string token_prefix = 3;
+  string created_at = 4;   // RFC 3339
+  string last_used_at = 5; // RFC 3339, empty if never used
+  string expires_at = 6;   // RFC 3339, empty if no expiry
+}
+
+message RegisterRequest {
+  string email = 1;
+  string password = 2;
+}
+message RegisterResponse {
+  User user = 1;
+}
+
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+}
+message LoginResponse {
+  User user = 1;
+}
+
+message LogoutRequest {}
+message LogoutResponse {}
+
+message RequestPasswordResetRequest {
+  string email = 1;
+}
+message RequestPasswordResetResponse {}
+
+message ResetPasswordRequest {
+  string token = 1;
+  string new_password = 2;
+}
+message ResetPasswordResponse {}
+
+message RequestEmailVerificationRequest {}
+message RequestEmailVerificationResponse {}
+
+message VerifyEmailRequest {
+  string token = 1;
+}
+message VerifyEmailResponse {}
+
+message CurrentUserRequest {}
+message CurrentUserResponse {
+  User user = 1;
+  // The user's workspaces are fetched separately via WorkspaceService.ListMyWorkspaces.
+}
+
+message CreateAPITokenRequest {
+  string name = 1;
+}
+message CreateAPITokenResponse {
+  // The raw token, shown exactly once. Store it now; it cannot be retrieved later.
+  string token = 1;
+  APIToken api_token = 2;
+}
+
+message ListAPITokensRequest {}
+message ListAPITokensResponse {
+  repeated APIToken api_tokens = 1;
+}
+
+message RevokeAPITokenRequest {
+  string id = 1;
+}
+message RevokeAPITokenResponse {}
+
+service AuthService {
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Login(LoginRequest) returns (LoginResponse);
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc RequestPasswordReset(RequestPasswordResetRequest) returns (RequestPasswordResetResponse);
+  rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse);
+  rpc RequestEmailVerification(RequestEmailVerificationRequest) returns (RequestEmailVerificationResponse);
+  rpc VerifyEmail(VerifyEmailRequest) returns (VerifyEmailResponse);
+  rpc CurrentUser(CurrentUserRequest) returns (CurrentUserResponse);
+  rpc CreateAPIToken(CreateAPITokenRequest) returns (CreateAPITokenResponse);
+  rpc ListAPITokens(ListAPITokensRequest) returns (ListAPITokensResponse);
+  rpc RevokeAPIToken(RevokeAPITokenRequest) returns (RevokeAPITokenResponse);
+}

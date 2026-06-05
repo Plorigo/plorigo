@@ -37,7 +37,12 @@ env_vars             secrets              resources
 backups              restore_jobs         audit_events
 invitations          log_streams          readiness_checks
 approval_requests    ai_agent_sessions
+sessions             api_tokens           user_tokens
 ```
+
+Identity tables (`sessions`, `api_tokens`, `user_tokens`) store only **hashed** tokens,
+never the raw value — see [auth.md](./auth.md). The append-only `audit_events` allows a
+NULL `workspace_id` for user-scoped actions (login, password reset).
 
 Treat these as **schema**, not feature promises — a table existing does not mean the feature
 on top of it is built or committed. For what's actually planned, see [ROADMAP.md](../../ROADMAP.md).
@@ -59,7 +64,7 @@ of many hand-written REST clients.
 
 ```text
 proto/
-  controlplane/v1/    # projects, environments, deployments, servers, secrets, backups, …
+  controlplane/v1/    # auth, workspaces, projects, environments, deployments, secrets, …
   agent/v1/           # control plane ↔ agent
   mcp/v1/             # AI/MCP tools (see security.md)
 ```

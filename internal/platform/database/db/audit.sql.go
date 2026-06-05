@@ -16,7 +16,7 @@ RETURNING id, workspace_id, actor, action, target_type, target_id, created_at
 `
 
 type CreateAuditEventParams struct {
-	WorkspaceID string
+	WorkspaceID *string
 	Actor       string
 	Action      string
 	TargetType  string

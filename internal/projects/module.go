@@ -4,16 +4,21 @@ import (
 	"log/slog"
 	"net/http"
 
+	"connectrpc.com/connect"
+
+	"github.com/plorigo/plorigo/internal/platform/authz"
 	"github.com/plorigo/plorigo/internal/platform/database"
 	"github.com/plorigo/plorigo/proto/gen/controlplane/v1/controlplanev1connect"
 )
 
-// Deps are what the projects module needs. Audit is a CONSUMER-DEFINED port,
-// satisfied by *audit.Service and wired in internal/app — projects never imports audit.
+// Deps are what the projects module needs. Audit and Policy are CONSUMER-DEFINED
+// ports (authz.Authorizer is satisfied by *policy.Service, Recorder by
+// *audit.Service), wired in internal/app — projects imports neither module.
 type Deps struct {
-	DB    *database.DB
-	Audit Recorder
-	Log   *slog.Logger
+	DB     *database.DB
+	Audit  Recorder
+	Policy authz.Authorizer
+	Log    *slog.Logger
 }
 
 // Module is the projects module: the only wiring surface other code touches.
@@ -25,15 +30,22 @@ type Module struct {
 func New(d Deps) *Module {
 	store := newPostgresStore(d.DB)
 	return &Module{
-		service: newService(d.DB, store, d.Audit, d.Log),
+		service: newService(d.DB, store, d.Policy, d.Audit, d.Log),
 	}
 }
 
-// Service exposes the module's service interface (for the CLI/tests/other wiring).
+// Service exposes the module's service interface (for the CLI, the auth module's
+// bootstrapper port, tests, and other wiring).
 func (m *Module) Service() Service { return m.service }
 
-// Route returns the ConnectRPC mount path and handler. Adding a module to the
-// control plane = construct it in internal/app and mount its Route().
-func (m *Module) Route() (string, http.Handler) {
-	return controlplanev1connect.NewProjectServiceHandler(&handler{svc: m.service})
+// Route returns the ProjectService mount path and handler. opts carries the
+// app-wide interceptors (e.g. the auth interceptor).
+func (m *Module) Route(opts ...connect.HandlerOption) (string, http.Handler) {
+	return controlplanev1connect.NewProjectServiceHandler(&handler{svc: m.service}, opts...)
+}
+
+// WorkspaceRoute returns the WorkspaceService mount path and handler. The projects
+// module owns the workspace aggregate, so it serves both services.
+func (m *Module) WorkspaceRoute(opts ...connect.HandlerOption) (string, http.Handler) {
+	return controlplanev1connect.NewWorkspaceServiceHandler(&workspaceHandler{svc: m.service}, opts...)
 }

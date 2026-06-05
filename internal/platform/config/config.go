@@ -13,6 +13,23 @@ type Config struct {
 	DatabaseURL string
 	Port        string
 	Dev         bool
+
+	// BaseURL is the dashboard origin used to build links in emails. In dev the
+	// dashboard runs on the Vite server; in the single binary it is the control
+	// plane's own public URL.
+	BaseURL string
+	// AllowOpenRegistration lets anyone register; when false only the first
+	// (bootstrap) user and invited users may.
+	AllowOpenRegistration bool
+	// RequireEmailVerification sends a verification email on registration.
+	RequireEmailVerification bool
+
+	// SMTP is optional; when SMTPHost is empty, emails are logged instead of sent.
+	SMTPHost  string
+	SMTPPort  string
+	SMTPUser  string
+	SMTPPass  string
+	EmailFrom string
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -22,6 +39,16 @@ func Load() Config {
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		Port:        envOr("PORT", "8080"),
 		Dev:         envOr("PLORIGO_ENV", "dev") != "production",
+
+		BaseURL:                  envOr("PLORIGO_BASE_URL", "http://localhost:5173"),
+		AllowOpenRegistration:    envBool("PLORIGO_ALLOW_OPEN_REGISTRATION", true),
+		RequireEmailVerification: envBool("PLORIGO_REQUIRE_EMAIL_VERIFICATION", false),
+
+		SMTPHost:  os.Getenv("SMTP_HOST"),
+		SMTPPort:  envOr("SMTP_PORT", "587"),
+		SMTPUser:  os.Getenv("SMTP_USERNAME"),
+		SMTPPass:  os.Getenv("SMTP_PASSWORD"),
+		EmailFrom: envOr("EMAIL_FROM", "no-reply@plorigo.local"),
 	}
 }
 
@@ -45,4 +72,15 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func envBool(key string, def bool) bool {
+	switch strings.TrimSpace(strings.ToLower(os.Getenv(key))) {
+	case "":
+		return def
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

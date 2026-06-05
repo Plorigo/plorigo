@@ -86,5 +86,6 @@ Full detail — build priority, rollback, runtime decisions — is in
 - [data-and-api.md](./data-and-api.md) — PostgreSQL data model + ConnectRPC contracts
 - [jobs-and-realtime.md](./jobs-and-realtime.md) — background jobs + SSE/WebSockets
 - [dashboard.md](./dashboard.md) — the React dashboard
+- [auth.md](./auth.md) — identity, sessions, API tokens, and the authorization seam
 - [security.md](./security.md) — security model, secrets, AI/MCP safety
 - [principles.md](./principles.md) — the engineering principles behind all of the above

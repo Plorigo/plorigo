@@ -57,6 +57,7 @@ public too. When writing or expanding documentation:
 | The **database** (pgx/sqlc/goose, schema, migrations) or the **API** (proto/ConnectRPC/buf) | [docs/architecture/data-and-api.md](./docs/architecture/data-and-api.md) |
 | **Background jobs** (Postgres queue) or **realtime** (SSE / WebSockets) | [docs/architecture/jobs-and-realtime.md](./docs/architecture/jobs-and-realtime.md) |
 | The **dashboard** (React/Vite/TanStack/Tailwind/shadcn, realtime UI) | [docs/architecture/dashboard.md](./docs/architecture/dashboard.md) |
+| **Auth** (login/registration, sessions, API tokens, RBAC) or the **authorization (policy) seam** | [docs/architecture/auth.md](./docs/architecture/auth.md) |
 | **Secrets, audit, permissions/approvals, or the AI/MCP gateway** | [docs/architecture/security.md](./docs/architecture/security.md) |
 | Coding style, commits, testing, or generated code | [docs/conventions.md](./docs/conventions.md) |
 | Reporting a vulnerability (process, not design) | [SECURITY.md](./SECURITY.md) |

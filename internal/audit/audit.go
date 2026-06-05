@@ -31,6 +31,8 @@ func New(d Deps) *Service {
 
 // Record appends an event within the caller's transaction, so an action and its
 // audit row commit together. The signature is what consumers' recorder ports expect.
+// workspaceID may be empty for user-scoped actions (login, password reset); it is
+// stored as NULL in that case.
 func (s *Service) Record(ctx context.Context, tx database.Tx, action, targetType, targetID, workspaceID, actor string) error {
 	return s.store.Insert(ctx, tx, Event{
 		WorkspaceID: workspaceID,
