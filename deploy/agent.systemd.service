@@ -1,0 +1,17 @@
+[Unit]
+Description=Plorigo server agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/plorigo-agent
+Restart=on-failure
+RestartSec=5
+User=plorigo
+Group=plorigo
+# The agent performs privileged operations (Docker/Caddy) once that work lands.
+# Review docs/architecture/security.md before broadening its permissions.
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,55 @@
+name: plorigo
+
+services:
+  controlplane:
+    build:
+      context: ..
+      dockerfile: deploy/controlplane.Dockerfile
+    environment:
+      APP_MASTER_KEY: ${APP_MASTER_KEY:?set APP_MASTER_KEY in your environment}
+      DATABASE_URL: postgres://plorigo:plorigo@postgres:5432/plorigo?sslmode=disable
+      PORT: "8080"
+      PLORIGO_ENV: production
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: plorigo
+      POSTGRES_PASSWORD: plorigo
+      POSTGRES_DB: plorigo
+    # Published for local development: `go run ./cmd/controlplane` and `make migrate`
+    # run on the host and connect over localhost. In production the control plane runs
+    # in the compose network and reaches postgres by service name.
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U plorigo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Optional S3-compatible storage for local/self-host backups. Enable with:
+  #   docker compose --profile storage up -d
+  minio:
+    image: minio/minio
+    profiles: [storage]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: plorigo
+      MINIO_ROOT_PASSWORD: plorigo-dev-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+volumes:
+  pgdata:
+  miniodata:

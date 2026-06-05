@@ -48,9 +48,15 @@ build/
 .cache/
 
 # ---- Generated code ----
-# Protobuf / ConnectRPC output (buf generate)
+# Protobuf / ConnectRPC output (buf generate) — regenerated via `make generate`.
 /proto/gen/
-# (sqlc output is typically committed; ignore here only if you generate locally)
+apps/web/src/gen/
+# sqlc output (internal/platform/database/db) IS committed — do not ignore it.
+
+# ---- Dashboard build output ----
+apps/web/dist/
+# Copied from apps/web/dist by `make build-embed` for the embedded single binary.
+internal/platform/web/dist/
 
 # ---- Local infra / Docker ----
 .docker-data/
@@ -70,3 +76,6 @@ logs/
 *.swo
 .DS_Store
 Thumbs.db
+
+# ---- Agent/CLI runtime artifacts (committed config like .claude/settings.json is fine) ----
+.claude/*.lock

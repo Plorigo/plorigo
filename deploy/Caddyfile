@@ -1,0 +1,6 @@
+# Plorigo self-host reverse proxy. Caddy terminates TLS and proxies to the control
+# plane. Set PLORIGO_DOMAIN to your domain; Caddy provisions HTTPS automatically.
+# Defaults to localhost (local HTTPS) when unset.
+{$PLORIGO_DOMAIN:localhost} {
+	reverse_proxy controlplane:8080
+}

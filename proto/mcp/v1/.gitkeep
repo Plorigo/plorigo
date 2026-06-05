@@ -1,0 +1,3 @@
+# Signpost for the documented proto layout (AI/MCP tools).
+# Real mcp/v1 protos land with the tiered MCP gateway — see
+# docs/architecture/security.md.
