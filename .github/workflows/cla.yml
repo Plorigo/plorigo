@@ -11,7 +11,7 @@ on:
 
 permissions:
   actions: write
-  contents: read
+  contents: write # needed so the bot can store signatures on the cla-signatures branch
   pull-requests: write
   statuses: write
 
