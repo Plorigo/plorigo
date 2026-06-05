@@ -3,6 +3,10 @@
 > 🚧 This guide will be fleshed out as the codebase lands. For now it captures the intended
 > toolchain and local workflow. See also [CONTRIBUTING.md](../CONTRIBUTING.md).
 
+> [!NOTE]
+> For how the system fits together and where to make a change, see [AGENTS.md](../AGENTS.md)
+> and the design docs in [`docs/architecture/`](./architecture/).
+
 ## Prerequisites
 
 - [Go](https://go.dev/dl/) (latest stable) — control plane, agent, CLI

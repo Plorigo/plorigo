@@ -85,6 +85,10 @@ See the [repository structure](./README.md#repository-structure) in the README. 
 contracts. Changes that touch a module are routed to its owners via
 [CODEOWNERS](./.github/CODEOWNERS).
 
+Before working on a subsystem, read its design doc. [AGENTS.md](./AGENTS.md) has a
+**documentation map** that routes you to the right doc in [`docs/architecture/`](./docs/architecture/),
+and [`docs/conventions.md`](./docs/conventions.md) covers formatting, generated code, and testing.
+
 ## Branching & commits
 
 - Branch off `main`. Use a descriptive branch name, e.g. `fix/agent-reconnect` or `feat/preview-urls`.
