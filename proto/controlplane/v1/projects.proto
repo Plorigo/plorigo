@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// A Project belongs to a workspace. This is the reference service for the
+// scaffold's end-to-end slice (see docs/architecture/modules.md).
+message Project {
+  string id = 1;
+  string workspace_id = 2;
+  string name = 3;
+  string slug = 4;
+  string created_at = 5; // RFC 3339
+}
+
+message CreateProjectRequest {
+  string workspace_id = 1;
+  string name = 2;
+}
+
+message CreateProjectResponse {
+  Project project = 1;
+}
+
+message GetProjectRequest {
+  string id = 1;
+}
+
+message GetProjectResponse {
+  Project project = 1;
+}
+
+message ListProjectsByWorkspaceRequest {
+  string workspace_id = 1;
+}
+
+message ListProjectsByWorkspaceResponse {
+  repeated Project projects = 1;
+}
+
+service ProjectService {
+  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse);
+  rpc GetProject(GetProjectRequest) returns (GetProjectResponse);
+  rpc ListProjectsByWorkspace(ListProjectsByWorkspaceRequest) returns (ListProjectsByWorkspaceResponse);
+}

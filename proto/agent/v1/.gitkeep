@@ -1,0 +1,3 @@
+# Signpost for the documented proto layout (control plane <-> agent).
+# Real agent/v1 protos land with the privileged `agents` module — see
+# docs/architecture/agent.md and docs/architecture/security.md.

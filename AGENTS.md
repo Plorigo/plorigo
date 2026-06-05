@@ -51,6 +51,7 @@ public too. When writing or expanding documentation:
 |---|---|
 | Anything (first orientation) | [docs/architecture/overview.md](./docs/architecture/overview.md) |
 | A control-plane `internal/*` module, the modular-monolith structure, or the self-host shape | [docs/architecture/control-plane.md](./docs/architecture/control-plane.md) |
+| **Adding a new control-plane module** (file pattern, consumer-defined ports, boundary rules) | [docs/architecture/modules.md](./docs/architecture/modules.md) |
 | The server **agent** (registration, signed jobs, Docker/Caddy management, policy checks) | [docs/architecture/agent.md](./docs/architecture/agent.md) |
 | The **deploy / build / rollback** flow, build detection, container runtime, or Caddy routing | [docs/architecture/deployment-engine.md](./docs/architecture/deployment-engine.md) |
 | The **database** (pgx/sqlc/goose, schema, migrations) or the **API** (proto/ConnectRPC/buf) | [docs/architecture/data-and-api.md](./docs/architecture/data-and-api.md) |

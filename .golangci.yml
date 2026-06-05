@@ -1,0 +1,56 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - depguard
+    - revive
+    - errcheck
+    - misspell
+  settings:
+    errcheck:
+      # Privileged operations must never silently ignore errors (security). Writes to
+      # stdout/CLI output are not security-relevant, so the fmt.Fprint* family is excluded.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    depguard:
+      rules:
+        # The sqlc-generated package may only be touched by a module's postgres.go adapter.
+        db-isolation:
+          files:
+            - "**/internal/**"
+            - "!**/postgres.go"
+            - "!**/internal/platform/database/**"
+          deny:
+            - pkg: github.com/plorigo/plorigo/internal/platform/database/db
+              desc: "internal/platform/database/db (sqlc) may only be imported from a module's postgres.go"
+        # Modules must not import each other. Cross-module collaboration goes through a
+        # consumer-defined port wired in internal/app. Add one deny block per new module.
+        module-projects:
+          files:
+            - "**/internal/projects/**"
+          deny:
+            - pkg: github.com/plorigo/plorigo/internal/audit
+              desc: "modules must not import each other; declare a local port and wire it in internal/app"
+        module-audit:
+          files:
+            - "**/internal/audit/**"
+          deny:
+            - pkg: github.com/plorigo/plorigo/internal/projects
+              desc: "modules must not import each other; declare a local port and wire it in internal/app"
+  exclusions:
+    generated: lax
+    paths:
+      - proto/gen
+      - internal/platform/database/db
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/plorigo/plorigo

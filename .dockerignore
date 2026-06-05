@@ -1,0 +1,10 @@
+.git
+.github
+.context
+**/node_modules
+apps/web/dist
+/bin
+/dist
+*.log
+# Note: generated code (proto/gen, apps/web/src/gen) is intentionally NOT ignored —
+# run `make generate` before `docker build`.

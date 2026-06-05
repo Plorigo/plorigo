@@ -1,0 +1,19 @@
+version: "2"
+sql:
+  - engine: postgresql
+    # Reuse the goose migrations as the single schema source (no second copy).
+    schema: migrations
+    queries: db/query
+    gen:
+      go:
+        package: db
+        out: internal/platform/database/db
+        sql_package: pgx/v5
+        emit_empty_slices: true
+        emit_pointers_for_null_types: true
+        # Keep IDs as strings across domain/proto/DB (see docs/architecture/modules.md).
+        overrides:
+          - db_type: uuid
+            go_type: string
+          - db_type: timestamptz
+            go_type: time.Time
