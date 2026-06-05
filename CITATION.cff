@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use Plorigo, please cite it using the metadata below."
+title: Plorigo
+abstract: >-
+  Deploy apps to servers you control — an open-source, Docker-first BYOS
+  deployment platform with previews, SSL, logs, backups, rollbacks, and
+  production safety for human- and AI-built apps.
+type: software
+authors:
+  - given-names: Ismat
+    family-names: Babirli
+    alias: ismatBabirli
+repository-code: "https://github.com/Plorigo/plorigo"
+url: "https://github.com/Plorigo/plorigo"
+license: AGPL-3.0-or-later
+keywords:
+  - deployment
+  - paas
+  - self-hosted
+  - docker
+  - devops
+  - byos
+  - caddy
