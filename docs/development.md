@@ -27,8 +27,11 @@ cd plorigo
 # Start local dependencies (Postgres, etc.)
 docker compose -f deploy/docker-compose.yml up -d
 
-# Run the control plane
-go run ./cmd/controlplane
+# Run the control plane in dev mode. The control plane is secure-by-default
+# (Secure cookies + CSRF on), so `make dev` sets PLORIGO_ENV=dev to let the session
+# cookie work over http://localhost. A plain `go run ./cmd/controlplane` would run in
+# production mode and reject the cookie over http.
+make dev
 
 # Run the dashboard (in another terminal)
 cd apps/web

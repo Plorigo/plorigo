@@ -36,7 +36,9 @@ identity) are the seams that make this work without any module importing another
 - **Sessions** are DB-backed (`sessions`). The browser holds an opaque 256-bit token
   in a cookie; only its `sha256` is stored. Login issues a fresh token (so a
   pre-login cookie can't fixate a session); logout revokes that row; a password reset
-  revokes **all** of the user's sessions.
+  revokes **all** of the user's sessions. Resolving a session (or API token) is a
+  single `UPDATE … RETURNING` that also refreshes `last_used_at`, so it stays live for
+  display and a future idle-expiry; expiry today is absolute (30 days).
 - **API tokens** (`api_tokens`) authenticate the CLI/agent. Format `plk_` + 32 random
   bytes; shown **once** at creation; stored as `sha256` plus a display prefix.
 - **Email verification / password reset** use single-use `user_tokens` (hashed,
@@ -44,9 +46,12 @@ identity) are the seams that make this work without any module importing another
 
 ## The session cookie
 
-`plorigo_session`: `HttpOnly`, `SameSite=Lax`, `Path=/`, and `Secure` in production
-(off for `http://localhost` in dev, derived from `PLORIGO_ENV`). The `auth` handler
-sets it on register/login and clears it on logout; everything else is stateless.
+`plorigo_session`: `HttpOnly`, `SameSite=Lax`, `Path=/`, and `Secure` in production.
+**`PLORIGO_ENV` is secure-by-default**: the app is in dev mode (non-`Secure` cookie,
+relaxed CSRF) ONLY when it is explicitly `dev`/`development`/`local`; unset or anything
+else means production, so a deploy that forgets the var still gets `Secure` + CSRF, not
+the reverse. The `auth` handler sets the cookie on **login** (registration never
+auto-logs-in — see below) and clears it on logout; everything else is stateless.
 
 ## The interceptor (request → principal)
 
@@ -54,7 +59,7 @@ A single ConnectRPC interceptor (`internal/app`) wraps every service. It:
 
 1. resolves a `principal.Principal` from the `Authorization: Bearer` header
    (CLI/agent) or the session cookie (browser), via the `auth` resolvers;
-2. applies a **CSRF** guard to cookie-authenticated requests (see below);
+2. applies a **CSRF** guard (cross-site requests are rejected in production — see below);
 3. injects the principal into the context;
 4. rejects non-public procedures that have no principal with `Unauthenticated`.
 
@@ -65,12 +70,14 @@ called by each privileged service before it mutates.
 
 ### CSRF
 
-Only ambient (cookie) authority needs CSRF protection. For cookie-authenticated
-requests the interceptor requires the `Connect-Protocol-Version` header (which a
-cross-site HTML form cannot set without a CORS preflight) and rejects a cross-site
-`Sec-Fetch-Site`, on top of `SameSite=Lax`. Bearer requests carry no cookie and are
-exempt; never honor a cookie and a bearer token on the same request. (Enforced in
-production; relaxed in dev, where the Vite proxy makes origins awkward.)
+In production the interceptor rejects a cross-site `Sec-Fetch-Site` for **every**
+procedure — including the public `Login`/`Register`, so a forged cross-site POST can't
+log a victim in or act on them. Cookie-authenticated requests additionally require the
+`Connect-Protocol-Version` header (which a cross-site HTML form cannot set without a
+CORS preflight), on top of `SameSite=Lax`. Bearer (CLI/agent) requests send neither
+`Sec-Fetch-Site` nor a cookie, so they are unaffected; never honor a cookie and a
+bearer token on the same request. (Relaxed in dev, where the Vite proxy makes origins
+awkward.)
 
 ## Authorization (the policy model)
 
@@ -82,15 +89,31 @@ permission matrix. Roles, highest first: **owner → admin → member → viewer
 [modules.md](./modules.md), Rule 3). Finer, target-dependent rules (e.g. an owner
 cannot be removed or demoted) live in the owning service, not the matrix.
 
+> [!NOTE]
+> In this slice ownership only **accumulates**: an owner can't be demoted, removed, or
+> transferred, so there is no recovery path for a mis-assigned owner. A safe
+> ownership-transfer flow is a roadmap item — see [ROADMAP.md](../../ROADMAP.md).
+
 ## Registration & bootstrap
 
-The first registration on a fresh install becomes the owner of a new workspace;
-**every** registration creates a personal workspace the user owns, so a user always
-lands somewhere. This runs in one transaction via
-`projects.CreateInitialWorkspace`, which deliberately **skips** `policy.Authorize`
-(the act of becoming the owner of a brand-new workspace) and audits the creation.
-`PLORIGO_ALLOW_OPEN_REGISTRATION=false` restricts new sign-ups to the bootstrap user
-and (later) invited users.
+**Registration never auto-logs-in.** A brand-new signup and an attempt on an
+already-registered email return the *same* generic response (no user, no session, no
+cookie) — anti-enumeration — and the address owner gets either a verification link or a
+"you already have an account" email. The user logs in afterwards. Every new account
+gets a personal workspace it owns (so a user always lands somewhere), created in one
+transaction via `projects.CreateInitialWorkspace`, which deliberately **skips**
+`policy.Authorize` (you are becoming the owner of a brand-new workspace) and audits the
+creation.
+
+`PLORIGO_ALLOW_OPEN_REGISTRATION=false` restricts new sign-ups to the bootstrap (first)
+user. The check runs **inside** the registration transaction behind a
+`pg_advisory_xact_lock`, so two concurrent first-registrations can't both win the
+bootstrap.
+
+`PLORIGO_REQUIRE_EMAIL_VERIFICATION=true` **enforces** verification: `Login` is rejected
+with `PermissionDenied` until the address is verified (checked *after* the password, so
+it can't be used to enumerate accounts). With it off (the default) an account is usable
+via login immediately after registration.
 
 ## Email
 
@@ -98,6 +121,12 @@ and (later) invited users.
 **logs** the message — including the verify/reset link — so a self-hoster without a
 mail server can still complete the flow. That log line is the only place a link
 appears; raw tokens never reach the audit trail or normal logs.
+
+Caveats: the SMTP mailer relies on **STARTTLS** negotiation (no implicit-TLS / port-465
+mode yet — use a STARTTLS-capable relay). Verify/reset links carry the token in the URL
+**query string** (standard for email links); the dashboard sets `Referrer-Policy:
+no-referrer` so the token isn't leaked via the `Referer` header, though it can still
+land in browser history — links are single-use and short-lived to bound the window.
 
 ## Surfaces
 

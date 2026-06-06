@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+const acquireRegistrationLock = `-- name: AcquireRegistrationLock :exec
+SELECT pg_advisory_xact_lock(8729143)
+`
+
+// AcquireRegistrationLock serializes the closed-registration bootstrap check so two
+// concurrent first-registrations can't both observe an empty users table. Held until
+// the surrounding transaction commits/rolls back.
+func (q *Queries) AcquireRegistrationLock(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, acquireRegistrationLock)
+	return err
+}
+
 const consumeUserToken = `-- name: ConsumeUserToken :exec
 UPDATE user_tokens SET consumed_at = now() WHERE id = $1
 `
@@ -160,51 +172,6 @@ func (q *Queries) CreateUserToken(ctx context.Context, arg CreateUserTokenParams
 		&i.CreatedAt,
 		&i.ExpiresAt,
 		&i.ConsumedAt,
-	)
-	return i, err
-}
-
-const getAPITokenByHash = `-- name: GetAPITokenByHash :one
-SELECT id, user_id, name, token_hash, token_prefix, created_at, last_used_at, expires_at, revoked_at
-FROM api_tokens
-WHERE token_hash = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
-`
-
-func (q *Queries) GetAPITokenByHash(ctx context.Context, tokenHash []byte) (ApiToken, error) {
-	row := q.db.QueryRow(ctx, getAPITokenByHash, tokenHash)
-	var i ApiToken
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.Name,
-		&i.TokenHash,
-		&i.TokenPrefix,
-		&i.CreatedAt,
-		&i.LastUsedAt,
-		&i.ExpiresAt,
-		&i.RevokedAt,
-	)
-	return i, err
-}
-
-const getSessionByTokenHash = `-- name: GetSessionByTokenHash :one
-SELECT id, user_id, token_hash, user_agent, created_at, last_used_at, expires_at, revoked_at
-FROM sessions
-WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()
-`
-
-func (q *Queries) GetSessionByTokenHash(ctx context.Context, tokenHash []byte) (Session, error) {
-	row := q.db.QueryRow(ctx, getSessionByTokenHash, tokenHash)
-	var i Session
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.TokenHash,
-		&i.UserAgent,
-		&i.CreatedAt,
-		&i.LastUsedAt,
-		&i.ExpiresAt,
-		&i.RevokedAt,
 	)
 	return i, err
 }
@@ -381,20 +348,32 @@ func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams
 	return err
 }
 
-const touchAPIToken = `-- name: TouchAPIToken :exec
-UPDATE api_tokens SET last_used_at = now() WHERE id = $1
+const useAPIToken = `-- name: UseAPIToken :one
+UPDATE api_tokens SET last_used_at = now()
+WHERE token_hash = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+RETURNING user_id
 `
 
-func (q *Queries) TouchAPIToken(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, touchAPIToken, id)
-	return err
+// UseAPIToken validates a bearer token by its hash AND records the access (see UseSession).
+func (q *Queries) UseAPIToken(ctx context.Context, tokenHash []byte) (string, error) {
+	row := q.db.QueryRow(ctx, useAPIToken, tokenHash)
+	var user_id string
+	err := row.Scan(&user_id)
+	return user_id, err
 }
 
-const touchSession = `-- name: TouchSession :exec
-UPDATE sessions SET last_used_at = now() WHERE id = $1
+const useSession = `-- name: UseSession :one
+UPDATE sessions SET last_used_at = now()
+WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()
+RETURNING user_id
 `
 
-func (q *Queries) TouchSession(ctx context.Context, id string) error {
-	_, err := q.db.Exec(ctx, touchSession, id)
-	return err
+// UseSession validates a session by its token hash AND records the access in one
+// statement: last_used_at is kept live (for "last used" display and future idle
+// expiry) without a separate touch round-trip.
+func (q *Queries) UseSession(ctx context.Context, tokenHash []byte) (string, error) {
+	row := q.db.QueryRow(ctx, useSession, tokenHash)
+	var user_id string
+	err := row.Scan(&user_id)
+	return user_id, err
 }

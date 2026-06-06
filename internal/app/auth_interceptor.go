@@ -45,17 +45,20 @@ func authInterceptor(resolver principalResolver, dev bool) connect.UnaryIntercep
 				return nil, connect.NewError(connect.CodeUnauthenticated, errors.New("could not verify credentials"))
 			}
 
-			// CSRF: only ambient (cookie) authority needs protection. Connect-Web always
-			// sends Connect-Protocol-Version — a header a cross-site HTML form cannot set
-			// without a CORS preflight — and we reject a cross-site Sec-Fetch-Site. Bearer
-			// (CLI/agent) requests carry no cookie and are exempt. Skipped in dev, where
-			// the Vite proxy makes origins awkward and there is no real cross-site risk.
-			if viaCookie && p.IsAuthenticated() && !dev {
-				if req.Header().Get("Connect-Protocol-Version") == "" {
-					return nil, connect.NewError(connect.CodePermissionDenied, errors.New("missing Connect-Protocol-Version"))
-				}
+			// CSRF (production only; in dev the Vite proxy makes origins awkward and there
+			// is no real cross-site risk):
+			if !dev {
+				// Browsers tag cross-site requests via Sec-Fetch-Site. Reject them for ALL
+				// procedures — including the public login/register — so a forged cross-site
+				// POST can't act on (or log in) a victim. Non-browser clients (CLI/agent)
+				// don't send the header, so they are unaffected.
 				if site := req.Header().Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "same-site" && site != "none" {
 					return nil, connect.NewError(connect.CodePermissionDenied, errors.New("cross-site request blocked"))
+				}
+				// Ambient (cookie) authority additionally requires Connect-Web's protocol
+				// header, which a cross-site HTML form cannot set without a CORS preflight.
+				if viaCookie && p.IsAuthenticated() && req.Header().Get("Connect-Protocol-Version") == "" {
+					return nil, connect.NewError(connect.CodePermissionDenied, errors.New("missing Connect-Protocol-Version"))
 				}
 			}
 

@@ -73,8 +73,12 @@ func (s *postgresStore) GetUserByID(ctx context.Context, userID string) (User, e
 	return User{ID: row.ID, Email: row.Email, EmailVerified: row.EmailVerified, CreatedAt: row.CreatedAt}, nil
 }
 
-func (s *postgresStore) CountUsers(ctx context.Context) (int64, error) {
-	return db.New(s.pool).CountUsers(ctx)
+func (s *postgresStore) AcquireRegistrationLock(ctx context.Context, tx database.Tx) error {
+	return db.New(tx).AcquireRegistrationLock(ctx)
+}
+
+func (s *postgresStore) CountUsersTx(ctx context.Context, tx database.Tx) (int64, error) {
+	return db.New(tx).CountUsers(ctx)
 }
 
 func (s *postgresStore) SetPassword(ctx context.Context, tx database.Tx, userID, passwordHash string) error {
@@ -96,14 +100,14 @@ func (s *postgresStore) CreateSession(ctx context.Context, tx database.Tx, userI
 }
 
 func (s *postgresStore) SessionUser(ctx context.Context, tokenHash []byte) (string, error) {
-	row, err := db.New(s.pool).GetSessionByTokenHash(ctx, tokenHash)
+	userID, err := db.New(s.pool).UseSession(ctx, tokenHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", errNoSession
 		}
 		return "", err
 	}
-	return row.UserID, nil
+	return userID, nil
 }
 
 func (s *postgresStore) RevokeSession(ctx context.Context, tx database.Tx, tokenHash []byte) error {
@@ -129,14 +133,14 @@ func (s *postgresStore) CreateAPIToken(ctx context.Context, tx database.Tx, user
 }
 
 func (s *postgresStore) APITokenUser(ctx context.Context, tokenHash []byte) (string, error) {
-	row, err := db.New(s.pool).GetAPITokenByHash(ctx, tokenHash)
+	userID, err := db.New(s.pool).UseAPIToken(ctx, tokenHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", errNoAPIToken
 		}
 		return "", err
 	}
-	return row.UserID, nil
+	return userID, nil
 }
 
 func (s *postgresStore) ListAPITokens(ctx context.Context, userID string) ([]APIToken, error) {

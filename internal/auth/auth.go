@@ -45,9 +45,8 @@ type Config struct {
 
 // RegisterInput is the data needed to register a user.
 type RegisterInput struct {
-	Email     string
-	Password  string
-	UserAgent string
+	Email    string
+	Password string
 }
 
 // LoginInput is the data needed to log a user in.
@@ -57,11 +56,20 @@ type LoginInput struct {
 	UserAgent string
 }
 
-// Authenticated is the result of register/login: the user plus the raw session
-// token the handler sets as the session cookie.
+// Authenticated is the result of login: the user plus the raw session token the
+// handler sets as the session cookie.
 type Authenticated struct {
 	User         User
 	SessionToken string
+}
+
+// Registered is the deliberately minimal result of registration: no user, no
+// session. Registration never auto-logs-in, so a brand-new signup and an attempt on
+// an already-registered email are indistinguishable to the client
+// (anti-enumeration). The client shows a "check your email" / "you can now log in"
+// message; the user authenticates next (and must verify first when required).
+type Registered struct {
+	EmailVerificationRequired bool
 }
 
 // NewAPIToken is the result of creating an API token: the raw token (shown once)
@@ -73,7 +81,7 @@ type NewAPIToken struct {
 
 // Service is the surface the handler, the app interceptor, and tests depend on.
 type Service interface {
-	Register(ctx context.Context, in RegisterInput) (Authenticated, error)
+	Register(ctx context.Context, in RegisterInput) (Registered, error)
 	Login(ctx context.Context, in LoginInput) (Authenticated, error)
 	Logout(ctx context.Context, sessionToken string) error
 	CurrentUser(ctx context.Context, userID string) (User, error)

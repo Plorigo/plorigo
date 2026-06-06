@@ -3,6 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Don't leak the URL (which carries verify/reset tokens) in the Referer header. -->
+    <meta name="referrer" content="no-referrer" />
     <title>Plorigo</title>
   </head>
   <body>

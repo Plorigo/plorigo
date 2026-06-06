@@ -99,7 +99,11 @@ func (s *fakeStore) GetUserByID(_ context.Context, userID string) (User, error) 
 	return u.User, nil
 }
 
-func (s *fakeStore) CountUsers(context.Context) (int64, error) { return int64(len(s.usersByID)), nil }
+func (s *fakeStore) AcquireRegistrationLock(context.Context, database.Tx) error { return nil }
+
+func (s *fakeStore) CountUsersTx(_ context.Context, _ database.Tx) (int64, error) {
+	return int64(len(s.usersByID)), nil
+}
 
 func (s *fakeStore) SetPassword(_ context.Context, _ database.Tx, userID, passwordHash string) error {
 	if u, ok := s.usersByID[userID]; ok {
@@ -237,22 +241,26 @@ func extractToken(t *testing.T, body string) string {
 
 // ---- tests -----------------------------------------------------------------
 
-func TestRegisterCreatesUserWorkspaceSessionAudit(t *testing.T) {
+func TestRegisterCreatesUserWorkspaceAudit(t *testing.T) {
 	svc, store, audit, _, ws := newTestService(Config{AllowOpenRegistration: true})
 	res, err := svc.Register(context.Background(), RegisterInput{Email: "Alice@Example.com", Password: "supersecret"})
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if res.SessionToken == "" {
-		t.Fatal("expected a session token")
+	if res.EmailVerificationRequired {
+		t.Fatal("verification not required in this config")
 	}
-	if res.User.Email != "alice@example.com" {
-		t.Fatalf("email not normalized: %q", res.User.Email)
+	// Registration never establishes a session (anti-enumeration).
+	if len(store.sessions) != 0 {
+		t.Fatalf("register must not create a session, got %d", len(store.sessions))
+	}
+	su := store.usersByEmail["alice@example.com"]
+	if su == nil {
+		t.Fatal("user not created / email not normalized")
 	}
 	if ws.calls != 1 {
 		t.Fatalf("bootstrap workspace calls = %d, want 1", ws.calls)
 	}
-	su := store.usersByID[res.User.ID]
 	if su.PasswordHash == "" || su.PasswordHash == "supersecret" {
 		t.Fatal("password must be stored hashed, not in plaintext")
 	}
@@ -272,12 +280,22 @@ func TestRegisterRejectsShortPassword(t *testing.T) {
 	}
 }
 
-func TestRegisterDuplicateEmail(t *testing.T) {
-	svc, _, _, _, _ := newTestService(Config{AllowOpenRegistration: true})
+func TestRegisterDuplicateEmailIsSilent(t *testing.T) {
+	svc, store, _, mailer, ws := newTestService(Config{AllowOpenRegistration: true, BaseURL: "http://x"})
 	mustRegister(t, svc, "a@b.com", "supersecret")
-	_, err := svc.Register(context.Background(), RegisterInput{Email: "a@b.com", Password: "supersecret"})
-	if !isKind(err, problem.KindAlreadyExists) {
-		t.Fatalf("got %v, want AlreadyExists", err)
+	before := len(mailer.sent)
+	// A second registration with the same email must NOT reveal that it's taken.
+	if _, err := svc.Register(context.Background(), RegisterInput{Email: "a@b.com", Password: "supersecret"}); err != nil {
+		t.Fatalf("duplicate register should be silent, got %v", err)
+	}
+	if len(store.usersByEmail) != 1 {
+		t.Fatalf("duplicate must not create a second user, users = %d", len(store.usersByEmail))
+	}
+	if ws.calls != 1 {
+		t.Fatalf("duplicate must not create a workspace, ws calls = %d", ws.calls)
+	}
+	if len(mailer.sent) != before+1 || !strings.Contains(mailer.sent[len(mailer.sent)-1].subject, "already have") {
+		t.Fatalf("expected an account-exists email, got %v", mailer.sent)
 	}
 }
 
@@ -375,9 +393,19 @@ func TestPasswordResetRevokesSessionsAndIsSingleUse(t *testing.T) {
 	}
 }
 
-func TestEmailVerification(t *testing.T) {
+func TestEmailVerificationGatesLogin(t *testing.T) {
 	svc, store, _, mailer, _ := newTestService(Config{AllowOpenRegistration: true, RequireEmailVerification: true, BaseURL: "http://x"})
-	res := mustRegister(t, svc, "a@b.com", "supersecret")
+	res, err := svc.Register(context.Background(), RegisterInput{Email: "a@b.com", Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if !res.EmailVerificationRequired {
+		t.Fatal("EmailVerificationRequired should be true")
+	}
+	// Login is blocked until the email is verified.
+	if _, err := svc.Login(context.Background(), LoginInput{Email: "a@b.com", Password: "supersecret"}); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("login before verify: got %v, want PermissionDenied", err)
+	}
 	if len(mailer.sent) != 1 {
 		t.Fatalf("verification emails = %d, want 1", len(mailer.sent))
 	}
@@ -385,8 +413,12 @@ func TestEmailVerification(t *testing.T) {
 	if err := svc.VerifyEmail(context.Background(), token); err != nil {
 		t.Fatalf("VerifyEmail: %v", err)
 	}
-	if !store.usersByID[res.User.ID].EmailVerified {
+	if u := store.usersByEmail["a@b.com"]; u == nil || !u.EmailVerified {
 		t.Fatal("email should be verified")
+	}
+	// After verification, login succeeds.
+	if _, err := svc.Login(context.Background(), LoginInput{Email: "a@b.com", Password: "supersecret"}); err != nil {
+		t.Fatalf("login after verify: %v", err)
 	}
 	if err := svc.VerifyEmail(context.Background(), token); !isKind(err, problem.KindInvalidInput) {
 		t.Fatalf("verify reuse: got %v, want InvalidInput", err)
@@ -426,11 +458,17 @@ func TestAPITokenLifecycle(t *testing.T) {
 	}
 }
 
+// mustRegister registers and then logs in, returning the session — registration no
+// longer auto-logs-in, so tests that need a session log in explicitly. Only valid when
+// email verification is not required (the default for these tests).
 func mustRegister(t *testing.T, svc *service, email, password string) Authenticated {
 	t.Helper()
-	res, err := svc.Register(context.Background(), RegisterInput{Email: email, Password: password})
-	if err != nil {
+	if _, err := svc.Register(context.Background(), RegisterInput{Email: email, Password: password}); err != nil {
 		t.Fatalf("Register(%s): %v", email, err)
+	}
+	res, err := svc.Login(context.Background(), LoginInput{Email: email, Password: password})
+	if err != nil {
+		t.Fatalf("Login(%s): %v", email, err)
 	}
 	return res
 }

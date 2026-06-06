@@ -34,11 +34,15 @@ type Config struct {
 
 // Load reads configuration from the environment, applying defaults.
 func Load() Config {
+	// Secure by default: the app is in dev mode ONLY when PLORIGO_ENV explicitly names a
+	// dev environment. Unset / typo / "production" all mean production, so a deploy that
+	// forgets the var still gets Secure cookies + the CSRF guard, never the reverse.
+	env := strings.ToLower(strings.TrimSpace(os.Getenv("PLORIGO_ENV")))
 	return Config{
 		MasterKey:   os.Getenv("APP_MASTER_KEY"),
 		DatabaseURL: os.Getenv("DATABASE_URL"),
 		Port:        envOr("PORT", "8080"),
-		Dev:         envOr("PLORIGO_ENV", "dev") != "production",
+		Dev:         env == "dev" || env == "development" || env == "local",
 
 		BaseURL:                  envOr("PLORIGO_BASE_URL", "http://localhost:5173"),
 		AllowOpenRegistration:    envBool("PLORIGO_ALLOW_OPEN_REGISTRATION", true),

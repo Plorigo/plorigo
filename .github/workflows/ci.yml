@@ -87,3 +87,11 @@ jobs:
 
       - name: Integration test (real Postgres)
         run: go test -tags integration ./internal/app/...
+
+      # Run AFTER the integration test so the destructive down paths (e.g. clearing
+      # NULL-workspace audit rows before restoring NOT NULL) are exercised against real
+      # data, then re-apply to prove the migrations are reversible.
+      - name: Migration down/up roundtrip
+        run: |
+          go tool goose -dir migrations postgres "$DATABASE_URL" down-to 0
+          go tool goose -dir migrations postgres "$DATABASE_URL" up

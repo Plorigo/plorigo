@@ -44,60 +44,80 @@ func newService(cfg Config, tx TxRunner, store Store, audit Recorder, mailer Mai
 
 var _ Service = (*service)(nil)
 
-func (s *service) Register(ctx context.Context, in RegisterInput) (Authenticated, error) {
+// errEmailTaken is an internal control-flow signal: the email is already registered.
+// It never reaches the client — Register turns it into the same generic result a real
+// signup returns (anti-enumeration) and emails the address owner instead.
+var errEmailTaken = errors.New("auth: email already registered")
+
+func (s *service) Register(ctx context.Context, in RegisterInput) (Registered, error) {
 	email, err := normalizeEmail(in.Email)
 	if err != nil {
-		return Authenticated{}, err
+		return Registered{}, err
 	}
 	if len(in.Password) < minPasswordLen {
-		return Authenticated{}, problem.InvalidInput("password must be at least %d characters", minPasswordLen)
+		return Registered{}, problem.InvalidInput("password must be at least %d characters", minPasswordLen)
 	}
-
-	// Registration gate: when open registration is off, only the very first user
-	// (the self-host bootstrap owner) may register without an invitation.
-	if !s.cfg.AllowOpenRegistration {
-		n, err := s.store.CountUsers(ctx)
-		if err != nil {
-			return Authenticated{}, problem.Internalf(err, "count users")
-		}
-		if n > 0 {
-			return Authenticated{}, problem.PermissionDenied("registration is closed")
-		}
-	}
-
 	hash, err := passwd.Hash(in.Password)
 	if err != nil {
-		return Authenticated{}, problem.Internalf(err, "hash password")
-	}
-	rawSession, sessionHash, err := newOpaqueToken()
-	if err != nil {
-		return Authenticated{}, problem.Internalf(err, "generate session")
+		return Registered{}, problem.Internalf(err, "hash password")
 	}
 
-	var user User
+	var created User
 	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
-		var txErr error
-		if user, txErr = s.store.CreateUser(ctx, tx, email, hash); txErr != nil {
-			return txErr
+		// Closed-registration gate, serialized inside the tx so two concurrent
+		// first-registrations can't both win the bootstrap.
+		if !s.cfg.AllowOpenRegistration {
+			if e := s.store.AcquireRegistrationLock(ctx, tx); e != nil {
+				return e
+			}
+			n, e := s.store.CountUsersTx(ctx, tx)
+			if e != nil {
+				return e
+			}
+			if n > 0 {
+				return problem.PermissionDenied("registration is closed")
+			}
 		}
-		// Every new user gets a personal workspace they own, so they always land
-		// somewhere. The bootstrapper skips authorization by design (you are becoming
-		// the owner of a brand-new workspace) and audits the creation itself.
-		if _, txErr = s.workspace.CreateInitialWorkspace(ctx, tx, user.ID, workspaceNameForEmail(email), user.ID); txErr != nil {
-			return txErr
+
+		user, e := s.store.CreateUser(ctx, tx, email, hash)
+		if e != nil {
+			// Anti-enumeration: a duplicate email is not surfaced as an error. Roll the
+			// tx back (nothing created) and signal the caller to send the heads-up email.
+			var pe *problem.Error
+			if errors.As(e, &pe) && pe.Kind == problem.KindAlreadyExists {
+				return errEmailTaken
+			}
+			return e
 		}
-		if txErr = s.store.CreateSession(ctx, tx, user.ID, sessionHash, in.UserAgent, s.sessionExpiry()); txErr != nil {
-			return txErr
+		// Every new user owns a personal workspace so they always land somewhere. The
+		// bootstrapper skips authorization by design and audits the creation itself.
+		if _, e = s.workspace.CreateInitialWorkspace(ctx, tx, user.ID, workspaceNameForEmail(email), user.ID); e != nil {
+			return e
 		}
-		return s.audit.Record(ctx, tx, "user.register", "user", user.ID, "", user.ID)
+		if e = s.audit.Record(ctx, tx, "user.register", "user", user.ID, "", user.ID); e != nil {
+			return e
+		}
+		created = user
+		return nil
 	})
-	if err != nil {
-		return Authenticated{}, mapErr(err, "register")
+
+	// Identical result whether the email was new or already taken.
+	result := Registered{EmailVerificationRequired: s.cfg.RequireEmailVerification}
+	switch {
+	case errors.Is(err, errEmailTaken):
+		s.sendEmail(ctx, email, "You already have a Plorigo account",
+			"Someone just tried to create a Plorigo account with this email, but you already have one.\n\n"+
+				"If this was you, log in:\n"+s.appURL("/login")+"\n\nForgot your password?\n"+s.appURL("/forgot"))
+		return result, nil
+	case err != nil:
+		return Registered{}, mapErr(err, "register")
 	}
 
-	s.maybeSendVerification(ctx, user)
-	s.log.Info("user registered", "user_id", user.ID)
-	return Authenticated{User: user, SessionToken: rawSession}, nil
+	// New account: registration never establishes a session — the user logs in next
+	// (and must verify first when required).
+	s.maybeSendVerification(ctx, created)
+	s.log.Info("user registered", "user_id", created.ID)
+	return result, nil
 }
 
 func (s *service) Login(ctx context.Context, in LoginInput) (Authenticated, error) {
@@ -113,6 +133,12 @@ func (s *service) Login(ctx context.Context, in LoginInput) (Authenticated, erro
 	}
 	if su.PasswordHash == "" || passwd.Verify(in.Password, su.PasswordHash) != nil {
 		return Authenticated{}, errInvalidCredentials()
+	}
+	// Enforce email verification when the deployment requires it. Checked AFTER the
+	// password so only a caller who already proved they own the account learns it is
+	// unverified — this branch can't be used to enumerate accounts.
+	if s.cfg.RequireEmailVerification && !su.EmailVerified {
+		return Authenticated{}, problem.PermissionDenied("please verify your email before signing in")
 	}
 
 	rawSession, sessionHash, err := newOpaqueToken()
@@ -347,8 +373,12 @@ func (s *service) sendEmail(ctx context.Context, to, subject, body string) {
 	}
 }
 
+func (s *service) appURL(path string) string {
+	return strings.TrimRight(s.cfg.BaseURL, "/") + path
+}
+
 func (s *service) link(path, token string) string {
-	return strings.TrimRight(s.cfg.BaseURL, "/") + path + "?token=" + url.QueryEscape(token)
+	return s.appURL(path) + "?token=" + url.QueryEscape(token)
 }
 
 func (s *service) sessionExpiry() time.Time {

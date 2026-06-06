@@ -26,9 +26,13 @@ type Store interface {
 	CreateUser(ctx context.Context, tx database.Tx, email, passwordHash string) (User, error)
 	GetUserByEmail(ctx context.Context, email string) (storedUser, error)
 	GetUserByID(ctx context.Context, userID string) (User, error)
-	CountUsers(ctx context.Context) (int64, error)
 	SetPassword(ctx context.Context, tx database.Tx, userID, passwordHash string) error
 	SetEmailVerified(ctx context.Context, tx database.Tx, userID string) error
+
+	// AcquireRegistrationLock + CountUsersTx run inside the registration transaction
+	// to serialize the closed-registration bootstrap check (no TOCTOU race).
+	AcquireRegistrationLock(ctx context.Context, tx database.Tx) error
+	CountUsersTx(ctx context.Context, tx database.Tx) (int64, error)
 
 	CreateSession(ctx context.Context, tx database.Tx, userID string, tokenHash []byte, userAgent string, expiresAt time.Time) error
 	SessionUser(ctx context.Context, tokenHash []byte) (userID string, err error)

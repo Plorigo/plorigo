@@ -26,16 +26,17 @@ var _ controlplanev1connect.AuthServiceHandler = (*handler)(nil)
 
 func (h *handler) Register(ctx context.Context, req *connect.Request[controlplanev1.RegisterRequest]) (*connect.Response[controlplanev1.RegisterResponse], error) {
 	res, err := h.svc.Register(ctx, RegisterInput{
-		Email:     req.Msg.GetEmail(),
-		Password:  req.Msg.GetPassword(),
-		UserAgent: req.Header().Get("User-Agent"),
+		Email:    req.Msg.GetEmail(),
+		Password: req.Msg.GetPassword(),
 	})
 	if err != nil {
 		return nil, problem.ToConnect(err)
 	}
-	resp := connect.NewResponse(&controlplanev1.RegisterResponse{User: userToProto(res.User)})
-	h.setSession(resp.Header(), res.SessionToken)
-	return resp, nil
+	// No session cookie is set: registration never logs the caller in, so a new signup
+	// and an already-registered email look identical to the client.
+	return connect.NewResponse(&controlplanev1.RegisterResponse{
+		EmailVerificationRequired: res.EmailVerificationRequired,
+	}), nil
 }
 
 func (h *handler) Login(ctx context.Context, req *connect.Request[controlplanev1.LoginRequest]) (*connect.Response[controlplanev1.LoginResponse], error) {

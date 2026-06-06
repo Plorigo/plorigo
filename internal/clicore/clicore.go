@@ -100,6 +100,14 @@ func loginCmd(baseURL *string) *cobra.Command {
 			if err := saveCredential(credentials{APIURL: *baseURL, Token: tokenResp.Msg.GetToken()}); err != nil {
 				return err
 			}
+			// Revoke the short-lived login session now that the long-lived API token is
+			// stored — the CLI authenticates with the token from here on, so leaving the
+			// session around would orphan a valid credential for its full lifetime.
+			logoutReq := connect.NewRequest(&controlplanev1.LogoutRequest{})
+			logoutReq.Header().Set("Cookie", sessionCookieName+"="+session)
+			if _, err := auth.Logout(ctx, logoutReq); err != nil {
+				fmt.Fprintln(cmd.ErrOrStderr(), "warning: could not revoke the temporary login session:", err)
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "Logged in as %s.\n", email)
 			return nil
 		},

@@ -39,26 +39,39 @@ func isKind(err error, k problem.Kind) bool {
 	return errors.As(err, &pe) && pe.Kind == k
 }
 
+// registerAndLogin signs a fresh user up and logs them in — registration no longer
+// auto-logs-in, so a test that needs a session logs in explicitly. Returns the login
+// result (user + session) and the email.
+func registerAndLogin(t *testing.T, authSvc auth.Service, ctx context.Context, prefix string) (auth.Authenticated, string) {
+	t.Helper()
+	email := uniqueEmail(prefix)
+	if _, err := authSvc.Register(ctx, auth.RegisterInput{Email: email, Password: "supersecret"}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	acct, err := authSvc.Login(ctx, auth.LoginInput{Email: email, Password: "supersecret"})
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	return acct, email
+}
+
 func TestIntegration_RegisterBootstrapsWorkspaceAndAuthorizes(t *testing.T) {
 	a := newApp(t)
 	ctx := context.Background()
 	authSvc := a.auth.Service()
 	projSvc := a.projects.Service()
 
-	res, err := authSvc.Register(ctx, auth.RegisterInput{Email: uniqueEmail("owner"), Password: "supersecret"})
-	if err != nil {
-		t.Fatalf("Register: %v", err)
-	}
+	acct, _ := registerAndLogin(t, authSvc, ctx, "owner")
 
-	// The session cookie token resolves to the registered user.
-	p, err := authSvc.ResolveSession(ctx, res.SessionToken)
-	if err != nil || p.UserID != res.User.ID || p.Method != principal.MethodSession {
+	// The session cookie token resolves to the user.
+	p, err := authSvc.ResolveSession(ctx, acct.SessionToken)
+	if err != nil || p.UserID != acct.User.ID || p.Method != principal.MethodSession {
 		t.Fatalf("ResolveSession: p=%+v err=%v", p, err)
 	}
 	authedCtx := principal.NewContext(ctx, p)
 
 	// Registration bootstrapped exactly one workspace, owned by the user, in one tx.
-	wss, err := projSvc.ListMyWorkspaces(ctx, res.User.ID)
+	wss, err := projSvc.ListMyWorkspaces(ctx, acct.User.ID)
 	if err != nil {
 		t.Fatalf("ListMyWorkspaces: %v", err)
 	}
@@ -69,7 +82,7 @@ func TestIntegration_RegisterBootstrapsWorkspaceAndAuthorizes(t *testing.T) {
 
 	var ownerRole string
 	if err := a.db.Pool.QueryRow(ctx,
-		`SELECT role FROM workspace_members WHERE workspace_id=$1 AND user_id=$2`, ws.ID, res.User.ID).Scan(&ownerRole); err != nil {
+		`SELECT role FROM workspace_members WHERE workspace_id=$1 AND user_id=$2`, ws.ID, acct.User.ID).Scan(&ownerRole); err != nil {
 		t.Fatalf("query membership: %v", err)
 	}
 	if ownerRole != "owner" {
@@ -86,15 +99,12 @@ func TestIntegration_RegisterBootstrapsWorkspaceAndAuthorizes(t *testing.T) {
 		`SELECT actor FROM audit_events WHERE target_id=$1 AND action='project.create'`, proj.ID).Scan(&auditActor); err != nil {
 		t.Fatalf("query audit: %v", err)
 	}
-	if auditActor != res.User.ID {
-		t.Fatalf("audit actor = %q, want the registered user %q", auditActor, res.User.ID)
+	if auditActor != acct.User.ID {
+		t.Fatalf("audit actor = %q, want the registered user %q", auditActor, acct.User.ID)
 	}
 
 	// A non-member cannot create a project in someone else's workspace.
-	other, err := authSvc.Register(ctx, auth.RegisterInput{Email: uniqueEmail("other"), Password: "supersecret"})
-	if err != nil {
-		t.Fatalf("Register other: %v", err)
-	}
+	other, _ := registerAndLogin(t, authSvc, ctx, "other")
 	otherCtx := principal.NewContext(ctx, principal.Principal{UserID: other.User.ID, Method: principal.MethodSession})
 	if _, err := projSvc.Create(otherCtx, projects.CreateInput{WorkspaceID: ws.ID, Name: "Sneaky"}); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("non-member create: got %v, want PermissionDenied", err)
@@ -111,21 +121,18 @@ func TestIntegration_SessionsAndAPITokens(t *testing.T) {
 	ctx := context.Background()
 	authSvc := a.auth.Service()
 
-	res, err := authSvc.Register(ctx, auth.RegisterInput{Email: uniqueEmail("tok"), Password: "supersecret"})
-	if err != nil {
-		t.Fatalf("Register: %v", err)
-	}
+	acct, email := registerAndLogin(t, authSvc, ctx, "tok")
 
 	// API token: create -> resolve -> revoke -> no longer resolves.
-	nt, err := authSvc.CreateAPIToken(ctx, res.User.ID, "ci")
+	nt, err := authSvc.CreateAPIToken(ctx, acct.User.ID, "ci")
 	if err != nil {
 		t.Fatalf("CreateAPIToken: %v", err)
 	}
 	p, err := authSvc.ResolveAPIToken(ctx, nt.Token)
-	if err != nil || p.UserID != res.User.ID || p.Method != principal.MethodAPIToken {
+	if err != nil || p.UserID != acct.User.ID || p.Method != principal.MethodAPIToken {
 		t.Fatalf("ResolveAPIToken: p=%+v err=%v", p, err)
 	}
-	if err := authSvc.RevokeAPIToken(ctx, res.User.ID, nt.Meta.ID); err != nil {
+	if err := authSvc.RevokeAPIToken(ctx, acct.User.ID, nt.Meta.ID); err != nil {
 		t.Fatalf("RevokeAPIToken: %v", err)
 	}
 	if p, _ := authSvc.ResolveAPIToken(ctx, nt.Token); p.IsAuthenticated() {
@@ -133,16 +140,16 @@ func TestIntegration_SessionsAndAPITokens(t *testing.T) {
 	}
 
 	// Logout revokes the session.
-	logoutCtx := principal.NewContext(ctx, principal.Principal{UserID: res.User.ID, Method: principal.MethodSession})
-	if err := authSvc.Logout(logoutCtx, res.SessionToken); err != nil {
+	logoutCtx := principal.NewContext(ctx, principal.Principal{UserID: acct.User.ID, Method: principal.MethodSession})
+	if err := authSvc.Logout(logoutCtx, acct.SessionToken); err != nil {
 		t.Fatalf("Logout: %v", err)
 	}
-	if p, _ := authSvc.ResolveSession(ctx, res.SessionToken); p.IsAuthenticated() {
+	if p, _ := authSvc.ResolveSession(ctx, acct.SessionToken); p.IsAuthenticated() {
 		t.Fatal("session must not resolve after logout")
 	}
 
 	// Login issues a fresh working session.
-	li, err := authSvc.Login(ctx, auth.LoginInput{Email: res.User.Email, Password: "supersecret"})
+	li, err := authSvc.Login(ctx, auth.LoginInput{Email: email, Password: "supersecret"})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}

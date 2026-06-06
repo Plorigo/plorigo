@@ -28,7 +28,12 @@ message RegisterRequest {
   string password = 2;
 }
 message RegisterResponse {
-  User user = 1;
+  // Registration never returns a user or a session: a brand-new signup and an attempt
+  // on an already-registered email are indistinguishable (anti-enumeration). The
+  // client shows a "check your email" / "you can now log in" message and the user
+  // authenticates next. This flag (a deployment-wide setting, so it leaks nothing about
+  // the address) tells the client whether verification is required first.
+  bool email_verification_required = 1;
 }
 
 message LoginRequest {

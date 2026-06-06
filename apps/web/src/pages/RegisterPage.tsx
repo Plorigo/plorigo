@@ -1,32 +1,50 @@
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
-import { useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { ConnectError } from "@connectrpc/connect";
 
 import { authClient } from "../lib/clients";
 import { AuthShell } from "../components/AuthShell";
 
 export function RegisterPage() {
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<null | { verify: boolean }>(null);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError("");
     try {
-      await authClient.register({ email, password });
-      await queryClient.invalidateQueries({ queryKey: ["currentUser"] });
-      await navigate({ to: "/" });
+      const res = await authClient.register({ email, password });
+      // Registration never logs you in (so a new signup and an already-registered
+      // email are indistinguishable). The user logs in next.
+      setDone({ verify: res.emailVerificationRequired });
     } catch (err) {
       setError(err instanceof ConnectError ? err.message : "Could not sign up");
     } finally {
       setBusy(false);
     }
+  }
+
+  // Deliberately worded so the screen never confirms whether the address was new.
+  if (done) {
+    return (
+      <AuthShell title="Almost there">
+        <p className="text-sm text-gray-600">
+          {done.verify
+            ? `If ${email} is a new address, we've emailed a verification link. Verify it, then log in.`
+            : `If ${email} is a new address, your account is ready — you can log in now.`}
+        </p>
+        <Link
+          to="/login"
+          className="mt-4 inline-block rounded bg-blue-600 px-3 py-2 text-white"
+        >
+          Go to log in
+        </Link>
+      </AuthShell>
+    );
   }
 
   return (

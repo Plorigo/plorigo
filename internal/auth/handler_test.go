@@ -17,11 +17,26 @@ func newTestHandler(cfg Config) *handler {
 	return &handler{svc: svc, cookie: CookieConfig{Name: "plorigo_session", SameSite: http.SameSiteLaxMode, MaxAgeSeconds: 3600}}
 }
 
-func TestHandlerRegisterSetsSessionCookie(t *testing.T) {
+func TestHandlerRegisterSetsNoSessionCookie(t *testing.T) {
 	h := newTestHandler(Config{AllowOpenRegistration: true})
 	resp, err := h.Register(context.Background(), connect.NewRequest(&controlplanev1.RegisterRequest{Email: "a@b.com", Password: "supersecret"}))
 	if err != nil {
 		t.Fatalf("Register: %v", err)
+	}
+	// Registration never logs the caller in, so it must not set a session cookie.
+	if sc := resp.Header().Get("Set-Cookie"); sc != "" {
+		t.Fatalf("register must not set a session cookie, got %q", sc)
+	}
+}
+
+func TestHandlerLoginSetsSessionCookie(t *testing.T) {
+	h := newTestHandler(Config{AllowOpenRegistration: true})
+	if _, err := h.Register(context.Background(), connect.NewRequest(&controlplanev1.RegisterRequest{Email: "a@b.com", Password: "supersecret"})); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	resp, err := h.Login(context.Background(), connect.NewRequest(&controlplanev1.LoginRequest{Email: "a@b.com", Password: "supersecret"}))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
 	}
 	sc := resp.Header().Get("Set-Cookie")
 	for _, want := range []string{"plorigo_session=", "HttpOnly", "SameSite=Lax", "Max-Age=3600"} {
@@ -56,11 +71,14 @@ func TestHandlerCurrentUserRequiresAuth(t *testing.T) {
 
 func TestHandlerCurrentUserWithPrincipal(t *testing.T) {
 	h := newTestHandler(Config{AllowOpenRegistration: true})
-	rr, err := h.Register(context.Background(), connect.NewRequest(&controlplanev1.RegisterRequest{Email: "a@b.com", Password: "supersecret"}))
-	if err != nil {
+	if _, err := h.Register(context.Background(), connect.NewRequest(&controlplanev1.RegisterRequest{Email: "a@b.com", Password: "supersecret"})); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	ctx := principal.NewContext(context.Background(), principal.Principal{UserID: rr.Msg.GetUser().GetId(), Method: principal.MethodSession})
+	lr, err := h.Login(context.Background(), connect.NewRequest(&controlplanev1.LoginRequest{Email: "a@b.com", Password: "supersecret"}))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	ctx := principal.NewContext(context.Background(), principal.Principal{UserID: lr.Msg.GetUser().GetId(), Method: principal.MethodSession})
 	resp, err := h.CurrentUser(ctx, connect.NewRequest(&controlplanev1.CurrentUserRequest{}))
 	if err != nil {
 		t.Fatalf("CurrentUser: %v", err)

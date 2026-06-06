@@ -16,6 +16,12 @@ WHERE id = $1;
 -- name: CountUsers :one
 SELECT count(*) FROM users;
 
+-- AcquireRegistrationLock serializes the closed-registration bootstrap check so two
+-- concurrent first-registrations can't both observe an empty users table. Held until
+-- the surrounding transaction commits/rolls back.
+-- name: AcquireRegistrationLock :exec
+SELECT pg_advisory_xact_lock(8729143);
+
 -- name: SetUserPassword :exec
 UPDATE users SET password_hash = $2 WHERE id = $1;
 
@@ -27,13 +33,13 @@ INSERT INTO sessions (user_id, token_hash, user_agent, expires_at)
 VALUES ($1, $2, $3, $4)
 RETURNING id, user_id, token_hash, user_agent, created_at, last_used_at, expires_at, revoked_at;
 
--- name: GetSessionByTokenHash :one
-SELECT id, user_id, token_hash, user_agent, created_at, last_used_at, expires_at, revoked_at
-FROM sessions
-WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now();
-
--- name: TouchSession :exec
-UPDATE sessions SET last_used_at = now() WHERE id = $1;
+-- UseSession validates a session by its token hash AND records the access in one
+-- statement: last_used_at is kept live (for "last used" display and future idle
+-- expiry) without a separate touch round-trip.
+-- name: UseSession :one
+UPDATE sessions SET last_used_at = now()
+WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()
+RETURNING user_id;
 
 -- name: RevokeSessionByTokenHash :exec
 UPDATE sessions SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL;
@@ -46,19 +52,17 @@ INSERT INTO api_tokens (user_id, name, token_hash, token_prefix, expires_at)
 VALUES ($1, $2, $3, $4, $5)
 RETURNING id, user_id, name, token_hash, token_prefix, created_at, last_used_at, expires_at, revoked_at;
 
--- name: GetAPITokenByHash :one
-SELECT id, user_id, name, token_hash, token_prefix, created_at, last_used_at, expires_at, revoked_at
-FROM api_tokens
-WHERE token_hash = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now());
+-- UseAPIToken validates a bearer token by its hash AND records the access (see UseSession).
+-- name: UseAPIToken :one
+UPDATE api_tokens SET last_used_at = now()
+WHERE token_hash = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
+RETURNING user_id;
 
 -- name: ListAPITokensForUser :many
 SELECT id, user_id, name, token_hash, token_prefix, created_at, last_used_at, expires_at, revoked_at
 FROM api_tokens
 WHERE user_id = $1 AND revoked_at IS NULL
 ORDER BY created_at DESC;
-
--- name: TouchAPIToken :exec
-UPDATE api_tokens SET last_used_at = now() WHERE id = $1;
 
 -- name: RevokeAPIToken :exec
 UPDATE api_tokens SET revoked_at = now() WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL;
