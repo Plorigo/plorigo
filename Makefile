@@ -37,8 +37,8 @@ build-embed: web ## Build the single binary with the dashboard embedded (bin/con
 	mkdir -p bin
 	go build -tags embed_web -o bin/controlplane ./cmd/controlplane
 
-dev: ## Run the control plane (expects `pnpm --dir apps/web dev` in another terminal)
-	go run ./cmd/controlplane
+dev: ## Run the control plane in dev mode (expects `pnpm --dir apps/web dev` in another terminal)
+	PLORIGO_ENV=dev go run ./cmd/controlplane
 
 test: ## Run Go tests
 	go test ./...

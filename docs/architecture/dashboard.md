@@ -30,6 +30,9 @@ separate concern and can make its own choice.)
 
 - The dashboard calls the control plane through the **generated ConnectRPC client** — see
   [data-and-api.md](./data-and-api.md). Don't hand-roll fetch wrappers around the API.
+- **Auth** ([auth.md](./auth.md)): the transport sends the session cookie
+  (`credentials: "include"`); a route guard redirects to `/login` when unauthenticated,
+  while the auth screens (login, register, forgot/reset, verify) are public.
 - Realtime comes over **SSE** (deploy status, logs) and **WebSockets** (terminal) — see
   [jobs-and-realtime.md](./jobs-and-realtime.md).
 

@@ -10,6 +10,16 @@ services:
       DATABASE_URL: postgres://plorigo:plorigo@postgres:5432/plorigo?sslmode=disable
       PORT: "8080"
       PLORIGO_ENV: production
+      # Auth — set PLORIGO_BASE_URL to your public dashboard URL so email links work.
+      PLORIGO_BASE_URL: ${PLORIGO_BASE_URL:-http://localhost:8080}
+      PLORIGO_ALLOW_OPEN_REGISTRATION: ${PLORIGO_ALLOW_OPEN_REGISTRATION:-true}
+      PLORIGO_REQUIRE_EMAIL_VERIFICATION: ${PLORIGO_REQUIRE_EMAIL_VERIFICATION:-false}
+      # SMTP is optional; leave SMTP_HOST empty to log emails (with links) instead.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      EMAIL_FROM: ${EMAIL_FROM:-no-reply@plorigo.local}
     ports:
       - "8080:8080"
     depends_on:

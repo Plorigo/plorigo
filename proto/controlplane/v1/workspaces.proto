@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// Workspaces and membership / RBAC. Owned by the projects module (see
+// docs/architecture/control-plane.md). Every mutation is authorized by the policy
+// module before it runs and recorded in the audit trail.
+
+message Workspace {
+  string id = 1;
+  string name = 2;
+  string slug = 3;
+  string created_at = 4; // RFC 3339
+}
+
+message Member {
+  string user_id = 1;
+  string email = 2;
+  string role = 3;
+  string created_at = 4; // RFC 3339
+}
+
+message CreateWorkspaceRequest {
+  string name = 1;
+}
+message CreateWorkspaceResponse {
+  Workspace workspace = 1;
+}
+
+message ListMyWorkspacesRequest {}
+message ListMyWorkspacesResponse {
+  repeated Workspace workspaces = 1;
+}
+
+// InviteMember adds an existing Plorigo user (looked up by email) to the workspace
+// at the given role. Token-based invitations for users without an account yet are
+// a later addition (the invitations table exists for it).
+message InviteMemberRequest {
+  string workspace_id = 1;
+  string email = 2;
+  string role = 3;
+}
+message InviteMemberResponse {}
+
+message ListMembersRequest {
+  string workspace_id = 1;
+}
+message ListMembersResponse {
+  repeated Member members = 1;
+}
+
+message ChangeMemberRoleRequest {
+  string workspace_id = 1;
+  string user_id = 2;
+  string role = 3;
+}
+message ChangeMemberRoleResponse {}
+
+message RemoveMemberRequest {
+  string workspace_id = 1;
+  string user_id = 2;
+}
+message RemoveMemberResponse {}
+
+service WorkspaceService {
+  rpc CreateWorkspace(CreateWorkspaceRequest) returns (CreateWorkspaceResponse);
+  rpc ListMyWorkspaces(ListMyWorkspacesRequest) returns (ListMyWorkspacesResponse);
+  rpc InviteMember(InviteMemberRequest) returns (InviteMemberResponse);
+  rpc ListMembers(ListMembersRequest) returns (ListMembersResponse);
+  rpc ChangeMemberRole(ChangeMemberRoleRequest) returns (ChangeMemberRoleResponse);
+  rpc RemoveMember(RemoveMemberRequest) returns (RemoveMemberResponse);
+}

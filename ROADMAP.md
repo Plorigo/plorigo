@@ -39,7 +39,8 @@ generation, plain-English errors, copy-paste fix prompts, Supabase/Stripe/Auth c
 production readiness score, production lock.
 
 ### Phase 5 — Agencies, teams & safer production
-Team invites, project/environment-level roles, isolated workspace wizard, resource quotas,
+Team invites, project/environment-level roles (incl. ownership transfer & demotion),
+isolated workspace wizard, resource quotas,
 client/viewer role, backup/restore center, volume backups, restore to a new server, persistent
 terminal sessions, approval workflows for production deploys/migrations, basic cost/capacity.
 

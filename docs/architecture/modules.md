@@ -23,8 +23,13 @@ wired together in `internal/app`. This guide is the contract that keeps the mono
 | `module.go` | `Deps` + `New(Deps) *Module`; exposes `Service()` and `Route()`. The only wiring surface. |
 | `service_test.go` / `handler_test.go` | Table tests with fakes — no database. |
 
-A provider-only module with no RPC surface (like `audit`) is the minimal shape:
-`<module>.go` + `store.go` + `postgres.go`, returning a concrete `*Service` from `New`.
+A provider-only module with no RPC surface (like `audit` or `membership`) is the
+minimal shape: `<module>.go` + `store.go` + `postgres.go`, returning a concrete
+`*Service` from `New`. A **decision-only** module (`policy`) goes one step further — it
+owns no tables, so it has no `postgres.go`: just its domain, the `Authorize` logic, and
+its consumer-defined ports. A module that serves more than one proto service (like
+`projects`, which owns `ProjectService` **and** `WorkspaceService`) exposes one
+`Route()`-style method per service, all mounted in `internal/app/router.go`.
 
 ## Rule 1 — modules never import each other
 
@@ -54,9 +59,10 @@ a.projects = projects.New(projects.Deps{
 ```
 
 **Enforced by depguard** (`.golangci.yml`): any cross-module import fails `make lint`.
-Add a `module-<name>` block when you add a module. (depguard matches whole packages, not
-symbols, which is exactly why we forbid the import entirely rather than "allow only the
-Service interface".)
+The single `module-boundaries` rule lists every module's directory and package; when you
+add a module, add it to both lists. (depguard matches whole packages, not symbols, which
+is exactly why we forbid the import entirely rather than "allow only the Service
+interface".)
 
 ## Rule 2 — only `postgres.go` touches the database
 
@@ -80,21 +86,29 @@ err := s.tx.WithinTx(ctx, func(tx database.Tx) error {
 })
 ```
 
-## Rule 4 — the authorization seam (read before copying for a privileged module)
+## Rule 4 — the authorization seam (follow it for every privileged module)
 
-`projects` is **unprivileged**. A privileged module (deployments, secrets, agents,
-docker, caddy, backups, terminal, ai, mcp — see [control-plane.md](./control-plane.md))
-must check authorization **before** mutating:
+`auth` and `policy` now exist (see [auth.md](./auth.md)), so the seam is real and
+`projects` is privileged. A privileged module (deployments, secrets, agents, docker,
+caddy, backups, terminal, ai, mcp — see [control-plane.md](./control-plane.md)) must
+authorize **before** mutating:
 
-- the handler extracts the authenticated caller from the request context;
-- the service calls `policy.Authorize(ctx, ...)` (a consumer-defined port) before the
-  `WithinTx` block.
+- the service reads the caller with `principal.FromContext(ctx)` (the interceptor in
+  `internal/app` put it there);
+- it calls `authz.Authorize(ctx, caller, action, resource)` **before** the `WithinTx`
+  block, and audits the actor (`caller.UserID`) **inside** it.
 
-`auth` and `policy` are the **immediate next slice** after the scaffold. Until they
-exist, **do not copy this template for a privileged module** — there is no authorization
-port to wire yet, and shipping privileged behavior without it is exactly the
-broken-access-control mistake this rule exists to prevent. Any change that broadens what
-an unprivileged user or AI agent can do gets extra review ([security.md](./security.md)).
+The seam is built from **neutral platform packages** so no module imports another:
+`internal/platform/principal` carries identity through the context, and
+`internal/platform/authz` holds the `Action`/`Resource` vocabulary, the `Role`
+constants, and the `Authorizer` interface. `policy` *implements* `authz.Authorizer`;
+consumers *depend on* it. `policy` reads roles through a consumer-defined
+`MembershipReader` satisfied by the provider-only `membership` module — that indirection
+is what breaks the `projects ↔ policy` cycle (`projects → policy → membership`, never
+back). Wire these in `internal/app` in dependency order.
+
+Any change that broadens what an unprivileged user or AI agent can do gets extra review
+([security.md](./security.md)).
 
 ## Conventions
 

@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/plorigo/plorigo/internal/auth"
 	"github.com/plorigo/plorigo/internal/platform/config"
 	"github.com/plorigo/plorigo/internal/platform/database"
 	"github.com/plorigo/plorigo/internal/platform/log"
@@ -22,6 +23,7 @@ type App struct {
 	srv *server.Server
 
 	// modules
+	auth     *auth.Module
 	projects *projects.Module
 }
 

@@ -25,6 +25,17 @@ unsafe-server** (see [principles.md](./principles.md)).
 - **Detect, warn on, or block** privileged containers, host networking, and dangerous mounts.
 - Apply policy checks (the `policy` module) **before** risky actions run.
 
+### Authentication & authorization
+
+The realized seam is documented in [auth.md](./auth.md). In short: one ConnectRPC
+interceptor resolves the caller (session cookie or bearer API token) into a
+`principal` and rejects unauthenticated calls to non-public procedures; each
+privileged service then calls `policy.Authorize` **before** mutating and audits the
+real actor in the same transaction. Session and API tokens are stored **hashed**
+(never raw), session cookies are `HttpOnly`/`SameSite=Lax`/`Secure`-in-production,
+cookie requests carry a CSRF guard, and password reset revokes all sessions. Raw
+tokens and reset/verify links must never reach the audit trail or logs.
+
 ### Secrets
 
 - **Encrypted at rest.** Self-host uses a master key (`APP_MASTER_KEY`); a managed deployment

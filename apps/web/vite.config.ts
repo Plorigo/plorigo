@@ -10,6 +10,15 @@ export default defineConfig({
   build: { outDir: "dist" },
   server: {
     proxy: {
+      // Each ConnectRPC service is a path prefix proxied to the control plane.
+      "/controlplane.v1.AuthService": {
+        target: "http://localhost:8080",
+        changeOrigin: true,
+      },
+      "/controlplane.v1.WorkspaceService": {
+        target: "http://localhost:8080",
+        changeOrigin: true,
+      },
       "/controlplane.v1.ProjectService": {
         target: "http://localhost:8080",
         changeOrigin: true,
