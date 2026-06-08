@@ -9,6 +9,7 @@ import (
 
 	"github.com/plorigo/plorigo/internal/auth"
 	"github.com/plorigo/plorigo/internal/environments"
+	"github.com/plorigo/plorigo/internal/envvars"
 	"github.com/plorigo/plorigo/internal/platform/config"
 	"github.com/plorigo/plorigo/internal/platform/id"
 	"github.com/plorigo/plorigo/internal/platform/principal"
@@ -190,6 +191,107 @@ func TestIntegration_EnvironmentScopedToProjectWorkspace(t *testing.T) {
 	// Creating in a non-existent project resolves to no workspace -> NotFound.
 	if _, err := envSvc.Create(ownerCtx, environments.CreateInput{ProjectID: id.New().String(), Name: "Ghost"}); !isKind(err, problem.KindNotFound) {
 		t.Fatalf("create in missing project: got %v, want NotFound", err)
+	}
+}
+
+func TestIntegration_EnvVarsScopedToEnvironmentWorkspace(t *testing.T) {
+	a := newApp(t)
+	ctx := context.Background()
+	authSvc := a.auth.Service()
+	projSvc := a.projects.Service()
+	envSvc := a.environments.Service()
+	evSvc := a.envvars.Service()
+
+	owner, _ := registerAndLogin(t, authSvc, ctx, "ev-owner")
+	ownerCtx := principal.NewContext(ctx, principal.Principal{UserID: owner.User.ID, Method: principal.MethodSession})
+
+	wss, err := projSvc.ListMyWorkspaces(ctx, owner.User.ID)
+	if err != nil || len(wss) != 1 {
+		t.Fatalf("ListMyWorkspaces: wss=%d err=%v", len(wss), err)
+	}
+	proj, err := projSvc.Create(ownerCtx, projects.CreateInput{WorkspaceID: wss[0].ID, Name: "EV App"})
+	if err != nil {
+		t.Fatalf("Create project: %v", err)
+	}
+	env, err := envSvc.Create(ownerCtx, environments.CreateInput{ProjectID: proj.ID, Name: "Preview"})
+	if err != nil {
+		t.Fatalf("Create environment: %v", err)
+	}
+
+	// Set audits the REAL actor against the workspace resolved through the two-ancestor
+	// JOIN (env var -> environment -> project -> workspace).
+	ev, err := evSvc.Set(ownerCtx, envvars.SetInput{EnvironmentID: env.ID, Key: "DATABASE_URL", Value: "postgres://a"})
+	if err != nil {
+		t.Fatalf("Set env var: %v", err)
+	}
+	if ev.Key != "DATABASE_URL" || ev.Value != "postgres://a" {
+		t.Fatalf("env var = %+v, want key/value set", ev)
+	}
+	var auditActor, auditWS string
+	if err := a.db.Pool.QueryRow(ctx,
+		`SELECT actor, workspace_id FROM audit_events WHERE target_id=$1 AND action='env_var.set'`, ev.ID).Scan(&auditActor, &auditWS); err != nil {
+		t.Fatalf("query audit: %v", err)
+	}
+	if auditActor != owner.User.ID {
+		t.Fatalf("audit actor = %q, want %q", auditActor, owner.User.ID)
+	}
+	if auditWS != wss[0].ID {
+		t.Fatalf("audit workspace = %q, want the parent project's workspace %q", auditWS, wss[0].ID)
+	}
+
+	// List returns it with the value (env vars are non-secret).
+	if list, err := evSvc.List(ownerCtx, env.ID); err != nil || len(list) != 1 || list[0].Value != "postgres://a" {
+		t.Fatalf("List: list=%+v err=%v", list, err)
+	}
+
+	// Setting the same key again upserts: same row, new value, updated_at advances.
+	ev2, err := evSvc.Set(ownerCtx, envvars.SetInput{EnvironmentID: env.ID, Key: "DATABASE_URL", Value: "postgres://b"})
+	if err != nil {
+		t.Fatalf("re-Set env var: %v", err)
+	}
+	if ev2.ID != ev.ID {
+		t.Fatalf("upsert changed the row id: got %q, want %q", ev2.ID, ev.ID)
+	}
+	if !ev2.UpdatedAt.After(ev.UpdatedAt) {
+		t.Fatalf("updated_at did not advance: %v -> %v", ev.UpdatedAt, ev2.UpdatedAt)
+	}
+	if list, err := evSvc.List(ownerCtx, env.ID); err != nil || len(list) != 1 || list[0].Value != "postgres://b" {
+		t.Fatalf("after upsert List: list=%+v err=%v", list, err)
+	}
+
+	// Delete removes it; a second delete reports NotFound (not a silent no-op).
+	if err := evSvc.Delete(ownerCtx, envvars.DeleteInput{EnvironmentID: env.ID, Key: "DATABASE_URL"}); err != nil {
+		t.Fatalf("Delete env var: %v", err)
+	}
+	if list, err := evSvc.List(ownerCtx, env.ID); err != nil || len(list) != 0 {
+		t.Fatalf("after delete List: list=%+v err=%v", list, err)
+	}
+	if err := evSvc.Delete(ownerCtx, envvars.DeleteInput{EnvironmentID: env.ID, Key: "DATABASE_URL"}); !isKind(err, problem.KindNotFound) {
+		t.Fatalf("double delete: got %v, want NotFound", err)
+	}
+
+	// A non-member of the environment's workspace is denied for every op — proving
+	// authorization resolves through the parent environment, not caller-supplied input.
+	other, _ := registerAndLogin(t, authSvc, ctx, "ev-other")
+	otherCtx := principal.NewContext(ctx, principal.Principal{UserID: other.User.ID, Method: principal.MethodSession})
+	if _, err := evSvc.Set(otherCtx, envvars.SetInput{EnvironmentID: env.ID, Key: "SNEAKY", Value: "x"}); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("non-member set: got %v, want PermissionDenied", err)
+	}
+	if _, err := evSvc.List(otherCtx, env.ID); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("non-member list: got %v, want PermissionDenied", err)
+	}
+	if err := evSvc.Delete(otherCtx, envvars.DeleteInput{EnvironmentID: env.ID, Key: "DATABASE_URL"}); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("non-member delete: got %v, want PermissionDenied", err)
+	}
+
+	// An anonymous caller is denied.
+	if _, err := evSvc.Set(ctx, envvars.SetInput{EnvironmentID: env.ID, Key: "ANON", Value: "y"}); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("anonymous set: got %v, want PermissionDenied", err)
+	}
+
+	// Operating on a non-existent environment resolves to no workspace -> NotFound.
+	if _, err := evSvc.Set(ownerCtx, envvars.SetInput{EnvironmentID: id.New().String(), Key: "GHOST", Value: "z"}); !isKind(err, problem.KindNotFound) {
+		t.Fatalf("set in missing environment: got %v, want NotFound", err)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/plorigo/plorigo/internal/auth"
 	"github.com/plorigo/plorigo/internal/environments"
+	"github.com/plorigo/plorigo/internal/envvars"
 	"github.com/plorigo/plorigo/internal/platform/config"
 	"github.com/plorigo/plorigo/internal/platform/database"
 	"github.com/plorigo/plorigo/internal/platform/log"
@@ -28,6 +29,7 @@ type App struct {
 	auth         *auth.Module
 	projects     *projects.Module
 	environments *environments.Module
+	envvars      *envvars.Module
 	servers      *servers.Module
 }
 

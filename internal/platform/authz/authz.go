@@ -29,6 +29,9 @@ const (
 	ActionEnvironmentRead   Action = "environment.read"
 	ActionServerCreate      Action = "server.create"
 	ActionServerRead        Action = "server.read"
+	ActionEnvVarSet         Action = "env_var.set"
+	ActionEnvVarRead        Action = "env_var.read"
+	ActionEnvVarDelete      Action = "env_var.delete"
 )
 
 // Workspace roles, most privileged first. Stored in workspace_members.role and

@@ -30,6 +30,15 @@ type AuditEvent struct {
 	CreatedAt   time.Time
 }
 
+type EnvVar struct {
+	ID            string
+	EnvironmentID string
+	Key           string
+	Value         string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 type Environment struct {
 	ID        string
 	ProjectID string
