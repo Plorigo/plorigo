@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// An EnvVar is a non-secret, per-environment configuration key/value. Values are
+// stored in plaintext and returned on read; encrypted secrets are a separate
+// module and table (see docs/architecture/data-and-api.md). Env vars are mutable,
+// so unlike the immutable registry rows they carry an updated_at.
+message EnvVar {
+  string id = 1;
+  string environment_id = 2;
+  string key = 3;
+  string value = 4;
+  string created_at = 5; // RFC 3339
+  string updated_at = 6; // RFC 3339
+}
+
+message SetEnvVarRequest {
+  string environment_id = 1;
+  string key = 2;
+  string value = 3;
+}
+
+message SetEnvVarResponse {
+  EnvVar env_var = 1;
+}
+
+message ListEnvVarsRequest {
+  string environment_id = 1;
+}
+
+message ListEnvVarsResponse {
+  repeated EnvVar env_vars = 1;
+}
+
+message DeleteEnvVarRequest {
+  string environment_id = 1;
+  string key = 2;
+}
+
+message DeleteEnvVarResponse {}
+
+// EnvVarService manages non-secret per-environment configuration. SetEnvVar
+// upserts (create-or-update) by (environment_id, key).
+service EnvVarService {
+  rpc SetEnvVar(SetEnvVarRequest) returns (SetEnvVarResponse);
+  rpc ListEnvVars(ListEnvVarsRequest) returns (ListEnvVarsResponse);
+  rpc DeleteEnvVar(DeleteEnvVarRequest) returns (DeleteEnvVarResponse);
+}

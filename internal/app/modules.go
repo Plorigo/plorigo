@@ -7,6 +7,7 @@ import (
 	"github.com/plorigo/plorigo/internal/audit"
 	"github.com/plorigo/plorigo/internal/auth"
 	"github.com/plorigo/plorigo/internal/environments"
+	"github.com/plorigo/plorigo/internal/envvars"
 	"github.com/plorigo/plorigo/internal/membership"
 	"github.com/plorigo/plorigo/internal/platform/mailer"
 	"github.com/plorigo/plorigo/internal/policy"
@@ -39,6 +40,15 @@ func (a *App) buildModules() {
 	// environments are project-scoped; they authorize/audit against the workspace
 	// resolved through the parent project (no dependency on the projects module).
 	a.environments = environments.New(environments.Deps{
+		DB:     a.db,
+		Audit:  auditSvc,
+		Policy: policySvc,
+		Log:    a.log,
+	})
+
+	// env vars are non-secret, per-environment config; like environments they
+	// authorize/audit against the workspace resolved through environment -> project.
+	a.envvars = envvars.New(envvars.Deps{
 		DB:     a.db,
 		Audit:  auditSvc,
 		Policy: policySvc,

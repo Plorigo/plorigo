@@ -27,6 +27,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionEnvironmentRead:   true,
 		authz.ActionServerCreate:      true,
 		authz.ActionServerRead:        true,
+		authz.ActionEnvVarSet:         true,
+		authz.ActionEnvVarRead:        true,
+		authz.ActionEnvVarDelete:      true,
 	},
 	authz.RoleAdmin: {
 		authz.ActionMemberInvite:      true,
@@ -39,6 +42,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionEnvironmentRead:   true,
 		authz.ActionServerCreate:      true,
 		authz.ActionServerRead:        true,
+		authz.ActionEnvVarSet:         true,
+		authz.ActionEnvVarRead:        true,
+		authz.ActionEnvVarDelete:      true,
 	},
 	authz.RoleMember: {
 		authz.ActionMemberList:        true,
@@ -48,12 +54,16 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionEnvironmentRead:   true,
 		authz.ActionServerCreate:      true,
 		authz.ActionServerRead:        true,
+		authz.ActionEnvVarSet:         true,
+		authz.ActionEnvVarRead:        true,
+		authz.ActionEnvVarDelete:      true,
 	},
 	authz.RoleViewer: {
 		authz.ActionMemberList:      true,
 		authz.ActionProjectRead:     true,
 		authz.ActionEnvironmentRead: true,
 		authz.ActionServerRead:      true,
+		authz.ActionEnvVarRead:      true,
 	},
 }
 

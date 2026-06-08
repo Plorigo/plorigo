@@ -1,0 +1,8 @@
+{
+  "scripts": {
+    "setup": "make setup && make generate",
+    "run": "APP_MASTER_KEY=conductor-local-dev-key docker compose -f deploy/docker-compose.yml up -d postgres && DATABASE_URL=postgres://plorigo:plorigo@localhost:5432/plorigo?sslmode=disable ./scripts/migrate.sh && APP_MASTER_KEY=conductor-local-dev-key DATABASE_URL=postgres://plorigo:plorigo@localhost:5432/plorigo?sslmode=disable PORT=${CONDUCTOR_PORT:-8080} PLORIGO_ENV=dev PLORIGO_BASE_URL=http://localhost:${CONDUCTOR_PORT:-8080} go run ./cmd/controlplane",
+    "archive": "true"
+  },
+  "runScriptMode": "nonconcurrent"
+}
