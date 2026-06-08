@@ -15,6 +15,7 @@ import (
 	"github.com/plorigo/plorigo/internal/platform/log"
 	"github.com/plorigo/plorigo/internal/platform/server"
 	"github.com/plorigo/plorigo/internal/projects"
+	"github.com/plorigo/plorigo/internal/secrets"
 	"github.com/plorigo/plorigo/internal/servers"
 )
 
@@ -30,6 +31,7 @@ type App struct {
 	projects     *projects.Module
 	environments *environments.Module
 	envvars      *envvars.Module
+	secrets      *secrets.Module
 	servers      *servers.Module
 }
 
@@ -46,7 +48,10 @@ func New(ctx context.Context, cfg config.Config) (*App, error) {
 	}
 
 	a := &App{cfg: cfg, log: logger, db: db}
-	a.buildModules()
+	if err := a.buildModules(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	a.srv = server.New(":"+cfg.Port, a.router(), logger)
 	return a, nil
 }

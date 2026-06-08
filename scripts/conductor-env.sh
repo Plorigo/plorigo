@@ -44,8 +44,10 @@ export PLORIGO_PG_PORT="$((base_port + 2))"
 
 # Required by every compose call: the compose file interpolates ${APP_MASTER_KEY:?}
 # on the controlplane service at parse time, so even `up -d postgres` / `down`
-# fail when it is unset.
-export APP_MASTER_KEY="${APP_MASTER_KEY:-conductor-local-dev-key}"
+# fail when it is unset. The control plane requires a base64-encoded 32-byte key
+# (this default decodes to "plorigo-dev-only-not-a-secret-32") — a throwaway local
+# dev key, not a real secret.
+export APP_MASTER_KEY="${APP_MASTER_KEY:-cGxvcmlnby1kZXYtb25seS1ub3QtYS1zZWNyZXQtMzI=}"
 
 # Always point at this workspace's own Postgres (host port +2), overriding any
 # inherited DATABASE_URL so the connection string can never drift from the

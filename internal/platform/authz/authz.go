@@ -32,6 +32,11 @@ const (
 	ActionEnvVarSet         Action = "env_var.set"
 	ActionEnvVarRead        Action = "env_var.read"
 	ActionEnvVarDelete      Action = "env_var.delete"
+	// Secret actions never expose a value — there is no "read" action because
+	// secrets are write-only. ActionSecretList covers metadata (keys + timestamps).
+	ActionSecretSet    Action = "secret.set"
+	ActionSecretList   Action = "secret.list"
+	ActionSecretDelete Action = "secret.delete"
 )
 
 // Workspace roles, most privileged first. Stored in workspace_members.role and

@@ -3,6 +3,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/plorigo/plorigo/internal/platform/principal"
 	"github.com/plorigo/plorigo/internal/platform/problem"
 	"github.com/plorigo/plorigo/internal/projects"
+	"github.com/plorigo/plorigo/internal/secrets"
 	"github.com/plorigo/plorigo/internal/servers"
 )
 
@@ -291,6 +293,120 @@ func TestIntegration_EnvVarsScopedToEnvironmentWorkspace(t *testing.T) {
 
 	// Operating on a non-existent environment resolves to no workspace -> NotFound.
 	if _, err := evSvc.Set(ownerCtx, envvars.SetInput{EnvironmentID: id.New().String(), Key: "GHOST", Value: "z"}); !isKind(err, problem.KindNotFound) {
+		t.Fatalf("set in missing environment: got %v, want NotFound", err)
+	}
+}
+
+func TestIntegration_SecretsScopedToEnvironmentWorkspace(t *testing.T) {
+	a := newApp(t)
+	ctx := context.Background()
+	authSvc := a.auth.Service()
+	projSvc := a.projects.Service()
+	envSvc := a.environments.Service()
+	secSvc := a.secrets.Service()
+
+	owner, _ := registerAndLogin(t, authSvc, ctx, "sec-owner")
+	ownerCtx := principal.NewContext(ctx, principal.Principal{UserID: owner.User.ID, Method: principal.MethodSession})
+
+	wss, err := projSvc.ListMyWorkspaces(ctx, owner.User.ID)
+	if err != nil || len(wss) != 1 {
+		t.Fatalf("ListMyWorkspaces: wss=%d err=%v", len(wss), err)
+	}
+	proj, err := projSvc.Create(ownerCtx, projects.CreateInput{WorkspaceID: wss[0].ID, Name: "Secret App"})
+	if err != nil {
+		t.Fatalf("Create project: %v", err)
+	}
+	env, err := envSvc.Create(ownerCtx, environments.CreateInput{ProjectID: proj.ID, Name: "Preview"})
+	if err != nil {
+		t.Fatalf("Create environment: %v", err)
+	}
+
+	const plaintext = "sk_live_supersecret_value"
+
+	// Set audits the REAL actor against the workspace resolved through the two-ancestor
+	// JOIN (secret -> environment -> project -> workspace).
+	sec, err := secSvc.Set(ownerCtx, secrets.SetInput{EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY", Value: plaintext})
+	if err != nil {
+		t.Fatalf("Set secret: %v", err)
+	}
+	if sec.Key != "STRIPE_SECRET_KEY" {
+		t.Fatalf("secret = %+v, want key set", sec)
+	}
+	var auditActor, auditWS string
+	if err := a.db.Pool.QueryRow(ctx,
+		`SELECT actor, workspace_id FROM audit_events WHERE target_id=$1 AND action='secret.set'`, sec.ID).Scan(&auditActor, &auditWS); err != nil {
+		t.Fatalf("query audit: %v", err)
+	}
+	if auditActor != owner.User.ID {
+		t.Fatalf("audit actor = %q, want %q", auditActor, owner.User.ID)
+	}
+	if auditWS != wss[0].ID {
+		t.Fatalf("audit workspace = %q, want the parent project's workspace %q", auditWS, wss[0].ID)
+	}
+
+	// Stored at rest as CIPHERTEXT — the raw column must be non-empty and must not
+	// contain the plaintext. This proves the master key actually seals the value.
+	var ciphertext []byte
+	if err := a.db.Pool.QueryRow(ctx, `SELECT ciphertext FROM secrets WHERE id=$1`, sec.ID).Scan(&ciphertext); err != nil {
+		t.Fatalf("query ciphertext: %v", err)
+	}
+	if len(ciphertext) == 0 {
+		t.Fatal("ciphertext is empty")
+	}
+	if bytes.Contains(ciphertext, []byte(plaintext)) {
+		t.Fatal("secret stored in the clear: the ciphertext column contains the plaintext")
+	}
+
+	// List returns metadata only — the key, never the value (Secret has no value field).
+	list, err := secSvc.List(ownerCtx, env.ID)
+	if err != nil || len(list) != 1 || list[0].Key != "STRIPE_SECRET_KEY" {
+		t.Fatalf("List: list=%+v err=%v", list, err)
+	}
+
+	// Setting the same key again upserts: same row, re-encrypted, updated_at advances.
+	sec2, err := secSvc.Set(ownerCtx, secrets.SetInput{EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY", Value: "sk_live_rotated"})
+	if err != nil {
+		t.Fatalf("re-Set secret: %v", err)
+	}
+	if sec2.ID != sec.ID {
+		t.Fatalf("upsert changed the row id: got %q, want %q", sec2.ID, sec.ID)
+	}
+	if !sec2.UpdatedAt.After(sec.UpdatedAt) {
+		t.Fatalf("updated_at did not advance: %v -> %v", sec.UpdatedAt, sec2.UpdatedAt)
+	}
+
+	// Delete removes it; a second delete reports NotFound (not a silent no-op).
+	if err := secSvc.Delete(ownerCtx, secrets.DeleteInput{EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY"}); err != nil {
+		t.Fatalf("Delete secret: %v", err)
+	}
+	if list, err := secSvc.List(ownerCtx, env.ID); err != nil || len(list) != 0 {
+		t.Fatalf("after delete List: list=%+v err=%v", list, err)
+	}
+	if err := secSvc.Delete(ownerCtx, secrets.DeleteInput{EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY"}); !isKind(err, problem.KindNotFound) {
+		t.Fatalf("double delete: got %v, want NotFound", err)
+	}
+
+	// A non-member of the environment's workspace is denied for every op — proving
+	// authorization resolves through the parent environment, not caller-supplied input.
+	other, _ := registerAndLogin(t, authSvc, ctx, "sec-other")
+	otherCtx := principal.NewContext(ctx, principal.Principal{UserID: other.User.ID, Method: principal.MethodSession})
+	if _, err := secSvc.Set(otherCtx, secrets.SetInput{EnvironmentID: env.ID, Key: "SNEAKY", Value: "x"}); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("non-member set: got %v, want PermissionDenied", err)
+	}
+	if _, err := secSvc.List(otherCtx, env.ID); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("non-member list: got %v, want PermissionDenied", err)
+	}
+	if err := secSvc.Delete(otherCtx, secrets.DeleteInput{EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY"}); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("non-member delete: got %v, want PermissionDenied", err)
+	}
+
+	// An anonymous caller is denied.
+	if _, err := secSvc.Set(ctx, secrets.SetInput{EnvironmentID: env.ID, Key: "ANON", Value: "y"}); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("anonymous set: got %v, want PermissionDenied", err)
+	}
+
+	// Operating on a non-existent environment resolves to no workspace -> NotFound.
+	if _, err := secSvc.Set(ownerCtx, secrets.SetInput{EnvironmentID: id.New().String(), Key: "GHOST", Value: "z"}); !isKind(err, problem.KindNotFound) {
 		t.Fatalf("set in missing environment: got %v, want NotFound", err)
 	}
 }

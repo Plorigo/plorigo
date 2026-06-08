@@ -8,7 +8,9 @@
 .env.*
 !.env.example
 *.local
-secrets/
+# Anchored to the repo root: a top-level local credentials dir. WITHOUT the leading
+# slash this also matches the internal/secrets Go module and hides it from git.
+/secrets/
 *.pem
 *.key
 *.p12
@@ -65,7 +67,10 @@ internal/platform/web/dist/
 
 # ---- Logs ----
 *.log
-logs/
+# Anchored to the repo root so it ignores a top-level runtime logs dir but not the
+# planned internal/logs module (same trap as /secrets/ above). *.log still catches
+# stray log files anywhere.
+/logs/
 
 # ---- Editors / OS ----
 .idea/

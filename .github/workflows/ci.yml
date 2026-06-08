@@ -69,7 +69,9 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://plorigo:plorigo@localhost:5432/plorigo?sslmode=disable
-      APP_MASTER_KEY: ci-test-key-not-a-secret
+      # Must be a base64-encoded 32-byte key (decodes to "plorigo-dev-only-not-a-secret-32");
+      # the control plane fails to start otherwise. Throwaway CI key — not a real secret.
+      APP_MASTER_KEY: cGxvcmlnby1kZXYtb25seS1ub3QtYS1zZWNyZXQtMzI=
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v5
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
