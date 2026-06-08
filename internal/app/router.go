@@ -21,6 +21,7 @@ func (a *App) router() http.Handler {
 	mux.Handle(a.auth.Route(ic))
 	mux.Handle(a.projects.Route(ic))
 	mux.Handle(a.projects.WorkspaceRoute(ic))
+	mux.Handle(a.environments.Route(ic))
 
 	// Dashboard / SPA fallback.
 	mux.Handle("/", web.Handler())

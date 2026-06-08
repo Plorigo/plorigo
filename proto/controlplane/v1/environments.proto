@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// An Environment is a deployment target within a project (the third leg of the
+// workspace -> project -> environment model). See docs/architecture/modules.md.
+message Environment {
+  string id = 1;
+  string project_id = 2;
+  string name = 3;
+  string slug = 4;
+  string type = 5; // preview | staging | production | custom
+  string created_at = 6; // RFC 3339
+}
+
+message CreateEnvironmentRequest {
+  string project_id = 1;
+  string name = 2;
+  string type = 3; // optional; defaults to "preview"
+}
+
+message CreateEnvironmentResponse {
+  Environment environment = 1;
+}
+
+message GetEnvironmentRequest {
+  string id = 1;
+}
+
+message GetEnvironmentResponse {
+  Environment environment = 1;
+}
+
+message ListEnvironmentsByProjectRequest {
+  string project_id = 1;
+}
+
+message ListEnvironmentsByProjectResponse {
+  repeated Environment environments = 1;
+}
+
+service EnvironmentService {
+  rpc CreateEnvironment(CreateEnvironmentRequest) returns (CreateEnvironmentResponse);
+  rpc GetEnvironment(GetEnvironmentRequest) returns (GetEnvironmentResponse);
+  rpc ListEnvironmentsByProject(ListEnvironmentsByProjectRequest) returns (ListEnvironmentsByProjectResponse);
+}
