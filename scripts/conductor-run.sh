@@ -1,26 +1,27 @@
 #!/usr/bin/env bash
-# Run the local Conductor dev stack: shared Postgres, migrated control plane, and
-# the Vite dashboard. Conductor allocates a 10-port range per workspace; use the
-# first port for the API and the next port for the dashboard.
+# Run the local Conductor dev stack: this workspace's own isolated Postgres, the
+# migrated control plane, and the Vite dashboard. Each workspace gets its own
+# Docker project, database, and host ports (see scripts/conductor-env.sh) so
+# multiple workspaces can run at once without colliding.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-
-base_port="${CONDUCTOR_PORT:-8080}"
-web_port="$((base_port + 1))"
 root="$(pwd)"
 
-export APP_MASTER_KEY="${APP_MASTER_KEY:-conductor-local-dev-key}"
-export DATABASE_URL="${DATABASE_URL:-postgres://plorigo:plorigo@localhost:5432/plorigo?sslmode=disable}"
-export PORT="$base_port"
-export PLORIGO_ENV=dev
-export PLORIGO_BASE_URL="http://localhost:${web_port}"
-export VITE_CONTROLPLANE_URL="http://localhost:${base_port}"
+# Per-workspace project, ports, APP_MASTER_KEY, DATABASE_URL, and plorigo_compose().
+# shellcheck source=scripts/conductor-env.sh
+source ./scripts/conductor-env.sh
 
-APP_MASTER_KEY="$APP_MASTER_KEY" docker compose -f deploy/docker-compose.yml up -d postgres
+export PORT="$PLORIGO_API_PORT"
+export PLORIGO_ENV=dev
+export PLORIGO_BASE_URL="http://localhost:${PLORIGO_WEB_PORT}"
+export VITE_CONTROLPLANE_URL="http://localhost:${PLORIGO_API_PORT}"
+
+# Bring up this workspace's Postgres and wait until it is healthy before migrating.
+plorigo_compose up -d --wait postgres
 ./scripts/migrate.sh
 
-echo "Plorigo dashboard: http://localhost:${web_port}"
-echo "Plorigo control plane: http://localhost:${base_port}"
+echo "Plorigo dashboard: http://localhost:${PLORIGO_WEB_PORT}"
+echo "Plorigo control plane: http://localhost:${PLORIGO_API_PORT}"
 
 exec pnpm --dir apps/web exec concurrently \
   --kill-others \
@@ -28,4 +29,4 @@ exec pnpm --dir apps/web exec concurrently \
   --names controlplane,web \
   --prefix-colors blue,green \
   "cd \"$root\" && go run ./cmd/controlplane" \
-  "cd \"$root/apps/web\" && pnpm exec vite --host 127.0.0.1 --port \"$web_port\""
+  "cd \"$root/apps/web\" && pnpm exec vite --host 127.0.0.1 --port \"$PLORIGO_WEB_PORT\""

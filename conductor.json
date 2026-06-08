@@ -1,8 +1,8 @@
 {
   "scripts": {
-    "setup": "make setup && make generate",
+    "setup": "./scripts/conductor-setup.sh",
     "run": "./scripts/conductor-run.sh",
-    "archive": "true"
+    "archive": "./scripts/conductor-archive.sh"
   },
-  "runScriptMode": "nonconcurrent"
+  "runScriptMode": "concurrent"
 }

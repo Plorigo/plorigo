@@ -35,8 +35,11 @@ services:
     # Published for local development: `go run ./cmd/controlplane` and `make migrate`
     # run on the host and connect over localhost. In production the control plane runs
     # in the compose network and reaches postgres by service name.
+    #
+    # PLORIGO_PG_PORT lets each Conductor workspace publish on its own host port (the
+    # scripts set it to CONDUCTOR_PORT+2); it defaults to 5432 for `dev.sh` and manual use.
     ports:
-      - "5432:5432"
+      - "${PLORIGO_PG_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

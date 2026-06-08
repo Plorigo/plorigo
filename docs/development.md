@@ -39,6 +39,47 @@ pnpm install
 pnpm dev
 ```
 
+## Conductor workspaces
+
+When you develop with [Conductor](https://conductor.build), each workspace runs an
+**isolated** copy of the dev stack so multiple workspaces work in parallel without
+colliding. The lifecycle is driven by [`conductor.json`](../conductor.json) and the
+`scripts/conductor-*.sh` scripts:
+
+- **Setup** (`scripts/conductor-setup.sh`) installs the toolchain, generates code, and brings
+  up this workspace's own Postgres.
+- **Run** (`scripts/conductor-run.sh`) starts the control plane + Vite dashboard against that
+  Postgres.
+- **Archive** (`scripts/conductor-archive.sh`) tears the stack down and frees disk.
+
+Each workspace gets its own Docker Compose project (`plorigo-<workspace>`), database, volume,
+network, and host ports — all derived once in `scripts/conductor-env.sh`:
+
+| Resource | Host port |
+|---|---|
+| Control plane (API) | `CONDUCTOR_PORT` |
+| Dashboard (Vite) | `CONDUCTOR_PORT + 1` |
+| Postgres | `CONDUCTOR_PORT + 2` |
+
+> [!WARNING]
+> **Archiving a workspace is destructive to its local data.** The archive script runs
+> `docker compose … down -v` (removing the Postgres volume) and deletes regenerable,
+> git-ignored artifacts (`node_modules`, `proto/gen`, `apps/web/dist`, build output, …) to
+> reclaim disk. Committed code (sqlc output, migrations, `.proto` sources) is never touched —
+> everything removed is regenerable with `make setup && make generate`.
+
+The non-Conductor paths above (`scripts/dev.sh`, `make dev`, a manual `docker compose up`)
+still use the shared default project on Postgres port **5432**.
+
+**One-time legacy cleanup.** If you used Plorigo with Conductor before per-workspace
+isolation existed, an old shared `plorigo` project and its volume linger on port 5432. Remove
+them once (this deletes that old local database — make sure no workspace still needs it):
+
+```bash
+APP_MASTER_KEY=x docker compose -p plorigo -f deploy/docker-compose.yml \
+  --profile storage down -v --remove-orphans
+```
+
 ## Common tasks (planned)
 
 ```bash
