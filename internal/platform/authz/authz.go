@@ -27,6 +27,8 @@ const (
 	ActionProjectDelete     Action = "project.delete"
 	ActionEnvironmentCreate Action = "environment.create"
 	ActionEnvironmentRead   Action = "environment.read"
+	ActionServerCreate      Action = "server.create"
+	ActionServerRead        Action = "server.read"
 )
 
 // Workspace roles, most privileged first. Stored in workspace_members.role and
