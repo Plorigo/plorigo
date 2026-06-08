@@ -16,7 +16,10 @@ export PLORIGO_ENV=dev
 export PLORIGO_BASE_URL="http://localhost:${PLORIGO_WEB_PORT}"
 export VITE_CONTROLPLANE_URL="http://localhost:${PLORIGO_API_PORT}"
 
-# Bring up this workspace's Postgres and wait until it is healthy before migrating.
+# Run is the single owner of the DB lifecycle: setup no longer touches Postgres, so
+# bring up this workspace's database here (idempotent) and wait until it is healthy
+# before migrating. This must happen on every Run — the container does not survive a
+# reboot/sleep, and new migrations land between runs.
 plorigo_compose up -d --wait postgres
 ./scripts/migrate.sh
 
