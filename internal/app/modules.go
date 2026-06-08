@@ -11,6 +11,7 @@ import (
 	"github.com/plorigo/plorigo/internal/platform/mailer"
 	"github.com/plorigo/plorigo/internal/policy"
 	"github.com/plorigo/plorigo/internal/projects"
+	"github.com/plorigo/plorigo/internal/servers"
 )
 
 // sessionTTL is how long a browser session (and its cookie) lasts.
@@ -38,6 +39,15 @@ func (a *App) buildModules() {
 	// environments are project-scoped; they authorize/audit against the workspace
 	// resolved through the parent project (no dependency on the projects module).
 	a.environments = environments.New(environments.Deps{
+		DB:     a.db,
+		Audit:  auditSvc,
+		Policy: policySvc,
+		Log:    a.log,
+	})
+
+	// servers are workspace-scoped (like projects): a connected machine a workspace
+	// deploys onto, authorized/audited directly against the workspace.
+	a.servers = servers.New(servers.Deps{
 		DB:     a.db,
 		Audit:  auditSvc,
 		Policy: policySvc,

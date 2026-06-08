@@ -59,6 +59,14 @@ type Project struct {
 	CreatedAt   time.Time
 }
 
+type Server struct {
+	ID          string
+	WorkspaceID string
+	Name        string
+	Slug        string
+	CreatedAt   time.Time
+}
+
 type Session struct {
 	ID         string
 	UserID     string

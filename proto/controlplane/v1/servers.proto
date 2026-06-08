@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// A Server is a machine (VPS / bare metal) connected to a workspace; the
+// workspace's apps are deployed onto it. Workspace-scoped, like a Project.
+message Server {
+  string id = 1;
+  string workspace_id = 2;
+  string name = 3;
+  string slug = 4;
+  string created_at = 5; // RFC 3339
+}
+
+message CreateServerRequest {
+  string workspace_id = 1;
+  string name = 2;
+}
+
+message CreateServerResponse {
+  Server server = 1;
+}
+
+message GetServerRequest {
+  string id = 1;
+}
+
+message GetServerResponse {
+  Server server = 1;
+}
+
+message ListServersByWorkspaceRequest {
+  string workspace_id = 1;
+}
+
+message ListServersByWorkspaceResponse {
+  repeated Server servers = 1;
+}
+
+service ServerService {
+  rpc CreateServer(CreateServerRequest) returns (CreateServerResponse);
+  rpc GetServer(GetServerRequest) returns (GetServerResponse);
+  rpc ListServersByWorkspace(ListServersByWorkspaceRequest) returns (ListServersByWorkspaceResponse);
+}
