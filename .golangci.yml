@@ -34,6 +34,7 @@ linters:
           files:
             - "**/internal/audit/**"
             - "**/internal/auth/**"
+            - "**/internal/environments/**"
             - "**/internal/membership/**"
             - "**/internal/policy/**"
             - "**/internal/projects/**"
@@ -41,6 +42,8 @@ linters:
             - pkg: github.com/plorigo/plorigo/internal/audit
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/auth
+              desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
+            - pkg: github.com/plorigo/plorigo/internal/environments
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/membership
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"

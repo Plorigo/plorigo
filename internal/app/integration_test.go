@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/plorigo/plorigo/internal/auth"
+	"github.com/plorigo/plorigo/internal/environments"
 	"github.com/plorigo/plorigo/internal/platform/config"
 	"github.com/plorigo/plorigo/internal/platform/id"
 	"github.com/plorigo/plorigo/internal/platform/principal"
@@ -113,6 +114,81 @@ func TestIntegration_RegisterBootstrapsWorkspaceAndAuthorizes(t *testing.T) {
 	// An anonymous caller is denied as well.
 	if _, err := projSvc.Create(ctx, projects.CreateInput{WorkspaceID: ws.ID, Name: "Anon"}); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("anonymous create: got %v, want PermissionDenied", err)
+	}
+}
+
+func TestIntegration_EnvironmentScopedToProjectWorkspace(t *testing.T) {
+	a := newApp(t)
+	ctx := context.Background()
+	authSvc := a.auth.Service()
+	projSvc := a.projects.Service()
+	envSvc := a.environments.Service()
+
+	owner, _ := registerAndLogin(t, authSvc, ctx, "env-owner")
+	ownerCtx := principal.NewContext(ctx, principal.Principal{UserID: owner.User.ID, Method: principal.MethodSession})
+
+	wss, err := projSvc.ListMyWorkspaces(ctx, owner.User.ID)
+	if err != nil || len(wss) != 1 {
+		t.Fatalf("ListMyWorkspaces: wss=%d err=%v", len(wss), err)
+	}
+	proj, err := projSvc.Create(ownerCtx, projects.CreateInput{WorkspaceID: wss[0].ID, Name: "Env Host App"})
+	if err != nil {
+		t.Fatalf("Create project: %v", err)
+	}
+
+	// Create defaults the type to "preview" and audits the REAL actor against the
+	// workspace resolved through the parent project (the join-based resolution).
+	env, err := envSvc.Create(ownerCtx, environments.CreateInput{ProjectID: proj.ID, Name: "Preview"})
+	if err != nil {
+		t.Fatalf("Create environment: %v", err)
+	}
+	if env.Type != "preview" {
+		t.Fatalf("env type = %q, want preview", env.Type)
+	}
+	var auditActor, auditWS string
+	if err := a.db.Pool.QueryRow(ctx,
+		`SELECT actor, workspace_id FROM audit_events WHERE target_id=$1 AND action='environment.create'`, env.ID).Scan(&auditActor, &auditWS); err != nil {
+		t.Fatalf("query audit: %v", err)
+	}
+	if auditActor != owner.User.ID {
+		t.Fatalf("audit actor = %q, want %q", auditActor, owner.User.ID)
+	}
+	if auditWS != wss[0].ID {
+		t.Fatalf("audit workspace = %q, want the parent project's workspace %q", auditWS, wss[0].ID)
+	}
+
+	// Get and ListByProject return it for the authorized owner.
+	if got, err := envSvc.Get(ownerCtx, env.ID); err != nil || got.ID != env.ID {
+		t.Fatalf("Get: got=%+v err=%v", got, err)
+	}
+	if list, err := envSvc.ListByProject(ownerCtx, proj.ID); err != nil || len(list) != 1 {
+		t.Fatalf("ListByProject: len=%d err=%v", len(list), err)
+	}
+
+	// A non-member of the project's workspace is denied — proving authorization
+	// resolves through the parent project, not a caller-supplied workspace id.
+	other, _ := registerAndLogin(t, authSvc, ctx, "env-other")
+	otherCtx := principal.NewContext(ctx, principal.Principal{UserID: other.User.ID, Method: principal.MethodSession})
+	if _, err := envSvc.Create(otherCtx, environments.CreateInput{ProjectID: proj.ID, Name: "Sneaky"}); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("non-member create: got %v, want PermissionDenied", err)
+	}
+	if _, err := envSvc.ListByProject(otherCtx, proj.ID); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("non-member list: got %v, want PermissionDenied", err)
+	}
+
+	// An anonymous caller is denied.
+	if _, err := envSvc.Create(ctx, environments.CreateInput{ProjectID: proj.ID, Name: "Anon"}); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("anonymous create: got %v, want PermissionDenied", err)
+	}
+
+	// A duplicate name in the same project violates UNIQUE (project_id, slug).
+	if _, err := envSvc.Create(ownerCtx, environments.CreateInput{ProjectID: proj.ID, Name: "Preview"}); !isKind(err, problem.KindAlreadyExists) {
+		t.Fatalf("duplicate environment: got %v, want AlreadyExists", err)
+	}
+
+	// Creating in a non-existent project resolves to no workspace -> NotFound.
+	if _, err := envSvc.Create(ownerCtx, environments.CreateInput{ProjectID: id.New().String(), Name: "Ghost"}); !isKind(err, problem.KindNotFound) {
+		t.Fatalf("create in missing project: got %v, want NotFound", err)
 	}
 }
 

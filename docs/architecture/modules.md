@@ -107,6 +107,13 @@ consumers *depend on* it. `policy` reads roles through a consumer-defined
 is what breaks the `projects ↔ policy` cycle (`projects → policy → membership`, never
 back). Wire these in `internal/app` in dependency order.
 
+Authorization is **workspace-scoped**, but a resource can sit below the workspace in the
+tree — an environment belongs to a project, not directly to a workspace. A module for
+such a resource resolves its owning `workspace_id` in its own `store` (a lookup/JOIN on
+the ancestor table — see `internal/environments`) and authorizes against that. It does
+**not** import the ancestor's module: reading the shared database from `postgres.go` is
+exactly what Rule 2 permits.
+
 Any change that broadens what an unprivileged user or AI agent can do gets extra review
 ([security.md](./security.md)).
 

@@ -17,14 +17,16 @@ type Action string
 
 // The actions the policy module knows how to authorize.
 const (
-	ActionWorkspaceCreate  Action = "workspace.create"
-	ActionMemberInvite     Action = "workspace.member.invite"
-	ActionMemberRemove     Action = "workspace.member.remove"
-	ActionMemberRoleChange Action = "workspace.member.role.change"
-	ActionMemberList       Action = "workspace.member.list"
-	ActionProjectCreate    Action = "project.create"
-	ActionProjectRead      Action = "project.read"
-	ActionProjectDelete    Action = "project.delete"
+	ActionWorkspaceCreate   Action = "workspace.create"
+	ActionMemberInvite      Action = "workspace.member.invite"
+	ActionMemberRemove      Action = "workspace.member.remove"
+	ActionMemberRoleChange  Action = "workspace.member.role.change"
+	ActionMemberList        Action = "workspace.member.list"
+	ActionProjectCreate     Action = "project.create"
+	ActionProjectRead       Action = "project.read"
+	ActionProjectDelete     Action = "project.delete"
+	ActionEnvironmentCreate Action = "environment.create"
+	ActionEnvironmentRead   Action = "environment.read"
 )
 
 // Workspace roles, most privileged first. Stored in workspace_members.role and
