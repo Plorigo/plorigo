@@ -9,9 +9,11 @@ import (
 	"github.com/plorigo/plorigo/internal/environments"
 	"github.com/plorigo/plorigo/internal/envvars"
 	"github.com/plorigo/plorigo/internal/membership"
+	"github.com/plorigo/plorigo/internal/platform/crypto"
 	"github.com/plorigo/plorigo/internal/platform/mailer"
 	"github.com/plorigo/plorigo/internal/policy"
 	"github.com/plorigo/plorigo/internal/projects"
+	"github.com/plorigo/plorigo/internal/secrets"
 	"github.com/plorigo/plorigo/internal/servers"
 )
 
@@ -21,8 +23,10 @@ const sessionTTL = 720 * time.Hour // 30 days
 // buildModules is the SINGLE place that constructs modules and injects cross-module
 // interfaces. The construction order encodes the (acyclic) dependency graph:
 // membership ← policy ← projects ← auth. Each edge is a consumer-defined port
-// satisfied structurally, so no module imports another.
-func (a *App) buildModules() {
+// satisfied structurally, so no module imports another. It returns an error when a
+// dependency cannot be built (e.g. an invalid APP_MASTER_KEY), so the control plane
+// fails fast at startup rather than at first use.
+func (a *App) buildModules() error {
 	auditSvc := audit.New(audit.Deps{Log: a.log})
 
 	// membership (role reader) → policy (decisions) → projects (privileged writes).
@@ -52,6 +56,21 @@ func (a *App) buildModules() {
 		DB:     a.db,
 		Audit:  auditSvc,
 		Policy: policySvc,
+		Log:    a.log,
+	})
+
+	// secrets are the encrypted, write-only counterpart to env vars: same
+	// environment-scoping, but values are sealed at rest by the crypto box (keyed by
+	// APP_MASTER_KEY). A bad master key fails here, before the server starts.
+	box, err := crypto.NewBox(a.cfg.MasterKey)
+	if err != nil {
+		return err
+	}
+	a.secrets = secrets.New(secrets.Deps{
+		DB:     a.db,
+		Audit:  auditSvc,
+		Policy: policySvc,
+		Crypto: box,
 		Log:    a.log,
 	})
 
@@ -93,4 +112,6 @@ func (a *App) buildModules() {
 		Workspace: a.projects.Service(),
 		Log:       a.log,
 	})
+
+	return nil
 }

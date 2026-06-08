@@ -30,6 +30,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionEnvVarSet:         true,
 		authz.ActionEnvVarRead:        true,
 		authz.ActionEnvVarDelete:      true,
+		authz.ActionSecretSet:         true,
+		authz.ActionSecretList:        true,
+		authz.ActionSecretDelete:      true,
 	},
 	authz.RoleAdmin: {
 		authz.ActionMemberInvite:      true,
@@ -45,6 +48,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionEnvVarSet:         true,
 		authz.ActionEnvVarRead:        true,
 		authz.ActionEnvVarDelete:      true,
+		authz.ActionSecretSet:         true,
+		authz.ActionSecretList:        true,
+		authz.ActionSecretDelete:      true,
 	},
 	authz.RoleMember: {
 		authz.ActionMemberList:        true,
@@ -57,6 +63,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionEnvVarSet:         true,
 		authz.ActionEnvVarRead:        true,
 		authz.ActionEnvVarDelete:      true,
+		authz.ActionSecretSet:         true,
+		authz.ActionSecretList:        true,
+		authz.ActionSecretDelete:      true,
 	},
 	authz.RoleViewer: {
 		authz.ActionMemberList:      true,
@@ -64,6 +73,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionEnvironmentRead: true,
 		authz.ActionServerRead:      true,
 		authz.ActionEnvVarRead:      true,
+		// Secrets are write-only; a viewer may see which keys exist (metadata) but
+		// never set, delete, or read a value.
+		authz.ActionSecretList: true,
 	},
 }
 

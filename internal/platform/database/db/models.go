@@ -68,6 +68,15 @@ type Project struct {
 	CreatedAt   time.Time
 }
 
+type Secret struct {
+	ID            string
+	EnvironmentID string
+	Key           string
+	Ciphertext    []byte
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 type Server struct {
 	ID          string
 	WorkspaceID string
