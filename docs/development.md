@@ -46,10 +46,9 @@ When you develop with [Conductor](https://conductor.build), each workspace runs 
 colliding. The lifecycle is driven by [`conductor.json`](../conductor.json) and the
 `scripts/conductor-*.sh` scripts:
 
-- **Setup** (`scripts/conductor-setup.sh`) installs the toolchain, generates code, and brings
-  up this workspace's own Postgres.
-- **Run** (`scripts/conductor-run.sh`) starts the control plane + Vite dashboard against that
-  Postgres.
+- **Setup** (`scripts/conductor-setup.sh`) installs the toolchain and generates code.
+- **Run** (`scripts/conductor-run.sh`) brings up this workspace's own Postgres, applies
+  migrations, and starts the control plane + Vite dashboard against it.
 - **Archive** (`scripts/conductor-archive.sh`) tears the stack down and frees disk.
 
 Each workspace gets its own Docker Compose project (`plorigo-<workspace>`), database, volume,
