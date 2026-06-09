@@ -1,27 +1,36 @@
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   AlertTriangle,
   ArrowUpRight,
+  BarChart3,
   Box,
   CheckCircle2,
   ChevronDown,
   Clock3,
+  Code2,
   Command,
   Cpu,
+  Database,
+  Ellipsis,
   ExternalLink,
+  FolderPlus,
   GitBranch,
   Globe2,
+  Grid2X2,
   Gauge,
   HardDrive,
   Home,
   KeyRound,
   Layers3,
+  LayoutTemplate,
+  List,
   LockKeyhole,
   LogOut,
   Plus,
+  RefreshCcw,
   Rocket,
   Search,
   Server,
@@ -50,7 +59,11 @@ import {
   deployments,
   domains,
   logLines,
+  projectAttentionItems,
+  projectDashboardActivity,
+  projectStartActions,
   prototypeProjects,
+  releaseHealth,
   serverHealth,
   type DashboardProject,
 } from "../lib/mockDashboard";
@@ -134,10 +147,10 @@ function statusTone(status: string): "green" | "amber" | "red" | "blue" | "purpl
   if (["building", "queued", "protected"].includes(status)) {
     return "blue";
   }
-  if (["degraded", "needs restore test"].includes(status)) {
+  if (["degraded", "needs restore test", "warning"].includes(status)) {
     return "amber";
   }
-  if (["failed", "offline"].includes(status)) {
+  if (["failed", "offline", "attention"].includes(status)) {
     return "red";
   }
   return "neutral";
@@ -159,7 +172,7 @@ export function ProjectsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: user } = useCurrentUser();
-  const [section, setSection] = useState<Section>("overview");
+  const [section, setSection] = useState<Section>("projects");
   const [activeProjectId, setActiveProjectId] = useState("");
   const [activeEnvironmentId, setActiveEnvironmentId] = useState("");
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
@@ -213,9 +226,17 @@ export function ProjectsPage() {
       framework: "ConnectRPC",
       url: `${project.slug}.plorigo.local`,
       branch: "main",
+      commit: project.id.slice(0, 7) || "live",
       status: "healthy",
       source: "live",
       updated: `created ${formatDate(project.createdAt)}`,
+      environments: [{ name: "Production", tone: "green" }],
+      services: ["Web", "DB"],
+      owner: "Workspace",
+      readiness: 91,
+      collaborators: 1,
+      sparkline: [20, 28, 34, 30, 42, 38, 46, 40, 48],
+      kind: "web",
     }));
   }, [projects.data]);
 
@@ -295,6 +316,7 @@ export function ProjectsPage() {
                 {workspace.name}
               </option>
             ))}
+            {!workspaces.data?.length && <option value="">ismat's workspace</option>}
           </Select>
         </div>
 
@@ -370,48 +392,88 @@ export function ProjectsPage() {
 
       <div className="lg:pl-64">
         <header className="sticky top-0 z-10 border-b border-zinc-200 bg-white/95 backdrop-blur">
-          <div className="flex min-h-14 items-center gap-3 px-4 sm:px-6 lg:px-8">
-            <img src={plorigoIcon} alt="" className="h-8 w-8 rounded-md lg:hidden" />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-zinc-500">{sectionCopy[section].eyebrow}</p>
-              <h1 className="truncate text-lg font-semibold text-zinc-950">{sectionCopy[section].title}</h1>
+          {section === "projects" ? (
+            <div className="flex min-h-16 items-center gap-3 px-4 sm:px-6 lg:px-8">
+              <img src={plorigoIcon} alt="" className="h-8 w-8 rounded-md lg:hidden" />
+              <div className="hidden min-w-0 flex-1 items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-500 shadow-sm md:flex">
+                <Search className="h-4 w-4 shrink-0 text-zinc-500" aria-hidden="true" />
+                <span className="truncate">Search projects...</span>
+                <span className="ml-auto inline-flex items-center gap-1 rounded border border-zinc-200 bg-zinc-50 px-1.5 py-0.5 text-[11px] text-zinc-500">
+                  <Command className="h-3 w-3" aria-hidden="true" />K
+                </span>
+              </div>
+              <div className="min-w-0 flex-1 md:hidden">
+                <h1 className="truncate text-lg font-semibold text-zinc-950">Projects</h1>
+              </div>
+              <div className="hidden min-w-[210px] sm:block">
+                <Select
+                  value={workspaceId}
+                  onChange={(event) => setWorkspaceId(event.target.value)}
+                  disabled={workspaces.isLoading || !workspaces.data?.length}
+                  aria-label="Workspace"
+                >
+                  {workspaces.data?.map((workspace) => (
+                    <option key={workspace.id} value={workspace.id}>
+                      {workspace.name}
+                    </option>
+                  ))}
+                  {!workspaces.data?.length && <option value="">ismat's workspace</option>}
+                </Select>
+              </div>
+              <Button size="sm">
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                <span className="hidden sm:inline">New project</span>
+              </Button>
             </div>
+          ) : (
+            <div className="flex min-h-14 items-center gap-3 px-4 sm:px-6 lg:px-8">
+              <img src={plorigoIcon} alt="" className="h-8 w-8 rounded-md lg:hidden" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-zinc-500">{sectionCopy[section].eyebrow}</p>
+                <h1 className="truncate text-lg font-semibold text-zinc-950">{sectionCopy[section].title}</h1>
+              </div>
 
-            <div className="hidden w-full max-w-sm items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-2 text-sm text-zinc-500 md:flex">
-              <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <span className="truncate">Search projects, servers, deployments</span>
-              <span className="ml-auto inline-flex items-center gap-1 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-500">
-                <Command className="h-3 w-3" aria-hidden="true" />K
-              </span>
+              <div className="hidden w-full max-w-sm items-center gap-2 rounded-md border border-zinc-200 bg-zinc-50 px-2.5 py-2 text-sm text-zinc-500 md:flex">
+                <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span className="truncate">Search projects, servers, deployments</span>
+                <span className="ml-auto inline-flex items-center gap-1 rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] text-zinc-500">
+                  <Command className="h-3 w-3" aria-hidden="true" />K
+                </span>
+              </div>
+
+              <div className="hidden min-w-[180px] sm:block">
+                <Select
+                  value={selectedProject?.id ?? ""}
+                  onChange={(event) => setActiveProjectId(event.target.value)}
+                >
+                  {dashboardProjects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+
+              <Button variant="secondary" size="icon" aria-label="Theme">
+                <Sun className="h-4 w-4" aria-hidden="true" />
+              </Button>
+
+              <Button size="sm">
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                <span className="hidden sm:inline">New deployment</span>
+                <ChevronDown className="hidden h-4 w-4 sm:block" aria-hidden="true" />
+              </Button>
             </div>
-
-            <div className="hidden min-w-[180px] sm:block">
-              <Select
-                value={selectedProject?.id ?? ""}
-                onChange={(event) => setActiveProjectId(event.target.value)}
-              >
-                {dashboardProjects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.name}
-                  </option>
-                ))}
-              </Select>
-            </div>
-
-            <Button variant="secondary" size="icon" aria-label="Theme">
-              <Sun className="h-4 w-4" aria-hidden="true" />
-            </Button>
-
-            <Button size="sm">
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              <span className="hidden sm:inline">New deployment</span>
-              <ChevronDown className="hidden h-4 w-4 sm:block" aria-hidden="true" />
-            </Button>
-          </div>
+          )}
         </header>
 
-        <main className="mx-auto max-w-7xl px-4 py-5 pb-24 sm:px-6 lg:px-8">
-          {section !== "overview" && (
+        <main
+          className={cn(
+            "min-w-0 px-4 pb-24 sm:px-6 lg:px-8",
+            section === "projects" ? "py-6" : "mx-auto max-w-7xl py-5",
+          )}
+        >
+          {section !== "overview" && section !== "projects" && (
             <WorkspaceHero
               selectedProject={selectedProject}
               currentWorkspace={currentWorkspace?.name ?? "Workspace"}
@@ -1050,98 +1112,768 @@ function ProjectsSection({
   error: string;
   liveCount: number;
 }) {
-  return (
-    <Panel>
-      <PanelHeader
-        title="Project inventory"
-        description={
-          liveCount > 0
-            ? "Project rows are loaded from the current workspace."
-            : "No backend projects yet, so prototype rows keep the dashboard complete."
-        }
-        status={liveCount > 0 ? "live" : "prototype"}
-        action={
-          <Button size="sm" disabled>
-            <Box className="h-4 w-4" aria-hidden="true" />
-            New project
-          </Button>
-        }
-      />
-      <div className="p-4">
-        {loading && <ProjectSkeleton />}
-        {error && (
-          <EmptyState
-            title="Project API returned an error"
-            body={error}
-            status="live"
-          />
-        )}
-        {!loading && !error && (
-          <div className="grid gap-3 lg:grid-cols-3">
-            {projects.map((project) => (
-              <button
-                key={project.id}
-                type="button"
-                onClick={() => setActiveProjectId(project.id)}
-                className={cn(
-                  "group min-w-0 overflow-hidden rounded-xl border bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-[0_12px_34px_rgba(24,24,27,0.08)]",
-                  activeProjectId === project.id ? "border-zinc-950 ring-2 ring-zinc-950/5" : "border-zinc-200",
-                )}
-              >
-                <div className="border-b border-zinc-100 bg-zinc-950 p-3 text-white">
-                  <div className="rounded-lg border border-white/10 bg-white/[0.04] p-2">
-                    <div className="mb-3 flex items-center gap-1.5">
-                      <span className="h-2 w-2 rounded-full bg-red-400" />
-                      <span className="h-2 w-2 rounded-full bg-amber-400" />
-                      <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                      <span className="ml-auto text-[10px] text-zinc-500">{project.slug}</span>
-                    </div>
-                    <div className="grid gap-1.5">
-                      <div className="h-2 w-3/4 rounded bg-white/25" />
-                      <div className="h-2 w-1/2 rounded bg-white/15" />
-                      <div className="mt-2 grid grid-cols-3 gap-1.5">
-                        <div className="h-9 rounded bg-emerald-400/20" />
-                        <div className="h-9 rounded bg-sky-400/20" />
-                        <div className="h-9 rounded bg-violet-400/20" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
+  const [query, setQuery] = useState("");
+  const [activeTab, setActiveTab] = useState("all");
+  const [frameworkFilter, setFrameworkFilter] = useState("all");
+  const [ownerFilter, setOwnerFilter] = useState("all");
+  const [healthFilter, setHealthFilter] = useState("all");
+  const [sortKey, setSortKey] = useState("newest");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
-                <div className="p-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-zinc-950">{project.name}</p>
-                      <p className="mt-1 truncate text-xs text-zinc-500">{project.repo}</p>
-                    </div>
-                    <DataBadge status={project.source} />
-                  </div>
-                  <div className="mt-4 space-y-2">
-                    <ProjectMeta icon={Globe2} label={project.url} />
-                    <ProjectMeta icon={GitBranch} label={project.branch} />
-                    <ProjectMeta icon={Layers3} label={project.framework} />
-                  </div>
-                  <div className="mt-4 flex items-center justify-between border-t border-zinc-100 pt-3">
-                    <StatusDot tone={statusTone(project.status)} label={project.status} />
-                    <span className="text-xs text-zinc-500">{project.updated}</span>
-                  </div>
-                </div>
-              </button>
-            ))}
+  const frameworks = useMemo(
+    () => ["all", ...Array.from(new Set(projects.map((project) => project.framework))).sort()],
+    [projects],
+  );
+  const owners = useMemo(
+    () => ["all", ...Array.from(new Set(projects.map((project) => project.owner))).sort()],
+    [projects],
+  );
+  const sourceStatus: DataStatus = liveCount > 0 ? "live" : "prototype";
+  const productionCount = projects.filter((project) =>
+    project.environments.some((environment) => environment.name.toLowerCase().includes("production")),
+  ).length;
+  const previewCount = projects.reduce(
+    (total, project) =>
+      total +
+      project.environments.reduce((count, environment) => {
+        if (!environment.name.toLowerCase().includes("preview")) {
+          return count;
+        }
+        return count + Number(environment.name.match(/x(\d+)/i)?.[1] ?? 1);
+      }, 0),
+    0,
+  );
+  const attentionCount = projects.filter((project) => ["attention", "warning"].includes(project.status)).length;
+
+  const filteredProjects = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    const rows = projects.filter((project) => {
+      const queryMatches =
+        normalizedQuery.length === 0 ||
+        [project.name, project.repo, project.framework, project.branch, project.url, project.status]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedQuery);
+      const tabMatches =
+        activeTab === "all" ||
+        (activeTab === "production" &&
+          project.environments.some((environment) => environment.name.toLowerCase().includes("production"))) ||
+        (activeTab === "preview" &&
+          project.environments.some((environment) => environment.name.toLowerCase().includes("preview"))) ||
+        (activeTab === "attention" && ["attention", "warning"].includes(project.status)) ||
+        activeTab === "archived";
+      const frameworkMatches = frameworkFilter === "all" || project.framework === frameworkFilter;
+      const ownerMatches = ownerFilter === "all" || project.owner === ownerFilter;
+      const healthMatches =
+        healthFilter === "all" ||
+        (healthFilter === "healthy" && project.status === "healthy") ||
+        (healthFilter === "warning" && project.status === "warning") ||
+        (healthFilter === "attention" && project.status === "attention");
+
+      return queryMatches && tabMatches && frameworkMatches && ownerMatches && healthMatches;
+    });
+
+    if (activeTab === "archived") {
+      return [];
+    }
+
+    const sortedRows = [...rows];
+    if (sortKey === "name") {
+      sortedRows.sort((a, b) => a.name.localeCompare(b.name));
+    }
+    if (sortKey === "readiness") {
+      sortedRows.sort((a, b) => b.readiness - a.readiness);
+    }
+    if (sortKey === "attention") {
+      sortedRows.sort((a, b) => statusRank(b.status) - statusRank(a.status));
+    }
+    return sortedRows;
+  }, [activeTab, frameworkFilter, healthFilter, ownerFilter, projects, query, sortKey]);
+
+  const hasFilters =
+    query.length > 0 ||
+    activeTab !== "all" ||
+    frameworkFilter !== "all" ||
+    ownerFilter !== "all" ||
+    healthFilter !== "all";
+
+  function clearFilters() {
+    setQuery("");
+    setActiveTab("all");
+    setFrameworkFilter("all");
+    setOwnerFilter("all");
+    setHealthFilter("all");
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="min-w-0 max-w-[calc(100vw-2rem)] space-y-5 xl:max-w-none">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div className="min-w-0">
+              <h1 className="text-3xl font-semibold tracking-tight text-zinc-950">Projects</h1>
+              <p className="mt-2 max-w-full break-words text-sm text-zinc-500">
+                <span className="hidden sm:inline">Manage applications, environments, deploys, and project health.</span>
+                <span className="sm:hidden">Manage apps, environments, deploys, and health.</span>
+              </p>
+            </div>
+            <div className="self-start">
+              <DataBadge status={sourceStatus} />
+            </div>
           </div>
-        )}
+
+          <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
+            <ProjectMetricCard
+              icon={Box}
+              label="Total projects"
+              value={String(liveCount > 0 ? projects.length : 24)}
+              detail={liveCount > 0 ? "Live workspace records" : "3 this week"}
+              tone="blue"
+            />
+            <ProjectMetricCard
+              icon={Globe2}
+              label="Active production apps"
+              value={String(liveCount > 0 ? productionCount : 9)}
+              detail={liveCount > 0 ? `${productionCount} production environments` : "78% of projects"}
+              tone="green"
+            />
+            <ProjectMetricCard
+              icon={GitBranch}
+              label="Preview environments"
+              value={String(liveCount > 0 ? previewCount : 18)}
+              detail={liveCount > 0 ? `${previewCount} preview slots` : "Across 14 projects"}
+              tone="blue"
+            />
+            <ProjectMetricCard
+              icon={AlertTriangle}
+              label="Projects needing attention"
+              value={String(liveCount > 0 ? attentionCount : 3)}
+              detail="View and resolve"
+              tone="amber"
+            />
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div className="flex min-w-0 flex-wrap gap-2">
+                {[
+                  { id: "all", label: "All projects" },
+                  { id: "production", label: "Production" },
+                  { id: "preview", label: "Preview-heavy" },
+                  { id: "attention", label: "Needs attention", count: liveCount > 0 ? attentionCount : 3 },
+                  { id: "archived", label: "Archived" },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setActiveTab(tab.id)}
+                    className={cn(
+                      "inline-flex h-9 shrink-0 items-center gap-2 rounded-md px-3 text-sm font-medium transition",
+                      activeTab === tab.id
+                        ? "bg-zinc-950 text-white shadow-sm"
+                        : "text-zinc-600 hover:bg-white hover:text-zinc-950",
+                    )}
+                  >
+                    {tab.label}
+                    {tab.count !== undefined && (
+                      <span
+                        className={cn(
+                          "grid h-5 min-w-5 place-items-center rounded-full px-1 text-[11px]",
+                          activeTab === tab.id ? "bg-red-500 text-white" : "bg-red-100 text-red-600",
+                        )}
+                      >
+                        {tab.count}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="min-w-[220px] flex-1 sm:flex-none">
+                  <Select value={sortKey} onChange={(event) => setSortKey(event.target.value)} aria-label="Sort projects">
+                    <option value="newest">Sort: Last deploy (newest)</option>
+                    <option value="readiness">Sort: Readiness score</option>
+                    <option value="attention">Sort: Needs attention</option>
+                    <option value="name">Sort: Name</option>
+                  </Select>
+                </div>
+                <div className="inline-flex rounded-md border border-zinc-200 bg-white p-1 shadow-sm">
+                  <button
+                    type="button"
+                    className={cn(
+                      "grid h-8 w-8 place-items-center rounded text-zinc-500 transition",
+                      viewMode === "grid" && "bg-zinc-950 text-white",
+                    )}
+                    onClick={() => setViewMode("grid")}
+                    aria-label="Grid view"
+                  >
+                    <Grid2X2 className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "grid h-8 w-8 place-items-center rounded text-zinc-500 transition",
+                      viewMode === "list" && "bg-zinc-950 text-white",
+                    )}
+                    onClick={() => setViewMode("list")}
+                    aria-label="List view"
+                  >
+                    <List className="h-4 w-4" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div className="grid gap-2 sm:grid-cols-3 lg:min-w-[520px]">
+                <Select
+                  value={frameworkFilter}
+                  onChange={(event) => setFrameworkFilter(event.target.value)}
+                  aria-label="Framework filter"
+                >
+                  {frameworks.map((framework) => (
+                    <option key={framework} value={framework}>
+                      {framework === "all" ? "Framework" : framework}
+                    </option>
+                  ))}
+                </Select>
+                <Select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)} aria-label="Owner filter">
+                  {owners.map((owner) => (
+                    <option key={owner} value={owner}>
+                      {owner === "all" ? "Owner" : owner}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  value={healthFilter}
+                  onChange={(event) => setHealthFilter(event.target.value)}
+                  aria-label="Health filter"
+                >
+                  <option value="all">Health</option>
+                  <option value="healthy">Healthy</option>
+                  <option value="warning">Warning</option>
+                  <option value="attention">Needs attention</option>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between lg:justify-end">
+                <label className="flex min-w-0 items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-500 shadow-sm sm:min-w-[260px]">
+                  <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <input
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    placeholder="Search projects"
+                    className="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm text-zinc-950 outline-none placeholder:text-zinc-400"
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md px-3 text-sm font-medium text-zinc-500 transition hover:bg-white hover:text-zinc-950 disabled:pointer-events-none disabled:opacity-50"
+                  onClick={clearFilters}
+                  disabled={!hasFilters}
+                >
+                  Clear filters
+                  <span className="text-lg leading-none">x</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end text-xs text-zinc-500">
+              {filteredProjects.length} {filteredProjects.length === 1 ? "project" : "projects"}
+            </div>
+          </div>
+
+          {loading && <ProjectSkeleton />}
+          {error && <EmptyState title="Project API returned an error" body={error} status="live" />}
+          {!loading && !error && filteredProjects.length === 0 && (
+            <EmptyState
+              title="No projects match these filters"
+              body="Clear filters or switch tabs to return to the full workspace project list."
+              status={sourceStatus}
+            />
+          )}
+          {!loading && !error && filteredProjects.length > 0 && viewMode === "grid" && (
+            <div className="grid gap-4 xl:grid-cols-2 2xl:grid-cols-3">
+              {filteredProjects.map((project) => (
+                <ProjectCard
+                  key={project.id}
+                  project={project}
+                  active={activeProjectId === project.id}
+                  onSelect={setActiveProjectId}
+                />
+              ))}
+            </div>
+          )}
+          {!loading && !error && filteredProjects.length > 0 && viewMode === "list" && (
+            <div className="space-y-2">
+              {filteredProjects.map((project) => (
+                <ProjectListRow
+                  key={project.id}
+                  project={project}
+                  active={activeProjectId === project.id}
+                  onSelect={setActiveProjectId}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+        <ProjectsRightRail />
       </div>
-    </Panel>
+    </div>
   );
 }
 
-function ProjectMeta({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+function statusRank(status: DashboardProject["status"]): number {
+  if (status === "attention") {
+    return 3;
+  }
+  if (status === "warning") {
+    return 2;
+  }
+  if (status === "building") {
+    return 1;
+  }
+  return 0;
+}
+
+function ProjectMetricCard({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  tone,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+  detail: string;
+  tone: "blue" | "green" | "amber";
+}) {
+  const toneClasses = {
+    blue: "border-blue-200 bg-blue-50 text-blue-700",
+    green: "border-emerald-200 bg-emerald-50 text-emerald-700",
+    amber: "border-amber-200 bg-amber-50 text-amber-700",
+  };
+  const detailClasses = {
+    blue: "text-blue-600",
+    green: "text-emerald-600",
+    amber: "text-red-600",
+  };
+
   return (
-    <div className="flex min-w-0 items-center gap-2 text-xs text-zinc-500">
-      <Icon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+    <div className="rounded-lg border border-zinc-200 bg-white p-4 shadow-[0_1px_2px_rgba(24,24,27,0.04),0_10px_28px_rgba(24,24,27,0.03)]">
+      <div className="flex items-start gap-4">
+        <span className={cn("grid h-11 w-11 shrink-0 place-items-center rounded-lg border", toneClasses[tone])}>
+          <Icon className="h-5 w-5" aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm leading-5 text-zinc-500">{label}</p>
+          <p className="mt-2 text-2xl font-semibold tracking-tight text-zinc-950">{value}</p>
+          <p className={cn("mt-4 text-sm font-medium leading-5", detailClasses[tone])}>{detail}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProjectCard({
+  project,
+  active,
+  onSelect,
+}: {
+  project: DashboardProject;
+  active: boolean;
+  onSelect: (projectId: string) => void;
+}) {
+  const tone = statusTone(project.status);
+
+  return (
+    <article
+      role="button"
+      tabIndex={0}
+      onClick={() => onSelect(project.id)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect(project.id);
+        }
+      }}
+      className={cn(
+        "group min-w-0 rounded-lg border bg-white p-4 shadow-[0_1px_2px_rgba(24,24,27,0.04),0_10px_30px_rgba(24,24,27,0.03)] outline-none transition hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-[0_12px_34px_rgba(24,24,27,0.08)] focus-visible:ring-2 focus-visible:ring-blue-500",
+        active ? "border-zinc-950 ring-2 ring-zinc-950/5" : "border-zinc-200",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <ProjectKindIcon project={project} />
+          <div className="min-w-0">
+            <h2 className="truncate text-base font-semibold text-zinc-950">{project.name}</h2>
+            <p className="mt-1 truncate text-xs text-zinc-500">{project.repo}</p>
+          </div>
+        </div>
+        <Badge tone={frameworkTone(project.framework)}>{project.framework}</Badge>
+      </div>
+
+      <div className="mt-4 flex min-w-0 flex-wrap gap-2">
+        {project.environments.map((environment) => (
+          <Badge key={`${project.id}-${environment.name}`} tone={environment.tone}>
+            {environment.name}
+          </Badge>
+        ))}
+      </div>
+
+      <div className="mt-4 flex items-center justify-between gap-3 border-b border-zinc-100 pb-3">
+        <StatusDot tone={tone} label={project.status === "attention" ? "Needs attention" : project.status} />
+        <div className="flex items-center gap-2 text-xs text-zinc-600">
+          <span>Readiness</span>
+          <span className="font-semibold text-zinc-950">{project.readiness}%</span>
+          <ReadinessRing value={project.readiness} />
+        </div>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-zinc-500">
+        <CompactMeta icon={GitBranch} label={project.branch} />
+        <CompactMeta icon={Code2} label={project.commit} />
+        <CompactMeta icon={Clock3} label={project.updated} />
+      </div>
+
+      <div className="mt-3 flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2 text-xs text-zinc-500">
+        {project.services.map((service) => (
+          <ServiceMeta key={`${project.id}-${service}`} service={service} />
+        ))}
+        <span className="ml-auto inline-flex items-center gap-1">
+          <Users className="h-3.5 w-3.5" aria-hidden="true" />
+          {project.collaborators}
+        </span>
+      </div>
+
+      <div className="mt-4 flex min-w-0 items-end justify-between gap-3">
+        <a
+          href={`https://${project.url}`}
+          className="min-w-0 truncate text-sm text-zinc-600 hover:text-zinc-950"
+          onClick={(event) => event.preventDefault()}
+        >
+          {project.url}
+          <ExternalLink className="ml-1 inline h-3.5 w-3.5 align-[-2px]" aria-hidden="true" />
+        </a>
+        <ProjectSparkline values={project.sparkline} tone={tone} />
+      </div>
+
+      <div className="mt-4 flex items-center gap-2 border-t border-zinc-100 pt-3">
+        <Button variant="secondary" size="sm" className="flex-1">
+          <ExternalLink className="h-4 w-4" aria-hidden="true" />
+          Visit
+        </Button>
+        <Button size="sm" className="flex-1">
+          <Rocket className="h-4 w-4" aria-hidden="true" />
+          Deploy
+        </Button>
+        <Button variant="secondary" size="icon" aria-label={`More actions for ${project.name}`}>
+          <Ellipsis className="h-4 w-4" aria-hidden="true" />
+        </Button>
+      </div>
+    </article>
+  );
+}
+
+function ProjectListRow({
+  project,
+  active,
+  onSelect,
+}: {
+  project: DashboardProject;
+  active: boolean;
+  onSelect: (projectId: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(project.id)}
+      className={cn(
+        "flex w-full min-w-0 items-center gap-3 rounded-lg border bg-white px-4 py-3 text-left shadow-sm transition hover:border-zinc-300",
+        active ? "border-zinc-950 ring-2 ring-zinc-950/5" : "border-zinc-200",
+      )}
+    >
+      <ProjectKindIcon project={project} />
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <p className="truncate text-sm font-semibold text-zinc-950">{project.name}</p>
+          <Badge tone={frameworkTone(project.framework)}>{project.framework}</Badge>
+        </div>
+        <p className="mt-1 truncate text-xs text-zinc-500">
+          {project.repo} · {project.branch} · {project.commit}
+        </p>
+      </div>
+      <StatusDot tone={statusTone(project.status)} label={`${project.readiness}%`} />
+      <span className="hidden text-xs text-zinc-500 sm:block">{project.updated}</span>
+    </button>
+  );
+}
+
+function ProjectKindIcon({ project }: { project: DashboardProject }) {
+  const kindMap: Record<DashboardProject["kind"], { icon: LucideIcon; className: string }> = {
+    web: { icon: Globe2, className: "border-blue-200 bg-blue-50 text-blue-700" },
+    api: { icon: Code2, className: "border-blue-200 bg-blue-50 text-blue-700" },
+    worker: { icon: Layers3, className: "border-indigo-200 bg-indigo-50 text-indigo-700" },
+    service: { icon: LockKeyhole, className: "border-violet-200 bg-violet-50 text-violet-700" },
+    analytics: { icon: BarChart3, className: "border-violet-200 bg-violet-50 text-violet-700" },
+  };
+  const Icon = kindMap[project.kind].icon;
+
+  return (
+    <span className={cn("grid h-10 w-10 shrink-0 place-items-center rounded-lg border", kindMap[project.kind].className)}>
+      <Icon className="h-5 w-5" aria-hidden="true" />
+    </span>
+  );
+}
+
+function CompactMeta({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      <Icon className="h-3.5 w-3.5 shrink-0 text-zinc-500" aria-hidden="true" />
       <span className="truncate">{label}</span>
     </div>
   );
+}
+
+function ServiceMeta({ service }: { service: string }) {
+  const Icon = service === "DB" || service === "Redis" ? Database : service === "Worker" ? RefreshCcw : Globe2;
+
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5">
+      <Icon className="h-3.5 w-3.5 shrink-0 text-zinc-500" aria-hidden="true" />
+      <span className="truncate">{service}</span>
+    </span>
+  );
+}
+
+function frameworkTone(framework: string): "neutral" | "green" | "amber" | "red" | "blue" | "purple" {
+  if (["Next.js", "Express"].includes(framework)) {
+    return "neutral";
+  }
+  if (["FastAPI", "Python"].includes(framework)) {
+    return "blue";
+  }
+  if (framework === "Go") {
+    return "green";
+  }
+  return "purple";
+}
+
+function ReadinessRing({ value }: { value: number }) {
+  const color = value >= 90 ? "#10b981" : value >= 80 ? "#f59e0b" : "#ef4444";
+
+  return (
+    <span
+      className="grid h-5 w-5 place-items-center rounded-full"
+      style={{ background: `conic-gradient(${color} ${value * 3.6}deg, #e4e4e7 0deg)` }}
+      aria-hidden="true"
+    >
+      <span className="h-3.5 w-3.5 rounded-full bg-white" />
+    </span>
+  );
+}
+
+function ProjectSparkline({
+  values,
+  tone,
+}: {
+  values: number[];
+  tone: "green" | "amber" | "red" | "blue" | "purple" | "neutral";
+}) {
+  const colorClasses = {
+    green: "bg-emerald-500",
+    amber: "bg-amber-500",
+    red: "bg-red-500",
+    blue: "bg-blue-500",
+    purple: "bg-violet-500",
+    neutral: "bg-zinc-400",
+  };
+
+  return (
+    <div className="flex h-7 shrink-0 items-end gap-0.5" aria-hidden="true">
+      {values.map((value, index) => (
+        <span
+          key={`${value}-${index}`}
+          className={cn("w-1 rounded-t", colorClasses[tone])}
+          style={{ height: `${Math.max(6, value)}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ProjectsRightRail() {
+  return (
+    <aside className="min-w-0 max-w-[calc(100vw-2rem)] space-y-3 xl:sticky xl:top-24 xl:max-w-none xl:self-start">
+      <ProjectRailPanel title="Recent project activity" action="View all">
+        <div className="space-y-3">
+          {projectDashboardActivity.map((item) => (
+            <div key={`${item.title}-${item.time}`} className="flex items-start gap-3">
+              <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-lg", activityIconClasses(item.tone))}>
+                {item.tone === "red" ? (
+                  <AlertTriangle className="h-4 w-4" aria-hidden="true" />
+                ) : item.tone === "green" ? (
+                  <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <GitBranch className="h-4 w-4" aria-hidden="true" />
+                )}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-zinc-950">{item.title}</p>
+                <p className="mt-0.5 truncate text-xs text-zinc-500">{item.detail}</p>
+              </div>
+              <span className="shrink-0 text-xs text-zinc-500">{item.time}</span>
+            </div>
+          ))}
+        </div>
+      </ProjectRailPanel>
+
+      <ProjectRailPanel title="Projects needing attention" action="View all">
+        <div className="space-y-1">
+          {projectAttentionItems.map((item) => (
+            <button
+              type="button"
+              key={item.project}
+              className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition hover:bg-zinc-50"
+            >
+              <span className={cn("h-8 w-8 shrink-0 rounded-lg", item.tone === "red" ? "bg-red-50" : "bg-amber-50")}>
+                <span
+                  className={cn(
+                    "mx-auto mt-3 block h-2 w-2 rounded-full",
+                    item.tone === "red" ? "bg-red-500" : "bg-amber-500",
+                  )}
+                />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-semibold text-zinc-950">{item.project}</span>
+                <span className="block truncate text-xs text-zinc-500">{item.detail}</span>
+              </span>
+              <ChevronDown className="-rotate-90 h-4 w-4 shrink-0 text-zinc-400" aria-hidden="true" />
+            </button>
+          ))}
+        </div>
+      </ProjectRailPanel>
+
+      <ProjectRailPanel title="Start something new">
+        <div className="space-y-2">
+          {projectStartActions.map((item) => (
+            <button
+              key={item.title}
+              type="button"
+              className="flex w-full items-center gap-3 rounded-md border border-zinc-200 bg-white px-3 py-2 text-left shadow-sm transition hover:border-zinc-300 hover:bg-zinc-50"
+            >
+              <StartActionIcon icon={item.icon} />
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-zinc-950">{item.title}</span>
+                <span className="block truncate text-xs text-zinc-500">{item.detail}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </ProjectRailPanel>
+
+      <ProjectRailPanel title="Release health" detail="last 7 days">
+        <div className="flex items-center gap-5">
+          <ReleaseHealthDonut />
+          <div className="min-w-0 flex-1 space-y-3">
+            {releaseHealth.map((item) => (
+              <div key={item.label} className="flex items-center gap-2 text-sm">
+                <span className={cn("h-2 w-2 rounded-full", releaseToneClasses(item.tone))} />
+                <span className="min-w-0 flex-1 truncate text-zinc-600">{item.label}</span>
+                <span className="font-semibold text-zinc-900">{item.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </ProjectRailPanel>
+    </aside>
+  );
+}
+
+function ProjectRailPanel({
+  title,
+  detail,
+  action,
+  children,
+}: {
+  title: string;
+  detail?: string;
+  action?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="min-w-0 rounded-lg border border-zinc-200 bg-white p-4 shadow-[0_1px_2px_rgba(24,24,27,0.04),0_10px_30px_rgba(24,24,27,0.03)]">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <h2 className="truncate text-sm font-semibold text-zinc-950">
+          {title}
+          {detail && <span className="ml-1 font-normal text-zinc-400">{detail}</span>}
+        </h2>
+        {action && (
+          <button type="button" className="shrink-0 text-xs font-medium text-blue-600 hover:text-blue-700">
+            {action}
+          </button>
+        )}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function activityIconClasses(tone: "green" | "blue" | "amber" | "red") {
+  const classes = {
+    green: "bg-emerald-50 text-emerald-600",
+    blue: "bg-blue-50 text-blue-600",
+    amber: "bg-amber-50 text-amber-600",
+    red: "bg-red-50 text-red-600",
+  };
+
+  return classes[tone];
+}
+
+function StartActionIcon({ icon }: { icon: "github" | "template" | "empty" }) {
+  const iconMap = {
+    github: { icon: GitBranch, className: "border-zinc-200 bg-white text-zinc-950" },
+    template: { icon: LayoutTemplate, className: "border-violet-200 bg-violet-50 text-violet-700" },
+    empty: { icon: FolderPlus, className: "border-emerald-200 bg-emerald-50 text-emerald-700" },
+  };
+  const Icon = iconMap[icon].icon;
+
+  return (
+    <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-lg border", iconMap[icon].className)}>
+      <Icon className="h-5 w-5" aria-hidden="true" />
+    </span>
+  );
+}
+
+function ReleaseHealthDonut() {
+  const total = releaseHealth.reduce((sum, item) => sum + item.value, 0);
+  const success = (releaseHealth[0].value / total) * 100;
+  const warnings = (releaseHealth[1].value / total) * 100;
+
+  return (
+    <div
+      className="grid h-20 w-20 shrink-0 place-items-center rounded-full"
+      style={{
+        background: `conic-gradient(#10b981 0 ${success}%, #f59e0b ${success}% ${
+          success + warnings
+        }%, #ef4444 ${success + warnings}% 100%)`,
+      }}
+      aria-hidden="true"
+    >
+      <div className="h-11 w-11 rounded-full bg-white" />
+    </div>
+  );
+}
+
+function releaseToneClasses(tone: "green" | "amber" | "red") {
+  const classes = {
+    green: "bg-emerald-500",
+    amber: "bg-amber-500",
+    red: "bg-red-500",
+  };
+
+  return classes[tone];
 }
 
 function DeploymentsSection() {
