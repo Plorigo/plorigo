@@ -1,4 +1,6 @@
-import type { DataStatus } from "../components/ui";
+// Prototype fixtures shown only in demo mode (see lib/demo). A "source" tag marks
+// whether a target feature is backed by a live API, a prototype, or planned.
+export type DataStatus = "live" | "prototype" | "planned";
 
 export interface DashboardProject {
   id: string;

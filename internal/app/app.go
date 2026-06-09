@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/plorigo/plorigo/internal/auth"
@@ -61,3 +62,17 @@ func (a *App) Run(ctx context.Context) error {
 	defer a.db.Close()
 	return a.srv.Run(ctx)
 }
+
+// SeedUser creates or refreshes a local development login. It is DEV-ONLY: it
+// refuses to run unless PLORIGO_ENV marks a dev environment (config.Dev), so it can
+// never mint an account in production even if invoked there. Used by cmd/seed; the
+// running server never calls it. The pool is closed by the caller (cmd/seed exits).
+func (a *App) SeedUser(ctx context.Context, email, password string) (auth.User, error) {
+	if !a.cfg.Dev {
+		return auth.User{}, fmt.Errorf("seeding is only allowed in dev (set PLORIGO_ENV=dev); refusing in a non-dev environment")
+	}
+	return a.auth.SeedUser(ctx, email, password)
+}
+
+// Close releases the DB pool. cmd/seed calls this since it never calls Run.
+func (a *App) Close() { a.db.Close() }

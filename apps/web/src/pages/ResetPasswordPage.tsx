@@ -36,7 +36,7 @@ export function ResetPasswordPage() {
       title="Choose a new password"
       description="Set a new password with at least 8 characters. Reset links are single-use."
       footer={
-        <Link to="/login" className="font-medium text-blue-600 hover:text-blue-700">
+        <Link to="/login" className="font-medium text-info hover:text-info/80">
           Back to log in
         </Link>
       }
@@ -44,7 +44,7 @@ export function ResetPasswordPage() {
       {token ? (
         <form onSubmit={onSubmit} className="space-y-4">
           <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-zinc-800">New password</span>
+            <span className="mb-1.5 block text-sm font-medium text-foreground">New password</span>
             <Input
               type="password"
               placeholder="At least 8 characters"
@@ -56,7 +56,7 @@ export function ResetPasswordPage() {
             />
           </label>
           {error && (
-            <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {error}
             </p>
           )}
@@ -65,7 +65,7 @@ export function ResetPasswordPage() {
           </Button>
         </form>
       ) : (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           This reset link is missing its token.
         </p>
       )}

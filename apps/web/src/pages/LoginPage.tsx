@@ -7,11 +7,17 @@ import { authClient } from "../lib/clients";
 import { AuthShell } from "../components/AuthShell";
 import { Button, Input } from "../components/ui";
 
+// Dev-only convenience: prefill the form from a local, gitignored apps/web/.env.local
+// (VITE_DEV_EMAIL / VITE_DEV_PASSWORD) so a seeded dev login is one click. Vite strips
+// `import.meta.env.DEV` branches from production builds, so this never ships.
+const devEmail = import.meta.env.DEV ? (import.meta.env.VITE_DEV_EMAIL ?? "") : "";
+const devPassword = import.meta.env.DEV ? (import.meta.env.VITE_DEV_PASSWORD ?? "") : "";
+
 export function LoginPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState(devEmail);
+  const [password, setPassword] = useState(devPassword);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -20,8 +26,12 @@ export function LoginPage() {
     setBusy(true);
     setError("");
     try {
-      await authClient.login({ email, password });
-      await queryClient.invalidateQueries({ queryKey: ["currentUser"] });
+      const res = await authClient.login({ email, password });
+      // Seed the auth cache from the login response so the route guard sees an
+      // authenticated user immediately. Without this it reads the stale
+      // logged-out cache and redirects back to /login until a refetch lands —
+      // the "have to click Log in twice" bug.
+      queryClient.setQueryData(["currentUser"], res.user ?? null);
       await navigate({ to: "/" });
     } catch (err) {
       setError(err instanceof ConnectError ? err.message : "Could not log in");
@@ -37,7 +47,7 @@ export function LoginPage() {
       footer={
         <>
           No account?{" "}
-          <Link to="/register" className="font-medium text-blue-600 hover:text-blue-700">
+          <Link to="/register" className="font-medium text-info hover:text-info/80">
             Sign up
           </Link>
         </>
@@ -45,7 +55,7 @@ export function LoginPage() {
     >
       <form onSubmit={onSubmit} className="space-y-4">
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-800">Email</span>
+          <span className="mb-1.5 block text-sm font-medium text-foreground">Email</span>
           <Input
             type="email"
             placeholder="you@example.com"
@@ -56,7 +66,7 @@ export function LoginPage() {
           />
         </label>
         <label className="block">
-          <span className="mb-1.5 block text-sm font-medium text-zinc-800">Password</span>
+          <span className="mb-1.5 block text-sm font-medium text-foreground">Password</span>
           <Input
             type="password"
             placeholder="Your password"
@@ -67,7 +77,7 @@ export function LoginPage() {
           />
         </label>
         {error && (
-          <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {error}
           </p>
         )}
@@ -75,7 +85,7 @@ export function LoginPage() {
           {busy ? "Logging in..." : "Log in"}
         </Button>
         <p className="text-sm">
-          <Link to="/forgot" className="text-zinc-500 hover:text-zinc-900">
+          <Link to="/forgot" className="text-muted-foreground hover:text-foreground">
             Forgot password?
           </Link>
         </p>

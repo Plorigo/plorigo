@@ -32,23 +32,23 @@ export function VerifyEmailPage() {
       title="Verify email"
       description="Email verification links are single-use and complete the account safety check."
       footer={
-        <Link to="/" className="font-medium text-blue-600 hover:text-blue-700">
+        <Link to="/" className="font-medium text-info hover:text-info/80">
           Go to dashboard
         </Link>
       }
     >
       {status === "verifying" && (
-        <p className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-600">
+        <p className="rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
           Verifying...
         </p>
       )}
       {status === "ok" && (
-        <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+        <p className="rounded-md border border-success/20 bg-success/10 px-3 py-2 text-sm text-success">
           Your email is verified.
         </p>
       )}
       {status === "error" && (
-        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {message}
         </p>
       )}
