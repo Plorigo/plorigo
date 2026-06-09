@@ -23,8 +23,17 @@ export VITE_CONTROLPLANE_URL="http://localhost:${PLORIGO_API_PORT}"
 plorigo_compose up -d --wait postgres
 ./scripts/migrate.sh
 
+# Create/refresh the dev login user so the dashboard is immediately usable. Idempotent
+# (resets the password to the documented default); best-effort so a seed hiccup never
+# blocks the stack from starting. make seed reuses the DATABASE_URL/APP_MASTER_KEY this
+# script already exported, so it targets this workspace's database.
+if ! make seed; then
+  echo "warning: could not seed dev login user; retry later with 'make seed'" >&2
+fi
+
 echo "Plorigo dashboard: http://localhost:${PLORIGO_WEB_PORT}"
 echo "Plorigo control plane: http://localhost:${PLORIGO_API_PORT}"
+echo "Dev login: dev@plorigo.local / devpassword (override via make seed SEED_EMAIL=… SEED_PASSWORD=…)"
 
 exec pnpm --dir apps/web exec concurrently \
   --kill-others \

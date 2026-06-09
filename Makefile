@@ -2,7 +2,15 @@
 # Dev tools (buf, sqlc, goose, golangci-lint) are pinned in go.mod and run via `go tool`.
 
 SHELL := /bin/bash
-DATABASE_URL ?= postgres://plorigo:plorigo@localhost:5432/plorigo?sslmode=disable
+
+# In a Conductor workspace each clone runs its own Postgres on CONDUCTOR_PORT+2
+# (see scripts/conductor-env.sh); outside Conductor, use the standard 5432.
+ifdef CONDUCTOR_PORT
+PG_PORT := $(shell echo $$(( $(CONDUCTOR_PORT) + 2 )))
+else
+PG_PORT := 5432
+endif
+DATABASE_URL ?= postgres://plorigo:plorigo@localhost:$(PG_PORT)/plorigo?sslmode=disable
 
 # Throwaway local dev key (base64 of a 32-byte string), matching scripts/conductor-env.sh.
 # Real deployments set APP_MASTER_KEY in the environment, which overrides this default;
