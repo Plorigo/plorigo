@@ -30,15 +30,28 @@ export function VerifyEmailPage() {
   return (
     <AuthShell
       title="Verify email"
+      description="Email verification links are single-use and complete the account safety check."
       footer={
-        <Link to="/" className="text-blue-600">
+        <Link to="/" className="font-medium text-blue-600 hover:text-blue-700">
           Go to dashboard
         </Link>
       }
     >
-      {status === "verifying" && <p className="text-sm text-gray-500">Verifying…</p>}
-      {status === "ok" && <p className="text-sm text-green-700">Your email is verified.</p>}
-      {status === "error" && <p className="text-sm text-red-600">{message}</p>}
+      {status === "verifying" && (
+        <p className="rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-600">
+          Verifying...
+        </p>
+      )}
+      {status === "ok" && (
+        <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          Your email is verified.
+        </p>
+      )}
+      {status === "error" && (
+        <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {message}
+        </p>
+      )}
     </AuthShell>
   );
 }
