@@ -8,9 +8,17 @@ export interface DashboardProject {
   framework: string;
   url: string;
   branch: string;
-  status: "healthy" | "building" | "attention";
+  commit: string;
+  status: "healthy" | "building" | "warning" | "attention";
   source: DataStatus;
   updated: string;
+  environments: Array<{ name: string; tone: "green" | "blue" | "purple" | "neutral" }>;
+  services: string[];
+  owner: string;
+  readiness: number;
+  collaborators: number;
+  sparkline: number[];
+  kind: "web" | "api" | "worker" | "service" | "analytics";
 }
 
 export interface DeploymentRow {
@@ -58,6 +66,88 @@ export interface ActivityItem {
   status: DataStatus;
 }
 
+export interface ProjectActivityItem {
+  title: string;
+  detail: string;
+  time: string;
+  tone: "green" | "blue" | "amber" | "red";
+}
+
+export interface ProjectAttentionItem {
+  project: string;
+  detail: string;
+  tone: "amber" | "red";
+}
+
+export interface ProjectStartAction {
+  title: string;
+  detail: string;
+  icon: "github" | "template" | "empty";
+}
+
+export const projectDashboardActivity: ProjectActivityItem[] = [
+  {
+    title: "Payments API",
+    detail: "Deployed to production",
+    time: "35m ago",
+    tone: "green",
+  },
+  {
+    title: "Storefront",
+    detail: "Preview deployment created",
+    time: "42m ago",
+    tone: "blue",
+  },
+  {
+    title: "Auth Service",
+    detail: "Backup completed",
+    time: "1h ago",
+    tone: "green",
+  },
+  {
+    title: "Queue Worker",
+    detail: "Worker restarted",
+    time: "2h ago",
+    tone: "blue",
+  },
+  {
+    title: "Analytics",
+    detail: "Deployment failed",
+    time: "5h ago",
+    tone: "red",
+  },
+];
+
+export const projectAttentionItems: ProjectAttentionItem[] = [
+  { project: "Analytics", detail: "Readiness 68%", tone: "red" },
+  { project: "Queue Worker", detail: "Readiness 82%", tone: "amber" },
+  { project: "Auth Service", detail: "Staging deploy failing", tone: "red" },
+];
+
+export const projectStartActions: ProjectStartAction[] = [
+  {
+    title: "Import from GitHub",
+    detail: "Connect and import a repository",
+    icon: "github",
+  },
+  {
+    title: "Use a template",
+    detail: "Start with a pre-configured stack",
+    icon: "template",
+  },
+  {
+    title: "Create empty project",
+    detail: "Configure everything from scratch",
+    icon: "empty",
+  },
+];
+
+export const releaseHealth = [
+  { label: "Successful", value: 42, tone: "green" as const },
+  { label: "Warnings", value: 6, tone: "amber" as const },
+  { label: "Failed", value: 3, tone: "red" as const },
+];
+
 export const prototypeProjects: DashboardProject[] = [
   {
     id: "prototype-storefront",
@@ -67,33 +157,134 @@ export const prototypeProjects: DashboardProject[] = [
     framework: "Next.js",
     url: "storefront.plorigo.app",
     branch: "main",
+    commit: "a1b2c3d",
     status: "healthy",
     source: "prototype",
-    updated: "12m ago",
+    updated: "8m ago",
+    environments: [
+      { name: "Production", tone: "green" },
+      { name: "Preview x2", tone: "blue" },
+      { name: "Staging", tone: "purple" },
+    ],
+    services: ["Web", "Worker", "DB"],
+    owner: "Platform",
+    readiness: 98,
+    collaborators: 3,
+    sparkline: [34, 28, 48, 40, 56, 44, 52, 36, 46],
+    kind: "web",
   },
   {
     id: "prototype-api",
     name: "Payments API",
     slug: "payments-api",
     repo: "github.com/plorigo/payments-api",
-    framework: "Go",
-    url: "api.plorigo.app",
-    branch: "release/checkout",
-    status: "building",
+    framework: "Express",
+    url: "api.plorigo.com",
+    branch: "main",
+    commit: "d4e5f6a",
+    status: "healthy",
     source: "prototype",
-    updated: "24m ago",
+    updated: "35m ago",
+    environments: [
+      { name: "Production", tone: "green" },
+      { name: "Preview x1", tone: "blue" },
+      { name: "Dev", tone: "neutral" },
+    ],
+    services: ["Web", "DB"],
+    owner: "Billing",
+    readiness: 94,
+    collaborators: 2,
+    sparkline: [18, 28, 20, 38, 52, 34, 46, 24, 42],
+    kind: "api",
   },
   {
     id: "prototype-worker",
     name: "Queue Worker",
     slug: "queue-worker",
     repo: "github.com/plorigo/worker",
-    framework: "Dockerfile",
-    url: "internal worker",
+    framework: "Go",
+    url: "worker.plorigo.app",
     branch: "main",
-    status: "attention",
+    commit: "9f8e7d6",
+    status: "warning",
     source: "prototype",
     updated: "1h ago",
+    environments: [
+      { name: "Production", tone: "green" },
+      { name: "Dev", tone: "neutral" },
+    ],
+    services: ["Worker", "Redis"],
+    owner: "Platform",
+    readiness: 82,
+    collaborators: 2,
+    sparkline: [30, 18, 22, 44, 28, 42, 26, 30, 18],
+    kind: "worker",
+  },
+  {
+    id: "prototype-marketing",
+    name: "Marketing Site",
+    slug: "marketing-site",
+    repo: "github.com/plorigo/marketing",
+    framework: "Next.js",
+    url: "marketing-plorigo.vercel.app",
+    branch: "main",
+    commit: "b7c6d5e",
+    status: "healthy",
+    source: "prototype",
+    updated: "2h ago",
+    environments: [
+      { name: "Preview x2", tone: "blue" },
+      { name: "Staging", tone: "purple" },
+    ],
+    services: ["Web"],
+    owner: "Growth",
+    readiness: 97,
+    collaborators: 1,
+    sparkline: [18, 20, 46, 48, 34, 20, 36, 26, 42],
+    kind: "web",
+  },
+  {
+    id: "prototype-auth",
+    name: "Auth Service",
+    slug: "auth-service",
+    repo: "github.com/plorigo/auth-service",
+    framework: "FastAPI",
+    url: "auth.plorigo.com",
+    branch: "main",
+    commit: "e3d2c1b",
+    status: "healthy",
+    source: "prototype",
+    updated: "3h ago",
+    environments: [
+      { name: "Production", tone: "green" },
+      { name: "Staging", tone: "purple" },
+    ],
+    services: ["Web", "DB"],
+    owner: "Identity",
+    readiness: 93,
+    collaborators: 2,
+    sparkline: [20, 22, 36, 56, 40, 44, 24, 32, 38],
+    kind: "service",
+  },
+  {
+    id: "prototype-analytics",
+    name: "Analytics",
+    slug: "analytics",
+    repo: "github.com/plorigo/analytics",
+    framework: "Python",
+    url: "analytics.plorigo.app",
+    branch: "main",
+    commit: "6a5b4c3",
+    status: "attention",
+    source: "prototype",
+    updated: "5h ago",
+    environments: [{ name: "Dev", tone: "neutral" }],
+    services: ["Web", "DB"],
+    owner: "Data",
+    readiness: 68,
+    collaborators: 1,
+    sparkline: [26, 16, 34, 20, 40, 18, 34, 20, 24],
+    kind: "analytics",
   },
 ];
 
