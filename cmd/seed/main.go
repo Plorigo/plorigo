@@ -35,7 +35,10 @@ func main() {
 		fmt.Fprintln(os.Stderr, "seed:", err)
 		os.Exit(1)
 	}
-	fmt.Printf("seeded dev login — email: %s  password: %s\n", user.Email, password)
+	// Print only the email — never the password (it's sensitive, and CodeQL's
+	// go/clear-text-logging rule flags it). The caller set it via
+	// PLORIGO_SEED_PASSWORD, or it's the documented dev default.
+	fmt.Printf("seeded dev login: %s\n", user.Email)
 }
 
 func envOr(key, def string) string {
