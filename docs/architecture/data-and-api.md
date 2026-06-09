@@ -38,10 +38,12 @@ backups              restore_jobs         audit_events
 invitations          log_streams          readiness_checks
 approval_requests    ai_agent_sessions
 sessions             api_tokens           user_tokens
+agent_registration_tokens
 ```
 
-Identity tables (`sessions`, `api_tokens`, `user_tokens`) store only **hashed** tokens,
-never the raw value — see [auth.md](./auth.md). The append-only `audit_events` allows a
+Token tables (`sessions`, `api_tokens`, `user_tokens`, `agent_registration_tokens`) and the
+agent's `credential_hash` store only **hashed** tokens, never the raw value — see
+[auth.md](./auth.md) and [agent.md](./agent.md). The append-only `audit_events` allows a
 NULL `workspace_id` for user-scoped actions (login, password reset).
 
 Treat these as **schema**, not feature promises — a table existing does not mean the feature

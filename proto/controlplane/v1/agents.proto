@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// An Agent is the program running on a connected Server. The control plane stores
+// its public key and tracks liveness from heartbeats. See docs/architecture/agent.md.
+message Agent {
+  string id = 1;
+  string server_id = 2;
+  string workspace_id = 3;
+  string agent_version = 4;
+  string status = 5; // "awaiting" | "online" | "offline"
+  string last_seen_at = 6; // RFC 3339; empty if the agent has never connected
+  string created_at = 7; // RFC 3339
+}
+
+message CreateRegistrationTokenRequest {
+  string server_id = 1;
+}
+
+message CreateRegistrationTokenResponse {
+  string registration_token = 1; // shown only once; embedded in the install command
+  string install_command = 2;
+  string expires_at = 3; // RFC 3339
+}
+
+message ListAgentsByWorkspaceRequest {
+  string workspace_id = 1;
+}
+
+message ListAgentsByWorkspaceResponse {
+  repeated Agent agents = 1;
+}
+
+// AgentService (control-plane side) is the dashboard-facing surface: it mints the
+// one-time registration token shown in "Connect server" and lists agents with their
+// liveness. The agent-facing gateway is agent.v1.AgentService.
+service AgentService {
+  rpc CreateRegistrationToken(CreateRegistrationTokenRequest) returns (CreateRegistrationTokenResponse);
+  rpc ListAgentsByWorkspace(ListAgentsByWorkspaceRequest) returns (ListAgentsByWorkspaceResponse);
+}

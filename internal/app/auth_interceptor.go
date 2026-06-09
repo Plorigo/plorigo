@@ -30,6 +30,11 @@ var publicProcedures = map[string]bool{
 	"/controlplane.v1.AuthService/RequestPasswordReset": true,
 	"/controlplane.v1.AuthService/ResetPassword":        true,
 	"/controlplane.v1.AuthService/VerifyEmail":          true,
+	// The agent gateway authenticates with its registration token / agent credential
+	// carried in the request body, not a user session — so these are public here. The
+	// agents service validates those credentials itself.
+	"/agent.v1.AgentService/Register":  true,
+	"/agent.v1.AgentService/Heartbeat": true,
 }
 
 // authInterceptor resolves the caller's principal from the request, applies a CSRF

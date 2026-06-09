@@ -32,6 +32,7 @@ linters:
         # to deny. See docs/architecture/modules.md.
         module-boundaries:
           files:
+            - "**/internal/agents/**"
             - "**/internal/audit/**"
             - "**/internal/auth/**"
             - "**/internal/environments/**"
@@ -42,6 +43,8 @@ linters:
             - "**/internal/secrets/**"
             - "**/internal/servers/**"
           deny:
+            - pkg: github.com/plorigo/plorigo/internal/agents
+              desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/audit
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/auth

@@ -1,0 +1,24 @@
+# Plorigo server agent — systemd unit template.
+#
+# Install the agent binary at /usr/local/bin/plorigo-agent, then provide configuration
+# via /etc/plorigo/agent.env (chmod 600):
+#
+#   PLORIGO_CONTROL_PLANE=https://cp.example.com
+#   PLORIGO_AGENT_TOKEN=<one-time registration token, first run only>
+#   PLORIGO_AGENT_DATA_DIR=/var/lib/plorigo-agent
+#
+# Then: systemctl daemon-reload && systemctl enable --now plorigo-agent
+# See docs/architecture/agent.md. (scripts/install-agent.sh writes a unit like this for you.)
+[Unit]
+Description=Plorigo server agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/plorigo/agent.env
+ExecStart=/usr/local/bin/plorigo-agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

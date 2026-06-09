@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/plorigo/plorigo/internal/agents"
 	"github.com/plorigo/plorigo/internal/auth"
 	"github.com/plorigo/plorigo/internal/environments"
 	"github.com/plorigo/plorigo/internal/envvars"
@@ -28,6 +29,7 @@ type App struct {
 	srv *server.Server
 
 	// modules
+	agents       *agents.Module
 	auth         *auth.Module
 	projects     *projects.Module
 	environments *environments.Module

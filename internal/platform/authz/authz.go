@@ -29,9 +29,15 @@ const (
 	ActionEnvironmentRead   Action = "environment.read"
 	ActionServerCreate      Action = "server.create"
 	ActionServerRead        Action = "server.read"
-	ActionEnvVarSet         Action = "env_var.set"
-	ActionEnvVarRead        Action = "env_var.read"
-	ActionEnvVarDelete      Action = "env_var.delete"
+	// Agent actions cover minting a registration token (connecting a server) and
+	// reading agent liveness. The agent-facing Register/Heartbeat RPCs are not
+	// user-scoped and authenticate by their own token/credential, so they have no
+	// Action here.
+	ActionAgentCreate  Action = "agent.create"
+	ActionAgentRead    Action = "agent.read"
+	ActionEnvVarSet    Action = "env_var.set"
+	ActionEnvVarRead   Action = "env_var.read"
+	ActionEnvVarDelete Action = "env_var.delete"
 	// Secret actions never expose a value — there is no "read" action because
 	// secrets are write-only. ActionSecretList covers metadata (keys + timestamps).
 	ActionSecretSet    Action = "secret.set"
