@@ -9,6 +9,7 @@ const controlPlaneServices = [
   "ProjectService",
   "EnvironmentService",
   "EnvVarService",
+  "SecretService",
   "ServerService",
 ];
 

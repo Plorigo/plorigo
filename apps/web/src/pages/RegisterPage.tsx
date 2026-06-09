@@ -4,6 +4,7 @@ import { ConnectError } from "@connectrpc/connect";
 
 import { authClient } from "../lib/clients";
 import { AuthShell } from "../components/AuthShell";
+import { Button, Input } from "../components/ui";
 
 export function RegisterPage() {
   const [email, setEmail] = useState("");
@@ -31,15 +32,18 @@ export function RegisterPage() {
   // Deliberately worded so the screen never confirms whether the address was new.
   if (done) {
     return (
-      <AuthShell title="Almost there">
-        <p className="text-sm text-gray-600">
+      <AuthShell
+        title="Almost there"
+        description="Registration responses stay intentionally generic to protect account privacy."
+      >
+        <p className="text-sm leading-6 text-zinc-600">
           {done.verify
             ? `If ${email} is a new address, we've emailed a verification link. Verify it, then log in.`
-            : `If ${email} is a new address, your account is ready — you can log in now.`}
+            : `If ${email} is a new address, your account is ready. You can log in now.`}
         </p>
         <Link
           to="/login"
-          className="mt-4 inline-block rounded bg-blue-600 px-3 py-2 text-white"
+          className="mt-5 inline-flex h-9 items-center justify-center rounded-md border border-zinc-950 bg-zinc-950 px-3 text-sm font-medium text-white shadow-sm hover:bg-zinc-800"
         >
           Go to log in
         </Link>
@@ -50,41 +54,48 @@ export function RegisterPage() {
   return (
     <AuthShell
       title="Create your account"
+      description="Start with a personal workspace, then connect servers and projects from the dashboard."
       footer={
         <>
           Already have an account?{" "}
-          <Link to="/login" className="text-blue-600">
+          <Link to="/login" className="font-medium text-blue-600 hover:text-blue-700">
             Log in
           </Link>
         </>
       }
     >
-      <form onSubmit={onSubmit} className="space-y-3">
-        <input
-          className="w-full rounded border border-gray-300 px-3 py-2"
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
-        <input
-          className="w-full rounded border border-gray-300 px-3 py-2"
-          type="password"
-          placeholder="Password (at least 8 characters)"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          minLength={8}
-          required
-        />
-        {error && <p className="text-sm text-red-600">{error}</p>}
-        <button
-          className="w-full rounded bg-blue-600 px-3 py-2 text-white disabled:opacity-50"
-          type="submit"
-          disabled={busy}
-        >
-          {busy ? "…" : "Sign up"}
-        </button>
+      <form onSubmit={onSubmit} className="space-y-4">
+        <label className="block">
+          <span className="mb-1.5 block text-sm font-medium text-zinc-800">Email</span>
+          <Input
+            type="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
+            required
+          />
+        </label>
+        <label className="block">
+          <span className="mb-1.5 block text-sm font-medium text-zinc-800">Password</span>
+          <Input
+            type="password"
+            placeholder="At least 8 characters"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="new-password"
+            minLength={8}
+            required
+          />
+        </label>
+        {error && (
+          <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+            {error}
+          </p>
+        )}
+        <Button className="w-full" type="submit" disabled={busy}>
+          {busy ? "Creating account..." : "Sign up"}
+        </Button>
       </form>
     </AuthShell>
   );
