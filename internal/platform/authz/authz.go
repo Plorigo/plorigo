@@ -29,6 +29,7 @@ const (
 	ActionEnvironmentRead   Action = "environment.read"
 	ActionServerCreate      Action = "server.create"
 	ActionServerRead        Action = "server.read"
+	ActionServerDelete      Action = "server.delete"
 	// Agent actions cover minting a registration token (connecting a server) and
 	// reading agent liveness. The agent-facing Register/Heartbeat RPCs are not
 	// user-scoped and authenticate by their own token/credential, so they have no
@@ -43,6 +44,11 @@ const (
 	ActionSecretSet    Action = "secret.set"
 	ActionSecretList   Action = "secret.list"
 	ActionSecretDelete Action = "secret.delete"
+	// Deployment actions cover triggering a deploy and reading deployment status,
+	// timeline, and logs. The agent-facing Poll/Report RPCs are not user-scoped and
+	// authenticate by the agent credential, so they have no Action here.
+	ActionDeploymentCreate Action = "deployment.create"
+	ActionDeploymentRead   Action = "deployment.read"
 )
 
 // Workspace roles, most privileged first. Stored in workspace_members.role and

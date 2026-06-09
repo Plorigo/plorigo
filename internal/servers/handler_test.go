@@ -28,6 +28,9 @@ func (f *fakeService) Get(_ context.Context, _ string) (Server, error) {
 func (f *fakeService) ListByWorkspace(_ context.Context, _ string) ([]Server, error) {
 	return f.list, f.err
 }
+func (f *fakeService) Delete(_ context.Context, _ string) error {
+	return f.err
+}
 
 func TestHandler_CreateServer(t *testing.T) {
 	h := &handler{svc: &fakeService{}}

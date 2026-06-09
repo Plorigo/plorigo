@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// A Deployment is one attempt to run an app (a container image) in an environment
+// on a connected server. The control plane records it as `queued`; the server's
+// agent claims it, pulls the image, runs the container, and reports progress. See
+// docs/architecture/deployment-engine.md and agent.md. This first slice deploys a
+// PRE-BUILT image reachable on a published host port — build-from-Git and Caddy
+// routing are later slices.
+message Deployment {
+  string id = 1;
+  string environment_id = 2;
+  string project_id = 3;   // derived via environment -> project (not stored)
+  string workspace_id = 4;
+  string server_id = 5;
+  string image_ref = 6;
+  int32 container_port = 7; // the port the app listens on inside the container
+  int32 host_port = 8;      // the published host port (0 until the agent binds it)
+  string status = 9;        // queued|assigned|pulling|starting|running|failed|superseded
+  string message = 10;      // latest human-readable status line
+  string created_at = 11;   // RFC 3339
+  string updated_at = 12;   // RFC 3339
+}
+
+// A DeploymentEvent is one entry in a deployment's timeline: either a status
+// transition (kind="status") or a runtime log line (kind="log"). seq is monotonic
+// per deployment so the dashboard can fetch incrementally.
+message DeploymentEvent {
+  string id = 1;
+  string deployment_id = 2;
+  int64 seq = 3;
+  string kind = 4;   // "status" | "log"
+  string status = 5; // set when kind="status"
+  string message = 6;
+  string created_at = 7; // RFC 3339
+}
+
+message CreateDeploymentRequest {
+  string environment_id = 1;
+  string server_id = 2;
+  string image_ref = 3;
+  int32 container_port = 4;
+  // Non-secret env vars are NOT passed here: the agent injects the environment's
+  // configured env_vars at run time (see agent.v1.DeployService.PollDeployment).
+}
+
+message CreateDeploymentResponse {
+  Deployment deployment = 1;
+}
+
+message GetDeploymentRequest {
+  string id = 1;
+}
+
+message GetDeploymentResponse {
+  Deployment deployment = 1;
+}
+
+message ListDeploymentsByEnvironmentRequest {
+  string environment_id = 1;
+}
+
+message ListDeploymentsByEnvironmentResponse {
+  repeated Deployment deployments = 1;
+}
+
+message ListDeploymentsByProjectRequest {
+  string project_id = 1;
+}
+
+message ListDeploymentsByProjectResponse {
+  repeated Deployment deployments = 1;
+}
+
+message ListDeploymentsByWorkspaceRequest {
+  string workspace_id = 1;
+}
+
+message ListDeploymentsByWorkspaceResponse {
+  repeated Deployment deployments = 1;
+}
+
+message ListDeploymentEventsRequest {
+  string deployment_id = 1;
+  int64 after_seq = 2; // return events with seq greater than this (0 = from start)
+}
+
+message ListDeploymentEventsResponse {
+  repeated DeploymentEvent events = 1;
+}
+
+// DeploymentService is the dashboard-facing API: trigger a deployment, read its
+// status and timeline, and list deployments by environment, project, or workspace.
+// Every RPC is session/token-authenticated and policy-authorized (the agent-facing
+// claim/report side is agent.v1.DeployService).
+service DeploymentService {
+  rpc CreateDeployment(CreateDeploymentRequest) returns (CreateDeploymentResponse);
+  rpc GetDeployment(GetDeploymentRequest) returns (GetDeploymentResponse);
+  rpc ListDeploymentsByEnvironment(ListDeploymentsByEnvironmentRequest) returns (ListDeploymentsByEnvironmentResponse);
+  rpc ListDeploymentsByProject(ListDeploymentsByProjectRequest) returns (ListDeploymentsByProjectResponse);
+  rpc ListDeploymentsByWorkspace(ListDeploymentsByWorkspaceRequest) returns (ListDeploymentsByWorkspaceResponse);
+  rpc ListDeploymentEvents(ListDeploymentEventsRequest) returns (ListDeploymentEventsResponse);
+}

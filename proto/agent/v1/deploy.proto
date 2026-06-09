@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package agent.v1;
+
+// DeployService is the agent-facing dispatch gateway: a Plorigo server agent calls
+// it OUTBOUND to claim deployment work and report progress. Like agent.v1.AgentService,
+// these RPCs are not authenticated by a user session — the agent proves itself with
+// its durable agent credential (the same credential used for Heartbeat), validated in
+// the deployments service, which also scopes work to the agent's own server. See
+// docs/architecture/agent.md. The dashboard-facing side is controlplane.v1.DeploymentService.
+//
+// This first slice authenticates with the agent credential and per-agent scoping;
+// full cryptographic job signing (control plane signs the job, agent signs its poll
+// with its stored ed25519 key) is the next hardening step.
+service DeployService {
+  // PollDeployment atomically claims the next queued deployment for this agent's
+  // server, if any. has_work is false when there is nothing to do.
+  rpc PollDeployment(PollDeploymentRequest) returns (PollDeploymentResponse);
+
+  // ReportDeployment records a status transition and any new runtime log lines for a
+  // deployment the agent is executing.
+  rpc ReportDeployment(ReportDeploymentRequest) returns (ReportDeploymentResponse);
+}
+
+message PollDeploymentRequest {
+  string agent_id = 1;
+  string credential = 2;
+}
+
+message PollDeploymentResponse {
+  bool has_work = 1;
+  string deployment_id = 2;
+  string image_ref = 3;
+  int32 container_port = 4;
+  map<string, string> env = 5;
+  // app_label is the stable identifier the agent stamps on the container (the
+  // environment id) so a redeploy can find and replace the previous container.
+  string app_label = 6;
+}
+
+message ReportDeploymentRequest {
+  string agent_id = 1;
+  string credential = 2;
+  string deployment_id = 3;
+  string status = 4;             // pulling|starting|running|failed
+  int32 host_port = 5;           // set once the container is bound (0 otherwise)
+  string container_id = 6;       // set once the container is created
+  repeated string log_lines = 7; // new runtime log lines since the last report
+  string message = 8;            // human-readable status line
+}
+
+message ReportDeploymentResponse {}

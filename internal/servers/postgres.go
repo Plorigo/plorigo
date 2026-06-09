@@ -64,6 +64,16 @@ func (s *postgresStore) ListByWorkspace(ctx context.Context, workspaceID string)
 	return out, nil
 }
 
+func (s *postgresStore) DeleteServer(ctx context.Context, tx database.Tx, id string) (bool, error) {
+	if _, err := db.New(tx).DeleteServer(ctx, id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation

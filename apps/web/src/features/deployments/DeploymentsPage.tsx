@@ -1,10 +1,11 @@
+import { useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { AlertTriangle, CheckCircle2, Rocket, Terminal } from "lucide-react";
 
-import { ComingSoon } from "@/components/ComingSoon";
 import { FailureSummary } from "@/components/FailureSummary";
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
-import { Badge, Panel, PanelHeader, StatusDot } from "@/components/ui";
+import { Badge, Button, EmptyState, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
 import {
   Table,
   TableBody,
@@ -15,35 +16,103 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/cn";
 import { useDemoData } from "@/lib/demo";
+import { errorMessage } from "@/lib/format";
 import { deployments, logLines } from "@/lib/mockDashboard";
 import { statusTone } from "@/lib/status";
+import { useDeploymentsByWorkspace, useProjects } from "@/lib/queries";
+import { useWorkspaceStore } from "@/store";
+import { NewDeploymentDialog } from "./NewDeploymentDialog";
 
 export function DeploymentsPage() {
   const demo = useDemoData();
+  const navigate = useNavigate();
+  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  const deps = useDeploymentsByWorkspace(workspaceId);
+  const projects = useProjects(workspaceId);
+  const [open, setOpen] = useState(false);
+
+  const error = errorMessage(deps.error);
+  const loading = deps.isLoading;
+  const rows = deps.data ?? [];
+  const projectName = new Map((projects.data ?? []).map((p) => [p.id, p.name]));
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Deployments"
         description="A timeline for every release, with build and runtime logs and rollback context."
+        actions={
+          <Button size="sm" disabled={!workspaceId} onClick={() => setOpen(true)}>
+            <Rocket className="h-4 w-4" aria-hidden="true" />
+            New deployment
+          </Button>
+        }
       />
-      {demo ? (
-        <DeploymentsDemo />
-      ) : (
-        <ComingSoon
-          icon={Rocket}
-          title="Deployment timeline"
-          description="Every deploy gets a live timeline — build, health check, route switch — with logs you can stream and a one-click rollback to the previous healthy release."
-          points={[
-            "Build & runtime logs over SSE",
-            "Health-check and route-switch stages",
-            "One-click rollback to a kept release",
-            "Plain-English failure summaries",
-          ]}
-        />
+
+      <NewDeploymentDialog workspaceId={workspaceId} open={open} onOpenChange={setOpen} />
+
+      {loading && <Skeleton className="h-48 w-full" />}
+
+      {!loading && error && <EmptyState title="Couldn't load deployments" body={error} />}
+
+      {!loading && !error && rows.length > 0 && (
+        <Panel>
+          <PanelHeader title="Deployments" description="Recent releases across this workspace." />
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Deployment</TableHead>
+                  <TableHead>Project</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Host port</TableHead>
+                  <TableHead>Created</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((d) => (
+                  <TableRow
+                    key={d.id}
+                    className="cursor-pointer"
+                    onClick={() => navigate({ to: "/deployments/$deploymentId", params: { deploymentId: d.id } })}
+                  >
+                    <TableCell>
+                      <p className="truncate font-mono text-sm font-medium text-foreground">{d.imageRef}</p>
+                      <p className="text-xs text-muted-foreground">{d.id.slice(0, 8)}</p>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">{projectName.get(d.projectId) ?? "—"}</TableCell>
+                    <TableCell>
+                      <StatusDot tone={statusTone(d.status)} label={d.status} />
+                    </TableCell>
+                    <TableCell className="font-mono text-muted-foreground">{d.hostPort > 0 ? `:${d.hostPort}` : "—"}</TableCell>
+                    <TableCell className="text-muted-foreground">{timeAgo(d.createdAt)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </Panel>
       )}
+
+      {!loading && !error && rows.length === 0 && (demo ? <DeploymentsDemo /> : (
+        <EmptyState
+          title="No deployments yet"
+          body="Deploy a container to a connected server. Pick a project, environment, and server, give a public image and its port, and watch it go live."
+        />
+      ))}
     </div>
   );
+}
+
+// timeAgo renders a short relative time for an RFC 3339 timestamp.
+function timeAgo(iso: string): string {
+  const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return new Date(iso).toLocaleDateString();
 }
 
 function DeploymentsDemo() {

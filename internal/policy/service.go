@@ -27,6 +27,7 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionEnvironmentRead:   true,
 		authz.ActionServerCreate:      true,
 		authz.ActionServerRead:        true,
+		authz.ActionServerDelete:      true,
 		authz.ActionAgentCreate:       true,
 		authz.ActionAgentRead:         true,
 		authz.ActionEnvVarSet:         true,
@@ -35,6 +36,8 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionSecretSet:         true,
 		authz.ActionSecretList:        true,
 		authz.ActionSecretDelete:      true,
+		authz.ActionDeploymentCreate:  true,
+		authz.ActionDeploymentRead:    true,
 	},
 	authz.RoleAdmin: {
 		authz.ActionMemberInvite:      true,
@@ -47,6 +50,7 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionEnvironmentRead:   true,
 		authz.ActionServerCreate:      true,
 		authz.ActionServerRead:        true,
+		authz.ActionServerDelete:      true,
 		authz.ActionAgentCreate:       true,
 		authz.ActionAgentRead:         true,
 		authz.ActionEnvVarSet:         true,
@@ -55,6 +59,8 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionSecretSet:         true,
 		authz.ActionSecretList:        true,
 		authz.ActionSecretDelete:      true,
+		authz.ActionDeploymentCreate:  true,
+		authz.ActionDeploymentRead:    true,
 	},
 	authz.RoleMember: {
 		authz.ActionMemberList:        true,
@@ -72,6 +78,8 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionSecretSet:         true,
 		authz.ActionSecretList:        true,
 		authz.ActionSecretDelete:      true,
+		authz.ActionDeploymentCreate:  true,
+		authz.ActionDeploymentRead:    true,
 	},
 	authz.RoleViewer: {
 		authz.ActionMemberList:      true,
@@ -82,7 +90,8 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionEnvVarRead:      true,
 		// Secrets are write-only; a viewer may see which keys exist (metadata) but
 		// never set, delete, or read a value.
-		authz.ActionSecretList: true,
+		authz.ActionSecretList:     true,
+		authz.ActionDeploymentRead: true,
 	},
 }
 

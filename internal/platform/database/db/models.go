@@ -52,6 +52,32 @@ type AuditEvent struct {
 	CreatedAt   time.Time
 }
 
+type Deployment struct {
+	ID            string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	ImageRef      string
+	ContainerPort int32
+	HostPort      int32
+	ContainerID   string
+	Status        string
+	Message       string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type DeploymentEvent struct {
+	ID           string
+	DeploymentID string
+	Seq          int64
+	Kind         string
+	Status       string
+	Message      string
+	CreatedAt    time.Time
+}
+
 type EnvVar struct {
 	ID            string
 	EnvironmentID string

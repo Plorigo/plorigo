@@ -20,6 +20,7 @@ import (
 type adminHandler struct {
 	svc       Service
 	publicURL string
+	dev       bool
 	now       func() time.Time
 }
 
@@ -32,7 +33,7 @@ func (h *adminHandler) CreateRegistrationToken(ctx context.Context, req *connect
 	}
 	return connect.NewResponse(&controlplanev1.CreateRegistrationTokenResponse{
 		RegistrationToken: tok.Raw,
-		InstallCommand:    installCommand(h.publicURL, tok.Raw),
+		InstallCommand:    installCommand(h.publicURL, tok.Raw, h.dev),
 		ExpiresAt:         tok.ExpiresAt.UTC().Format(time.RFC3339),
 	}), nil
 }
@@ -103,9 +104,15 @@ func toProto(a Agent, now time.Time) *controlplanev1.Agent {
 // the agent binary and a systemd service (see scripts/install-agent.sh).
 const agentInstallScript = "https://raw.githubusercontent.com/Plorigo/plorigo/main/scripts/install-agent.sh"
 
-// installCommand renders the one-line agent install command shown in the dashboard. The
-// token is single-use and short-lived; publicURL is the control plane's public URL — the
-// RPC endpoint the agent connects to, NOT the dashboard origin.
-func installCommand(publicURL, token string) string {
+// installCommand renders the agent install command shown in the dashboard. The token is
+// single-use and short-lived; publicURL is the control plane's public URL — the RPC
+// endpoint the agent connects to, NOT the dashboard origin. The command follows the
+// environment the control plane runs in: in production it fetches the public installer
+// script; in dev it runs the agent from the local source checkout, so a developer tests
+// their working copy instead of installing the published agent.
+func installCommand(publicURL, token string, dev bool) string {
+	if dev {
+		return fmt.Sprintf("go run ./cmd/agent --control-plane %s --token %s", publicURL, token)
+	}
 	return fmt.Sprintf("curl -fsSL %s | sh -s -- --control-plane %s --token %s", agentInstallScript, publicURL, token)
 }

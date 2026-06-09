@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { AlertTriangle, Box, GitBranch, Globe2, Grid2X2, List, Plus, Search } from "lucide-react";
-import { toast } from "sonner";
 
 import { PageHeader } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
@@ -8,7 +7,9 @@ import { Button, EmptyState, Select, Skeleton } from "@/components/ui";
 import { cn } from "@/lib/cn";
 import { errorMessage } from "@/lib/format";
 import type { DashboardProject } from "@/lib/mockDashboard";
+import { useWorkspaceStore } from "@/store";
 import { ProjectCard, ProjectListRow } from "./components/ProjectViews";
+import { NewProjectDialog } from "./NewProjectDialog";
 import { useDashboardProjects } from "./projectData";
 
 function statusRank(status: DashboardProject["status"]): number {
@@ -20,12 +21,14 @@ function statusRank(status: DashboardProject["status"]): number {
 
 export function ProjectsPage() {
   const { query, dashboardProjects, liveCount } = useDashboardProjects();
+  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState("all");
   const [frameworkFilter, setFrameworkFilter] = useState("all");
   const [healthFilter, setHealthFilter] = useState("all");
   const [sortKey, setSortKey] = useState("newest");
   const [view, setView] = useState<"grid" | "list">("grid");
+  const [createOpen, setCreateOpen] = useState(false);
 
   const error = errorMessage(query.error);
 
@@ -86,12 +89,14 @@ export function ProjectsPage() {
         title="Projects"
         description="Manage applications, environments, deploys, and project health."
         actions={
-          <Button size="sm" onClick={() => toast.info("Creating projects from the dashboard is coming soon.")}>
+          <Button size="sm" disabled={!workspaceId} onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" aria-hidden="true" />
             New project
           </Button>
         }
       />
+
+      <NewProjectDialog workspaceId={workspaceId} open={createOpen} onOpenChange={setCreateOpen} />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Total projects" value={String(dashboardProjects.length)} detail={liveCount > 0 ? "Live workspace records" : "Prototype set"} icon={Box} intent="info" accentBar />

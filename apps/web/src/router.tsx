@@ -4,6 +4,7 @@ import { AppShell } from "./app/AppShell";
 import { Protected } from "./components/Protected";
 import { ActivityPage } from "./features/activity/ActivityPage";
 import { BackupsPage } from "./features/backups/BackupsPage";
+import { DeploymentDetailPage } from "./features/deployments/DeploymentDetailPage";
 import { DeploymentsPage } from "./features/deployments/DeploymentsPage";
 import { OverviewPage } from "./features/overview/OverviewPage";
 import { ProjectDetailPage } from "./features/projects/ProjectDetailPage";
@@ -44,6 +45,11 @@ const projectDetailRoute = createRoute({
 const serversRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/servers", component: ServersPage });
 const resourcesRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/resources", component: ResourcesPage });
 const deploymentsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/deployments", component: DeploymentsPage });
+const deploymentDetailRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/deployments/$deploymentId",
+  component: DeploymentDetailPage,
+});
 const backupsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/backups", component: BackupsPage });
 const securityRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/security", component: SecurityPage });
 const teamRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/team", component: TeamPage });
@@ -64,6 +70,7 @@ export const routeTree = rootRoute.addChildren([
     serversRoute,
     resourcesRoute,
     deploymentsRoute,
+    deploymentDetailRoute,
     backupsRoute,
     securityRoute,
     teamRoute,

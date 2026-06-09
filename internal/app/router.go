@@ -26,9 +26,11 @@ func (a *App) router() http.Handler {
 	mux.Handle(a.secrets.Route(ic))
 	mux.Handle(a.servers.Route(ic))
 	mux.Handle(a.agents.Route(ic))
-	// The agent gateway: agent.v1 procedures are public (see auth_interceptor.go); the
-	// service validates the registration token / agent credential in the request body.
+	mux.Handle(a.deployments.Route(ic))
+	// The agent gateways: agent.v1 procedures are public (see auth_interceptor.go); the
+	// services validate the registration token / agent credential in the request body.
 	mux.Handle(a.agents.AgentRoute(ic))
+	mux.Handle(a.deployments.AgentRoute(ic))
 
 	// Dashboard / SPA fallback.
 	mux.Handle("/", web.Handler())

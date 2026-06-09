@@ -5,10 +5,14 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"testing"
 
+	"github.com/plorigo/plorigo/internal/agents"
 	"github.com/plorigo/plorigo/internal/auth"
+	"github.com/plorigo/plorigo/internal/deployments"
 	"github.com/plorigo/plorigo/internal/environments"
 	"github.com/plorigo/plorigo/internal/envvars"
 	"github.com/plorigo/plorigo/internal/platform/config"
@@ -474,6 +478,211 @@ func TestIntegration_ServerScopedToWorkspace(t *testing.T) {
 	// A duplicate name in the same workspace violates UNIQUE (workspace_id, slug).
 	if _, err := serversSvc.Create(ownerCtx, servers.CreateInput{WorkspaceID: ws.ID, Name: "Edge One"}); !isKind(err, problem.KindAlreadyExists) {
 		t.Fatalf("duplicate server: got %v, want AlreadyExists", err)
+	}
+
+	// Delete: a non-member is denied; the owner deletes (audited with the real actor);
+	// a second delete reports NotFound.
+	if err := serversSvc.Delete(otherCtx, srv.ID); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("non-member delete: got %v, want PermissionDenied", err)
+	}
+	if err := serversSvc.Delete(ownerCtx, srv.ID); err != nil {
+		t.Fatalf("Delete server: %v", err)
+	}
+	var deleteActor string
+	if err := a.db.Pool.QueryRow(ctx,
+		`SELECT actor FROM audit_events WHERE target_id=$1 AND action='server.delete'`, srv.ID).Scan(&deleteActor); err != nil {
+		t.Fatalf("query delete audit: %v", err)
+	}
+	if deleteActor != owner.User.ID {
+		t.Fatalf("delete audit actor = %q, want %q", deleteActor, owner.User.ID)
+	}
+	if _, err := serversSvc.Get(ownerCtx, srv.ID); !isKind(err, problem.KindNotFound) {
+		t.Fatalf("get after delete: got %v, want NotFound", err)
+	}
+	if err := serversSvc.Delete(ownerCtx, srv.ID); !isKind(err, problem.KindNotFound) {
+		t.Fatalf("double delete: got %v, want NotFound", err)
+	}
+}
+
+func TestIntegration_DeploymentScopedToEnvironmentWorkspace(t *testing.T) {
+	a := newApp(t)
+	ctx := context.Background()
+	authSvc := a.auth.Service()
+	projSvc := a.projects.Service()
+	envSvc := a.environments.Service()
+	serversSvc := a.servers.Service()
+	depSvc := a.deployments.Service()
+
+	owner, _ := registerAndLogin(t, authSvc, ctx, "dep-owner")
+	ownerCtx := principal.NewContext(ctx, principal.Principal{UserID: owner.User.ID, Method: principal.MethodSession})
+	wss, err := projSvc.ListMyWorkspaces(ctx, owner.User.ID)
+	if err != nil || len(wss) != 1 {
+		t.Fatalf("ListMyWorkspaces: wss=%d err=%v", len(wss), err)
+	}
+	ws := wss[0]
+	proj, err := projSvc.Create(ownerCtx, projects.CreateInput{WorkspaceID: ws.ID, Name: "Dep App"})
+	if err != nil {
+		t.Fatalf("Create project: %v", err)
+	}
+	env, err := envSvc.Create(ownerCtx, environments.CreateInput{ProjectID: proj.ID, Name: "Prod"})
+	if err != nil {
+		t.Fatalf("Create environment: %v", err)
+	}
+	srv, err := serversSvc.Create(ownerCtx, servers.CreateInput{WorkspaceID: ws.ID, Name: "Edge"})
+	if err != nil {
+		t.Fatalf("Create server: %v", err)
+	}
+
+	// Authorized create records a queued deployment, defaults the image tag, denormalizes
+	// project+workspace, and audits the REAL actor against the workspace resolved through
+	// environment -> project.
+	dep, err := depSvc.Create(ownerCtx, deployments.CreateInput{EnvironmentID: env.ID, ServerID: srv.ID, ImageRef: "traefik/whoami", ContainerPort: 80})
+	if err != nil {
+		t.Fatalf("Create deployment: %v", err)
+	}
+	if dep.Status != deployments.StatusQueued {
+		t.Fatalf("status = %q, want queued", dep.Status)
+	}
+	if dep.ImageRef != "traefik/whoami:latest" {
+		t.Fatalf("image = %q, want :latest defaulted", dep.ImageRef)
+	}
+	if dep.ProjectID != proj.ID || dep.WorkspaceID != ws.ID {
+		t.Fatalf("dep = %+v, want denormalized project/workspace", dep)
+	}
+	var auditActor, auditWS string
+	if err := a.db.Pool.QueryRow(ctx,
+		`SELECT actor, workspace_id FROM audit_events WHERE target_id=$1 AND action='deployment.create'`, dep.ID).Scan(&auditActor, &auditWS); err != nil {
+		t.Fatalf("query audit: %v", err)
+	}
+	if auditActor != owner.User.ID || auditWS != ws.ID {
+		t.Fatalf("audit actor/ws = %q/%q, want %q/%q", auditActor, auditWS, owner.User.ID, ws.ID)
+	}
+
+	// Reads return it for the authorized owner, by environment, project, and workspace.
+	if got, err := depSvc.Get(ownerCtx, dep.ID); err != nil || got.ID != dep.ID {
+		t.Fatalf("Get: got=%+v err=%v", got, err)
+	}
+	if list, err := depSvc.ListByEnvironment(ownerCtx, env.ID); err != nil || len(list) != 1 {
+		t.Fatalf("ListByEnvironment: len=%d err=%v", len(list), err)
+	}
+	if list, err := depSvc.ListByProject(ownerCtx, proj.ID); err != nil || len(list) != 1 {
+		t.Fatalf("ListByProject: len=%d err=%v", len(list), err)
+	}
+	if list, err := depSvc.ListByWorkspace(ownerCtx, ws.ID); err != nil || len(list) != 1 {
+		t.Fatalf("ListByWorkspace: len=%d err=%v", len(list), err)
+	}
+
+	// Cross-tenant guard: a server in ANOTHER workspace is treated as not-found, so a
+	// caller can't deploy onto infrastructure outside the environment's workspace.
+	other, _ := registerAndLogin(t, authSvc, ctx, "dep-other")
+	otherCtx := principal.NewContext(ctx, principal.Principal{UserID: other.User.ID, Method: principal.MethodSession})
+	otherWss, _ := projSvc.ListMyWorkspaces(ctx, other.User.ID)
+	otherSrv, err := serversSvc.Create(otherCtx, servers.CreateInput{WorkspaceID: otherWss[0].ID, Name: "Other Edge"})
+	if err != nil {
+		t.Fatalf("Create other server: %v", err)
+	}
+	if _, err := depSvc.Create(ownerCtx, deployments.CreateInput{EnvironmentID: env.ID, ServerID: otherSrv.ID, ImageRef: "nginx", ContainerPort: 80}); !isKind(err, problem.KindNotFound) {
+		t.Fatalf("cross-workspace server: got %v, want NotFound", err)
+	}
+
+	// A non-member of the environment's workspace is denied for create and reads.
+	if _, err := depSvc.Create(otherCtx, deployments.CreateInput{EnvironmentID: env.ID, ServerID: srv.ID, ImageRef: "nginx", ContainerPort: 80}); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("non-member create: got %v, want PermissionDenied", err)
+	}
+	if _, err := depSvc.ListByEnvironment(otherCtx, env.ID); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("non-member list: got %v, want PermissionDenied", err)
+	}
+
+	// An anonymous caller is denied.
+	if _, err := depSvc.Create(ctx, deployments.CreateInput{EnvironmentID: env.ID, ServerID: srv.ID, ImageRef: "nginx", ContainerPort: 80}); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("anonymous create: got %v, want PermissionDenied", err)
+	}
+
+	// Invalid input is rejected before any workspace work.
+	if _, err := depSvc.Create(ownerCtx, deployments.CreateInput{EnvironmentID: env.ID, ServerID: srv.ID, ImageRef: "nginx", ContainerPort: 0}); !isKind(err, problem.KindInvalidInput) {
+		t.Fatalf("bad port: got %v, want InvalidInput", err)
+	}
+
+	// Deploying into a non-existent environment resolves to no workspace -> NotFound.
+	if _, err := depSvc.Create(ownerCtx, deployments.CreateInput{EnvironmentID: id.New().String(), ServerID: srv.ID, ImageRef: "nginx", ContainerPort: 80}); !isKind(err, problem.KindNotFound) {
+		t.Fatalf("missing environment: got %v, want NotFound", err)
+	}
+}
+
+func TestIntegration_DeploymentClaimAndReport(t *testing.T) {
+	a := newApp(t)
+	ctx := context.Background()
+	authSvc := a.auth.Service()
+	projSvc := a.projects.Service()
+	envSvc := a.environments.Service()
+	serversSvc := a.servers.Service()
+	agentsSvc := a.agents.Service()
+	depSvc := a.deployments.Service()
+
+	owner, _ := registerAndLogin(t, authSvc, ctx, "claim-owner")
+	ownerCtx := principal.NewContext(ctx, principal.Principal{UserID: owner.User.ID, Method: principal.MethodSession})
+	wss, _ := projSvc.ListMyWorkspaces(ctx, owner.User.ID)
+	ws := wss[0]
+	proj, _ := projSvc.Create(ownerCtx, projects.CreateInput{WorkspaceID: ws.ID, Name: "Claim App"})
+	env, _ := envSvc.Create(ownerCtx, environments.CreateInput{ProjectID: proj.ID, Name: "Prod"})
+	srv, _ := serversSvc.Create(ownerCtx, servers.CreateInput{WorkspaceID: ws.ID, Name: "Edge"})
+
+	// Register an agent for the server to obtain a durable credential.
+	tok, err := agentsSvc.CreateRegistrationToken(ownerCtx, srv.ID)
+	if err != nil {
+		t.Fatalf("CreateRegistrationToken: %v", err)
+	}
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	reg, err := agentsSvc.Register(ctx, agents.RegisterInput{RegistrationToken: tok.Raw, PublicKey: pub, AgentVersion: "test"})
+	if err != nil {
+		t.Fatalf("Register agent: %v", err)
+	}
+
+	dep, err := depSvc.Create(ownerCtx, deployments.CreateInput{EnvironmentID: env.ID, ServerID: srv.ID, ImageRef: "traefik/whoami", ContainerPort: 80})
+	if err != nil {
+		t.Fatalf("Create deployment: %v", err)
+	}
+
+	// An unknown credential cannot poll.
+	if _, err := depSvc.PollDeployment(ctx, deployments.PollInput{AgentID: reg.AgentID, Credential: "plag_bogus"}); !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("bad credential poll: got %v, want PermissionDenied", err)
+	}
+
+	// The agent claims the queued deployment exactly once (the claim is atomic).
+	claimed, err := depSvc.PollDeployment(ctx, deployments.PollInput{AgentID: reg.AgentID, Credential: reg.Credential})
+	if err != nil {
+		t.Fatalf("PollDeployment: %v", err)
+	}
+	if !claimed.HasWork || claimed.DeploymentID != dep.ID || claimed.AppLabel != env.ID {
+		t.Fatalf("claimed = %+v, want the queued deployment", claimed)
+	}
+	if again, err := depSvc.PollDeployment(ctx, deployments.PollInput{AgentID: reg.AgentID, Credential: reg.Credential}); err != nil || again.HasWork {
+		t.Fatalf("second poll: again=%+v err=%v, want no work", again, err)
+	}
+
+	// Reporting running updates status + host port + container id, and records events.
+	if err := depSvc.ReportDeployment(ctx, deployments.ReportInput{
+		AgentID: reg.AgentID, Credential: reg.Credential, DeploymentID: dep.ID,
+		Status: deployments.StatusRunning, HostPort: 32768, ContainerID: "abc123", Message: "running", LogLines: []string{"started"},
+	}); err != nil {
+		t.Fatalf("ReportDeployment: %v", err)
+	}
+	got, err := depSvc.Get(ownerCtx, dep.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != deployments.StatusRunning || got.HostPort != 32768 || got.ContainerID != "abc123" {
+		t.Fatalf("after report dep = %+v, want running with host port + container id", got)
+	}
+	events, err := depSvc.ListEvents(ownerCtx, dep.ID, 0)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("expected timeline events to be recorded")
 	}
 }
 

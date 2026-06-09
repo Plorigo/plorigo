@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -32,6 +33,7 @@ var Version = "dev"
 
 const (
 	defaultHeartbeat = 30 * time.Second
+	defaultPoll      = 4 * time.Second
 	maxBackoff       = 60 * time.Second
 	stateFileName    = "agent.json"
 )
@@ -42,6 +44,7 @@ type Options struct {
 	RegistrationToken string        // one-time token, needed only on the first run
 	DataDir           string        // where the agent persists its identity (created 0700)
 	HeartbeatInterval time.Duration // fallback when the control plane doesn't specify one
+	PollInterval      time.Duration // how often to poll for deployment work when idle
 }
 
 // state is the agent's persisted identity. The credential and private key are secret,
@@ -53,6 +56,28 @@ type state struct {
 	PrivateKeyB64 string `json:"private_key"`
 }
 
+// identity is the agent's CURRENT identity, shared by the heartbeat and deploy loops.
+// It is mutex-guarded because the heartbeat loop can swap it at runtime: when the
+// control plane rejects the stored credential (e.g. the server was deleted from the
+// dashboard and re-created) and a registration token is available, the agent
+// re-registers with it instead of erroring forever (see heartbeatLoop).
+type identity struct {
+	mu sync.Mutex
+	st state
+}
+
+func (i *identity) get() state {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.st
+}
+
+func (i *identity) set(st state) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.st = st
+}
+
 // Run registers if there is no stored identity, then heartbeats until ctx is cancelled.
 func Run(ctx context.Context, out io.Writer, opts Options) error {
 	if opts.ControlPlaneURL == "" {
@@ -61,11 +86,15 @@ func Run(ctx context.Context, out io.Writer, opts Options) error {
 	if opts.HeartbeatInterval <= 0 {
 		opts.HeartbeatInterval = defaultHeartbeat
 	}
+	if opts.PollInterval <= 0 {
+		opts.PollInterval = defaultPoll
+	}
 	if opts.DataDir == "" {
 		opts.DataDir = defaultDataDir()
 	}
 
 	client := agentv1connect.NewAgentServiceClient(http.DefaultClient, opts.ControlPlaneURL)
+	deployClient := agentv1connect.NewDeployServiceClient(http.DefaultClient, opts.ControlPlaneURL)
 
 	st, err := loadState(opts.DataDir)
 	if err != nil {
@@ -80,12 +109,38 @@ func Run(ctx context.Context, out io.Writer, opts Options) error {
 		if err := saveState(opts.DataDir, st); err != nil {
 			return fmt.Errorf("save agent state: %w", err)
 		}
-		fmt.Fprintf(out, "registered as agent %s\n", st.AgentID)
+		fmt.Fprintf(out, "registered as agent %s (identity: %s)\n", st.AgentID, filepath.Join(opts.DataDir, stateFileName))
 	} else {
-		fmt.Fprintf(out, "plorigo agent %s: resuming as agent %s\n", Version, st.AgentID)
+		fmt.Fprintf(out, "plorigo agent %s: resuming as agent %s (identity: %s)\n", Version, st.AgentID, filepath.Join(opts.DataDir, stateFileName))
+		if opts.RegistrationToken != "" {
+			fmt.Fprintf(out, "a registration token was provided; it will be used to re-register if the control plane rejects the stored credential\n")
+		}
 	}
+	ident := &identity{st: *st}
 
-	return heartbeatLoop(ctx, out, client, st, opts.HeartbeatInterval)
+	// The agent now manages Docker. If the daemon is unreachable the agent keeps
+	// heartbeating (so the server stays visible) and reports any claimed deployment as
+	// failed with a clear message, rather than going down.
+	dk, derr := newDockerClient()
+	var runtime deploymentRuntime
+	if derr != nil {
+		fmt.Fprintf(out, "warning: Docker is unavailable; deployments will be reported as failed: %v\n", derr)
+	} else {
+		runtime = dk
+	}
+	defer dk.close()
+
+	// Run the heartbeat and deploy loops together. Both return only when their context
+	// ends, so if either returns, cancel the sibling and wait for both to unwind.
+	loopCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errc := make(chan error, 2)
+	go func() { errc <- heartbeatLoop(loopCtx, out, client, ident, opts) }()
+	go func() { errc <- deployLoop(loopCtx, out, deployClient, ident, runtime, opts.PollInterval) }()
+	first := <-errc
+	cancel()
+	<-errc
+	return first
 }
 
 // register generates the keypair and exchanges the one-time token for a credential.
@@ -114,9 +169,17 @@ func register(ctx context.Context, client agentv1connect.AgentServiceClient, opt
 
 // heartbeatLoop beats at the interval the control plane returns, backing off and
 // reconnecting on failure, until ctx is cancelled.
-func heartbeatLoop(ctx context.Context, out io.Writer, client agentv1connect.AgentServiceClient, st *state, interval time.Duration) error {
+//
+// Self-heal: when the control plane REJECTS the stored credential (the server was
+// deleted from the dashboard, or the agent was re-registered elsewhere) and a
+// registration token was provided, the loop re-registers with it once — rotating the
+// identity in place — instead of erroring forever with a stale identity. Tokens are
+// single-use, so only one attempt is made per process run.
+func heartbeatLoop(ctx context.Context, out io.Writer, client agentv1connect.AgentServiceClient, ident *identity, opts Options) error {
 	backoff := time.Second
+	reregisterTried := false
 	for {
+		st := ident.get()
 		resp, err := client.Heartbeat(ctx, connect.NewRequest(&agentv1.HeartbeatRequest{
 			AgentId:      st.AgentID,
 			Credential:   st.Credential,
@@ -126,6 +189,24 @@ func heartbeatLoop(ctx context.Context, out io.Writer, client agentv1connect.Age
 			if ctx.Err() != nil {
 				return nil
 			}
+			if connect.CodeOf(err) == connect.CodePermissionDenied && opts.RegistrationToken != "" && !reregisterTried {
+				reregisterTried = true
+				fmt.Fprintf(out, "stored credential rejected by the control plane; re-registering with the provided token\n")
+				newSt, rerr := register(ctx, client, opts)
+				if rerr == nil {
+					if serr := saveState(opts.DataDir, newSt); serr != nil {
+						fmt.Fprintf(out, "warning: could not persist the new identity: %v\n", serr)
+					}
+					ident.set(*newSt)
+					fmt.Fprintf(out, "re-registered as agent %s\n", newSt.AgentID)
+					backoff = time.Second
+					continue
+				}
+				if ctx.Err() != nil {
+					return nil
+				}
+				fmt.Fprintf(out, "re-registration failed: %v (mint a fresh install command from the server card in the dashboard)\n", rerr)
+			}
 			fmt.Fprintf(out, "heartbeat failed (retrying in %s): %v\n", backoff, err)
 			if !sleep(ctx, backoff) {
 				return nil
@@ -134,7 +215,7 @@ func heartbeatLoop(ctx context.Context, out io.Writer, client agentv1connect.Age
 			continue
 		}
 		backoff = time.Second
-		next := interval
+		next := opts.HeartbeatInterval
 		if s := resp.Msg.GetNextIntervalSeconds(); s > 0 {
 			next = time.Duration(s) * time.Second
 		}

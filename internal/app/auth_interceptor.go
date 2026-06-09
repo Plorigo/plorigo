@@ -35,6 +35,10 @@ var publicProcedures = map[string]bool{
 	// agents service validates those credentials itself.
 	"/agent.v1.AgentService/Register":  true,
 	"/agent.v1.AgentService/Heartbeat": true,
+	// The deploy gateway: the agent claims work and reports progress, authenticated by
+	// its durable agent credential (validated in the deployments service), not a session.
+	"/agent.v1.DeployService/PollDeployment":   true,
+	"/agent.v1.DeployService/ReportDeployment": true,
 }
 
 // authInterceptor resolves the caller's principal from the request, applies a CSRF

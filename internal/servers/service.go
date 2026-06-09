@@ -92,6 +92,42 @@ func (s *service) ListByWorkspace(ctx context.Context, workspaceID string) ([]Se
 	return s.store.ListByWorkspace(ctx, workspaceID)
 }
 
+// Delete removes a server. The agent registration and deployment history cascade with
+// it, so this is destructive: it requires ActionServerDelete (owner/admin) and is
+// audited like every mutation.
+func (s *service) Delete(ctx context.Context, serverID string) error {
+	if _, err := id.Parse(serverID); err != nil {
+		return problem.InvalidInput("invalid server id")
+	}
+	srv, err := s.store.GetServer(ctx, serverID)
+	if err != nil {
+		return err
+	}
+
+	caller := principal.FromContext(ctx)
+	if err := s.authorizer.Authorize(ctx, caller, authz.ActionServerDelete, authz.Resource{Type: "server", WorkspaceID: srv.WorkspaceID, ID: srv.ID}); err != nil {
+		return err
+	}
+
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		deleted, txErr := s.store.DeleteServer(ctx, tx, serverID)
+		if txErr != nil {
+			return txErr
+		}
+		if !deleted {
+			// Nothing was deleted (raced with another delete); report NotFound and do
+			// not audit a change that did not happen (the tx rolls back).
+			return problem.NotFound("server %s not found", serverID)
+		}
+		return s.audit.Record(ctx, tx, "server.delete", "server", srv.ID, srv.WorkspaceID, caller.UserID)
+	})
+	if err != nil {
+		return mapErr(err, "delete server")
+	}
+	s.log.Info("server deleted", "id", srv.ID, "workspace_id", srv.WorkspaceID, "actor", caller.UserID)
+	return nil
+}
+
 var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
 
 func slugify(s string) string {
