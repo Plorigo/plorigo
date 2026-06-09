@@ -26,6 +26,15 @@ reversibly. Read this before changing build, deploy, rollback, runtime, or proxy
 Jobs and streaming are described in [jobs-and-realtime.md](./jobs-and-realtime.md); the agent
 side of Caddy and container management is in [agent.md](./agent.md).
 
+> [!NOTE]
+> **What's built first.** The initial slice runs this flow for a **pre-built public image**:
+> the control plane records a deployment and the agent claims it (steps 1–3), pulls the image,
+> starts the container on a published **host port**, health-checks it, retains/replaces the
+> previous container, and reports status + logs (steps 6–11) — delivered by **polling**, not
+> SSE. Source fetch and **build** (steps 4–5), the **Caddy** route switch (step 8), SSL, and
+> one-click rollback are later slices. The claim is atomic per server (a queued deployment is
+> the unit of work; a general job queue comes later).
+
 ## Build priority
 
 Detect and build in this order:

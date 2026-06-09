@@ -50,6 +50,13 @@ func (h *handler) ListServersByWorkspace(ctx context.Context, req *connect.Reque
 	return connect.NewResponse(&controlplanev1.ListServersByWorkspaceResponse{Servers: out}), nil
 }
 
+func (h *handler) DeleteServer(ctx context.Context, req *connect.Request[controlplanev1.DeleteServerRequest]) (*connect.Response[controlplanev1.DeleteServerResponse], error) {
+	if err := h.svc.Delete(ctx, req.Msg.GetId()); err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&controlplanev1.DeleteServerResponse{}), nil
+}
+
 func toProto(s Server) *controlplanev1.Server {
 	return &controlplanev1.Server{
 		Id:          s.ID,

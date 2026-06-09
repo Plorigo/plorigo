@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -11,13 +12,24 @@ import {
 import { toast } from "sonner";
 
 import { ComingSoon } from "@/components/ComingSoon";
-import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { StatCard } from "@/components/StatCard";
 import { Timeline, type TimelineStep } from "@/components/Timeline";
 import { Badge, Button, EmptyState, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
 import { useDemoData } from "@/lib/demo";
-import { statusTone } from "@/lib/status";
+import { useDeploymentsByProject, useEnvironments } from "@/lib/queries";
+import { statusTone, type Tone } from "@/lib/status";
+import { useWorkspaceStore } from "@/store";
+import { NewDeploymentDialog } from "../deployments/NewDeploymentDialog";
+import { AddEnvironmentDialog } from "./NewProjectDialog";
 import { useDashboardProjects, frameworkTone } from "./projectData";
+
+// environmentTone tints an environment badge by its type.
+function environmentTone(type: string): Tone {
+  if (type === "production") return "green";
+  if (type === "staging") return "amber";
+  if (type === "preview") return "blue";
+  return "purple";
+}
 
 const releaseSteps: TimelineStep[] = [
   { label: "Build", value: "48s", detail: "Layer cache restored", status: "done" },
@@ -40,8 +52,14 @@ const readinessChecks: Array<[string, "done" | "warn"]> = [
 export function ProjectDetailPage() {
   const { projectId } = useParams({ strict: false });
   const demo = useDemoData();
+  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
   const { query, dashboardProjects } = useDashboardProjects();
   const project = dashboardProjects.find((p) => p.id === projectId);
+  const projectDeployments = useDeploymentsByProject(projectId ?? "");
+  const latestDeployment = projectDeployments.data?.[0];
+  const environments = useEnvironments(projectId ?? "");
+  const [deployOpen, setDeployOpen] = useState(false);
+  const [addEnvOpen, setAddEnvOpen] = useState(false);
 
   if (query.isLoading && dashboardProjects.length === 0) {
     return <Skeleton className="h-64 w-full" />;
@@ -76,21 +94,19 @@ export function ProjectDetailPage() {
             <ExternalLink className="h-4 w-4" aria-hidden="true" />
             Visit
           </Button>
-          <ConfirmDialog
-            trigger={
-              <Button size="sm">
-                <Rocket className="h-4 w-4" aria-hidden="true" />
-                Deploy
-              </Button>
-            }
-            title={`Deploy ${project.name} to production?`}
-            description="This builds the latest commit and switches production traffic to the new release once health checks pass."
-            recovery="The current release is kept as a rollback target — you can revert with one click if anything looks wrong."
-            confirmLabel="Deploy to production"
-            onConfirm={() => toast.success("Deploy queued. The previous release is kept for rollback.")}
-          />
+          <Button size="sm" disabled={!workspaceId} onClick={() => setDeployOpen(true)}>
+            <Rocket className="h-4 w-4" aria-hidden="true" />
+            Deploy
+          </Button>
         </div>
       </div>
+
+      <NewDeploymentDialog
+        workspaceId={workspaceId}
+        open={deployOpen}
+        onOpenChange={setDeployOpen}
+        defaultProjectId={project.id}
+      />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Health" value={project.status === "attention" ? "Needs review" : "Healthy"} detail="Latest production" icon={CheckCircle2} intent={project.status === "attention" ? "warning" : "success"} accentBar />
@@ -101,15 +117,34 @@ export function ProjectDetailPage() {
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
         <Panel>
-          <PanelHeader title="Latest production release" description="Build, health, and route-switch stages." />
+          <PanelHeader title="Latest deployment" description="The most recent release for this project." />
           <div className="p-5">
-            {demo ? (
+            {latestDeployment ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-mono text-sm font-medium text-foreground">{latestDeployment.imageRef}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {latestDeployment.hostPort > 0 ? `host port :${latestDeployment.hostPort}` : "not yet published"}
+                    </p>
+                  </div>
+                  <StatusDot tone={statusTone(latestDeployment.status)} label={latestDeployment.status} />
+                </div>
+                <Link
+                  to="/deployments/$deploymentId"
+                  params={{ deploymentId: latestDeployment.id }}
+                  className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+                >
+                  View deployment →
+                </Link>
+              </div>
+            ) : demo ? (
               <Timeline steps={releaseSteps} />
             ) : (
               <ComingSoon
                 icon={Rocket}
                 title="No deploys yet"
-                description="Once this project deploys, its build → health → route-switch timeline and logs appear here, with one-click rollback."
+                description="Deploy this project to a connected server and its release timeline and logs appear here."
               />
             )}
           </div>
@@ -117,24 +152,35 @@ export function ProjectDetailPage() {
 
         <div className="space-y-6">
           <Panel>
-            <PanelHeader title="Environments & services" description="Where this project runs." />
+            <PanelHeader
+              title="Environments"
+              description="The deployment targets within this project."
+              action={
+                <Button size="sm" variant="secondary" onClick={() => setAddEnvOpen(true)}>
+                  Add environment
+                </Button>
+              }
+            />
             <div className="space-y-3 p-4">
-              <div className="flex flex-wrap gap-2">
-                {project.environments.map((environment) => (
-                  <Badge key={environment.name} tone={environment.tone}>
-                    {environment.name}
-                  </Badge>
-                ))}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {project.services.map((service) => (
-                  <span key={service} className="rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground">
-                    {service}
-                  </span>
-                ))}
-              </div>
+              {(environments.data ?? []).length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {(environments.data ?? []).map((environment) => (
+                    <Badge key={environment.id} tone={environmentTone(environment.type)}>
+                      {environment.name} · {environment.type}
+                    </Badge>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  No environments yet — add one to deploy this project.
+                </p>
+              )}
             </div>
           </Panel>
+
+          {projectId && (
+            <AddEnvironmentDialog projectId={projectId} open={addEnvOpen} onOpenChange={setAddEnvOpen} />
+          )}
 
           <Panel>
             <PanelHeader title="Production readiness" description={demo ? "Continuous configuration checks." : "Runs after the first deploy."} />

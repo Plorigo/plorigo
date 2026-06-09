@@ -1,9 +1,10 @@
 import { useState, type FormEvent } from "react";
 import { ConnectError } from "@connectrpc/connect";
 import { useQueryClient } from "@tanstack/react-query";
-import { Cpu, Server } from "lucide-react";
+import { Cpu, Server, TerminalSquare, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageHeader } from "@/components/PageHeader";
 import { Button, EmptyState, Input, Panel, Skeleton, StatusDot } from "@/components/ui";
 import {
@@ -24,6 +25,7 @@ import { intentDot, statusTone, type Intent } from "@/lib/status";
 import { useWorkspaceStore } from "@/store";
 
 interface ServerRow {
+  id?: string; // absent on demo fixtures; per-server actions render only when present
   name: string;
   region: string;
   cpu: string;
@@ -34,8 +36,15 @@ interface ServerRow {
   lastSeen?: string;
 }
 
+interface InstallCommandResult {
+  serverName: string;
+  installCommand: string;
+  expiresAt: string;
+}
+
 export function ServersPage() {
   const demo = useDemoData();
+  const queryClient = useQueryClient();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
   const servers = useServers(workspaceId);
   const agents = useAgents(workspaceId);
@@ -44,11 +53,14 @@ export function ServersPage() {
   const error = errorMessage(servers.error) || errorMessage(agents.error);
   const loading = servers.isLoading || agents.isLoading;
   const [connectOpen, setConnectOpen] = useState(false);
+  const [installResult, setInstallResult] = useState<InstallCommandResult | null>(null);
+  const [mintingFor, setMintingFor] = useState("");
 
   const agentByServer = new Map((agents.data ?? []).map((a) => [a.serverId, a]));
   const liveRows: ServerRow[] = (servers.data ?? []).map((server) => {
     const agent = agentByServer.get(server.id);
     return {
+      id: server.id,
       name: server.name,
       region: "Workspace server",
       cpu: "not reported",
@@ -60,6 +72,40 @@ export function ServersPage() {
     };
   });
   const rows: ServerRow[] = liveRows.length > 0 ? liveRows : demo ? serverHealth : [];
+
+  // Mint a FRESH one-time token for an existing server and show its install command.
+  // Tokens are single-use and shown once, so this is how you recover a command you
+  // didn't copy; re-running install simply rotates the agent's credential.
+  async function showInstallCommand(server: ServerRow) {
+    if (!server.id) return;
+    setMintingFor(server.id);
+    try {
+      const token = await agentClient.createRegistrationToken({ serverId: server.id });
+      setInstallResult({
+        serverName: server.name,
+        installCommand: token.installCommand,
+        expiresAt: token.expiresAt,
+      });
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not create an install command");
+    } finally {
+      setMintingFor("");
+    }
+  }
+
+  async function deleteServer(server: ServerRow) {
+    if (!server.id) return;
+    try {
+      await serverClient.deleteServer({ id: server.id });
+      toast.success(`Server ${server.name} deleted`);
+      await queryClient.invalidateQueries({ queryKey: ["servers", workspaceId] });
+      await queryClient.invalidateQueries({ queryKey: ["agents", workspaceId] });
+      // Its deployment history cascades away with it.
+      await queryClient.invalidateQueries({ queryKey: ["deployments"] });
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not delete the server");
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -75,6 +121,7 @@ export function ServersPage() {
       />
 
       <ConnectServerDialog workspaceId={workspaceId} open={connectOpen} onOpenChange={setConnectOpen} />
+      <InstallCommandDialog result={installResult} onClose={() => setInstallResult(null)} />
 
       {loading && (
         <div className="grid gap-4 lg:grid-cols-3">
@@ -96,7 +143,7 @@ export function ServersPage() {
       {!loading && !error && rows.length > 0 && (
         <div className="grid gap-4 lg:grid-cols-3">
           {rows.map((server) => (
-            <Panel key={server.name} className="p-4">
+            <Panel key={server.id ?? server.name} className="p-4">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <p className="truncate text-sm font-semibold text-foreground">{server.name}</p>
@@ -116,11 +163,86 @@ export function ServersPage() {
                 </span>
                 <span className="text-xs text-muted-foreground">{lastSeenLabel(server.lastSeen)}</span>
               </div>
+              {server.id && (
+                <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-3">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={mintingFor === server.id}
+                    onClick={() => void showInstallCommand(server)}
+                  >
+                    <TerminalSquare className="h-4 w-4" aria-hidden="true" />
+                    {mintingFor === server.id ? "Generating..." : "Install command"}
+                  </Button>
+                  <ConfirmDialog
+                    trigger={
+                      <Button size="icon" variant="ghost" aria-label={`Delete server ${server.name}`}>
+                        <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      </Button>
+                    }
+                    title={`Delete server ${server.name}?`}
+                    description="This disconnects its agent and permanently removes the server, its agent registration, and its deployment history. Containers already running on the machine are not touched."
+                    recovery="You can connect the machine again at any time — create a new server and run a fresh install command on it."
+                    confirmLabel="Delete server"
+                    onConfirm={() => void deleteServer(server)}
+                  />
+                </div>
+              )}
             </Panel>
           ))}
         </div>
       )}
     </div>
+  );
+}
+
+// InstallCommandBlock renders the one-time install command responsively: the command
+// WRAPS (break-all) instead of stretching the dialog past the viewport on small
+// screens, with the copy button as the primary affordance.
+function InstallCommandBlock({ installCommand, expiresAt }: { installCommand: string; expiresAt: string }) {
+  return (
+    <div className="min-w-0 space-y-4">
+      <pre className="min-w-0 max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-border bg-muted p-3 text-xs text-foreground">
+        {installCommand}
+      </pre>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <span className="text-xs text-muted-foreground">
+          One-time token; expires {new Date(expiresAt).toLocaleString()}.
+        </span>
+        <Button size="sm" variant="secondary" onClick={() => copy(installCommand)}>
+          Copy command
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// InstallCommandDialog shows a freshly minted install command for an EXISTING server
+// (the create flow has its own dialog). Closing it discards the shown token, but a new
+// one can always be minted from the server card.
+function InstallCommandDialog({
+  result,
+  onClose,
+}: {
+  result: InstallCommandResult | null;
+  onClose: () => void;
+}) {
+  return (
+    <Dialog open={result !== null} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Connect {result?.serverName}</DialogTitle>
+          <DialogDescription>
+            Run this command on the server to install (or re-connect) the Plorigo agent.
+            Re-running install is safe: it rotates the agent&apos;s credential.
+          </DialogDescription>
+        </DialogHeader>
+        {result && <InstallCommandBlock installCommand={result.installCommand} expiresAt={result.expiresAt} />}
+        <DialogFooter>
+          <Button onClick={onClose}>Done</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -181,24 +303,14 @@ function ConnectServerDialog({
           <DialogTitle>Connect a server</DialogTitle>
           <DialogDescription>
             {result
-              ? "Run this one-line command on your server (a Linux host with Docker). It installs the Plorigo agent and registers it. The server appears online here once the agent connects."
-              : "Name the machine you want to deploy onto. We'll generate a one-line install command for the agent."}
+              ? "Run this command on the machine you're connecting. The server appears online here once the agent connects. If you lose the command, mint a new one from the server card."
+              : "Name the machine you want to deploy onto. We'll generate an install command for the agent."}
           </DialogDescription>
         </DialogHeader>
 
         {result ? (
           <div className="space-y-4">
-            <pre className="overflow-x-auto rounded-md border border-border bg-muted p-3 text-xs text-foreground">
-              {result.installCommand}
-            </pre>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-xs text-muted-foreground">
-                One-time token; expires {new Date(result.expiresAt).toLocaleString()}.
-              </span>
-              <Button size="sm" variant="secondary" onClick={() => copy(result.installCommand)}>
-                Copy command
-              </Button>
-            </div>
+            <InstallCommandBlock installCommand={result.installCommand} expiresAt={result.expiresAt} />
             <DialogFooter>
               <Button onClick={() => onOpenChange(false)}>Done</Button>
             </DialogFooter>

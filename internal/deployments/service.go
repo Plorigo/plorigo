@@ -1,0 +1,359 @@
+package deployments
+
+import (
+	"context"
+	"crypto/sha256"
+	"errors"
+	"log/slog"
+	"strings"
+
+	"github.com/plorigo/plorigo/internal/platform/authz"
+	"github.com/plorigo/plorigo/internal/platform/database"
+	"github.com/plorigo/plorigo/internal/platform/id"
+	"github.com/plorigo/plorigo/internal/platform/principal"
+	"github.com/plorigo/plorigo/internal/platform/problem"
+)
+
+const (
+	maxImageRefLen = 512
+	maxPort        = 65535
+)
+
+// service is the business logic. It orchestrates ports only — no SQL, no transport.
+// Dashboard-facing methods resolve the owning workspace (through the environment's
+// project, the project, or the deployment row) and authorize the caller BEFORE the
+// WithinTx block, auditing inside it (modules.md, Rule 4). The agent-facing
+// Poll/Report RPCs authenticate by the durable agent credential carried in the request
+// (like Heartbeat) and scope work to the agent's own server, so they do not go through
+// the authorizer.
+type service struct {
+	tx         TxRunner
+	store      Store
+	authorizer authz.Authorizer
+	audit      Recorder
+	log        *slog.Logger
+}
+
+func newService(tx TxRunner, store Store, authorizer authz.Authorizer, audit Recorder, log *slog.Logger) *service {
+	return &service{tx: tx, store: store, authorizer: authorizer, audit: audit, log: log}
+}
+
+var _ Service = (*service)(nil)
+
+// Create records a queued deployment for an environment on a server. The server must
+// belong to the environment's workspace (cross-tenant guard). The agent for that server
+// claims the queued row on its next poll.
+func (s *service) Create(ctx context.Context, in CreateInput) (Deployment, error) {
+	if _, err := id.Parse(in.EnvironmentID); err != nil {
+		return Deployment{}, problem.InvalidInput("a valid environment_id is required")
+	}
+	if _, err := id.Parse(in.ServerID); err != nil {
+		return Deployment{}, problem.InvalidInput("a valid server_id is required")
+	}
+	imageRef, err := validateImageRef(in.ImageRef)
+	if err != nil {
+		return Deployment{}, err
+	}
+	if in.ContainerPort < 1 || in.ContainerPort > maxPort {
+		return Deployment{}, problem.InvalidInput("container_port must be between 1 and %d", maxPort)
+	}
+
+	workspaceID, projectID, ok, err := s.store.WorkspaceAndProjectForEnvironment(ctx, in.EnvironmentID)
+	if err != nil {
+		return Deployment{}, problem.Internalf(err, "create deployment")
+	}
+	if !ok {
+		return Deployment{}, problem.NotFound("environment %s not found", in.EnvironmentID)
+	}
+
+	caller := principal.FromContext(ctx)
+	if err := s.authorizer.Authorize(ctx, caller, authz.ActionDeploymentCreate, authz.Resource{Type: "deployment", WorkspaceID: workspaceID}); err != nil {
+		return Deployment{}, err
+	}
+
+	// The target server must live in the same workspace as the environment. Resolving
+	// after authorization (and treating another workspace's server as not-found) avoids
+	// revealing servers the caller has no access to.
+	serverWorkspace, ok, err := s.store.WorkspaceForServer(ctx, in.ServerID)
+	if err != nil {
+		return Deployment{}, problem.Internalf(err, "create deployment")
+	}
+	if !ok || serverWorkspace != workspaceID {
+		return Deployment{}, problem.NotFound("server %s not found in this workspace", in.ServerID)
+	}
+
+	var created Deployment
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		var txErr error
+		created, txErr = s.store.InsertDeployment(ctx, tx, NewDeployment{
+			EnvironmentID: in.EnvironmentID,
+			ProjectID:     projectID,
+			WorkspaceID:   workspaceID,
+			ServerID:      in.ServerID,
+			ImageRef:      imageRef,
+			ContainerPort: in.ContainerPort,
+		})
+		if txErr != nil {
+			return txErr
+		}
+		return s.audit.Record(ctx, tx, "deployment.create", "deployment", created.ID, workspaceID, caller.UserID)
+	})
+	if err != nil {
+		return Deployment{}, mapErr(err, "create deployment")
+	}
+	s.log.Info("deployment created", "id", created.ID, "environment_id", created.EnvironmentID, "server_id", created.ServerID, "image", imageRef, "workspace_id", workspaceID, "actor", caller.UserID)
+	return created, nil
+}
+
+func (s *service) Get(ctx context.Context, deploymentID string) (Deployment, error) {
+	if _, err := id.Parse(deploymentID); err != nil {
+		return Deployment{}, problem.InvalidInput("a valid deployment id is required")
+	}
+	dep, ok, err := s.store.GetDeployment(ctx, deploymentID)
+	if err != nil {
+		return Deployment{}, problem.Internalf(err, "get deployment")
+	}
+	if !ok {
+		return Deployment{}, problem.NotFound("deployment %s not found", deploymentID)
+	}
+	if err := s.authorizer.Authorize(ctx, principal.FromContext(ctx), authz.ActionDeploymentRead, authz.Resource{Type: "deployment", WorkspaceID: dep.WorkspaceID, ID: dep.ID}); err != nil {
+		return Deployment{}, err
+	}
+	return dep, nil
+}
+
+func (s *service) ListByEnvironment(ctx context.Context, environmentID string) ([]Deployment, error) {
+	if _, err := id.Parse(environmentID); err != nil {
+		return nil, problem.InvalidInput("a valid environment_id is required")
+	}
+	workspaceID, _, ok, err := s.store.WorkspaceAndProjectForEnvironment(ctx, environmentID)
+	if err != nil {
+		return nil, problem.Internalf(err, "list deployments")
+	}
+	if !ok {
+		return nil, problem.NotFound("environment %s not found", environmentID)
+	}
+	if err := s.authorizer.Authorize(ctx, principal.FromContext(ctx), authz.ActionDeploymentRead, authz.Resource{Type: "deployment", WorkspaceID: workspaceID}); err != nil {
+		return nil, err
+	}
+	return s.store.ListByEnvironment(ctx, environmentID)
+}
+
+func (s *service) ListByProject(ctx context.Context, projectID string) ([]Deployment, error) {
+	if _, err := id.Parse(projectID); err != nil {
+		return nil, problem.InvalidInput("a valid project_id is required")
+	}
+	workspaceID, ok, err := s.store.WorkspaceForProject(ctx, projectID)
+	if err != nil {
+		return nil, problem.Internalf(err, "list deployments")
+	}
+	if !ok {
+		return nil, problem.NotFound("project %s not found", projectID)
+	}
+	if err := s.authorizer.Authorize(ctx, principal.FromContext(ctx), authz.ActionDeploymentRead, authz.Resource{Type: "deployment", WorkspaceID: workspaceID}); err != nil {
+		return nil, err
+	}
+	return s.store.ListByProject(ctx, projectID)
+}
+
+func (s *service) ListByWorkspace(ctx context.Context, workspaceID string) ([]Deployment, error) {
+	if workspaceID == "" {
+		return nil, problem.InvalidInput("workspace_id is required")
+	}
+	if err := s.authorizer.Authorize(ctx, principal.FromContext(ctx), authz.ActionDeploymentRead, authz.Resource{Type: "deployment", WorkspaceID: workspaceID}); err != nil {
+		return nil, err
+	}
+	return s.store.ListByWorkspace(ctx, workspaceID)
+}
+
+func (s *service) ListEvents(ctx context.Context, deploymentID string, afterSeq int64) ([]Event, error) {
+	if _, err := id.Parse(deploymentID); err != nil {
+		return nil, problem.InvalidInput("a valid deployment id is required")
+	}
+	dep, ok, err := s.store.GetDeployment(ctx, deploymentID)
+	if err != nil {
+		return nil, problem.Internalf(err, "list deployment events")
+	}
+	if !ok {
+		return nil, problem.NotFound("deployment %s not found", deploymentID)
+	}
+	if err := s.authorizer.Authorize(ctx, principal.FromContext(ctx), authz.ActionDeploymentRead, authz.Resource{Type: "deployment", WorkspaceID: dep.WorkspaceID, ID: dep.ID}); err != nil {
+		return nil, err
+	}
+	return s.store.ListEvents(ctx, deploymentID, afterSeq)
+}
+
+// PollDeployment claims the next queued deployment for the agent's server, if any. It
+// authenticates the agent by its credential and scopes the claim to that agent's server
+// (so an agent can only ever run its own server's work).
+func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, error) {
+	if in.Credential == "" {
+		return Claimed{}, problem.InvalidInput("a credential is required")
+	}
+	_, serverID, err := s.resolveAgent(ctx, in.AgentID, in.Credential)
+	if err != nil {
+		return Claimed{}, err
+	}
+
+	var claimed Deployment
+	var has bool
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		dep, ok, txErr := s.store.ClaimNextForServer(ctx, tx, serverID)
+		if txErr != nil {
+			return txErr
+		}
+		if !ok {
+			return nil
+		}
+		claimed, has = dep, true
+		return s.store.AppendEvent(ctx, tx, NewEvent{DeploymentID: dep.ID, Kind: KindStatus, Status: StatusAssigned, Message: "claimed by agent"})
+	})
+	if err != nil {
+		return Claimed{}, problem.Internalf(err, "poll deployment")
+	}
+	if !has {
+		return Claimed{HasWork: false}, nil
+	}
+
+	env, err := s.store.EnvVarsForEnvironment(ctx, claimed.EnvironmentID)
+	if err != nil {
+		return Claimed{}, problem.Internalf(err, "poll deployment")
+	}
+	s.log.Info("deployment claimed", "id", claimed.ID, "server_id", serverID, "image", claimed.ImageRef)
+	return Claimed{
+		HasWork:       true,
+		DeploymentID:  claimed.ID,
+		ImageRef:      claimed.ImageRef,
+		ContainerPort: claimed.ContainerPort,
+		Env:           env,
+		AppLabel:      claimed.EnvironmentID,
+	}, nil
+}
+
+// ReportDeployment records a status transition and any new runtime log lines for a
+// deployment the agent is executing. It verifies the deployment belongs to the agent's
+// own server before writing anything.
+func (s *service) ReportDeployment(ctx context.Context, in ReportInput) error {
+	if in.Credential == "" {
+		return problem.InvalidInput("a credential is required")
+	}
+	if _, err := id.Parse(in.DeploymentID); err != nil {
+		return problem.InvalidInput("a valid deployment_id is required")
+	}
+	if !isAgentReportableStatus(in.Status) {
+		return problem.InvalidInput("status %q is not a valid agent-reported status", in.Status)
+	}
+	_, serverID, err := s.resolveAgent(ctx, in.AgentID, in.Credential)
+	if err != nil {
+		return err
+	}
+	dep, ok, err := s.store.GetDeployment(ctx, in.DeploymentID)
+	if err != nil {
+		return problem.Internalf(err, "report deployment")
+	}
+	if !ok {
+		return problem.NotFound("deployment %s not found", in.DeploymentID)
+	}
+	if dep.ServerID != serverID {
+		return problem.PermissionDenied("this agent does not own deployment %s", in.DeploymentID)
+	}
+
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		if txErr := s.store.UpdateStatus(ctx, tx, StatusUpdate{
+			DeploymentID: in.DeploymentID,
+			Status:       in.Status,
+			Message:      in.Message,
+			HostPort:     in.HostPort,
+			ContainerID:  in.ContainerID,
+		}); txErr != nil {
+			return txErr
+		}
+		if txErr := s.store.AppendEvent(ctx, tx, NewEvent{DeploymentID: in.DeploymentID, Kind: KindStatus, Status: in.Status, Message: in.Message}); txErr != nil {
+			return txErr
+		}
+		for _, line := range in.LogLines {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			if txErr := s.store.AppendEvent(ctx, tx, NewEvent{DeploymentID: in.DeploymentID, Kind: KindLog, Message: line}); txErr != nil {
+				return txErr
+			}
+		}
+		if in.Status == StatusRunning {
+			return s.store.SupersedePreviousRunning(ctx, tx, dep.EnvironmentID, serverID, in.DeploymentID)
+		}
+		return nil
+	})
+	if err != nil {
+		return problem.Internalf(err, "report deployment")
+	}
+	s.log.Debug("deployment reported", "id", in.DeploymentID, "status", in.Status, "server_id", serverID)
+	return nil
+}
+
+// resolveAgent validates a durable agent credential and returns the agent and its
+// server. If agentID is provided it must match the credential's agent.
+func (s *service) resolveAgent(ctx context.Context, agentID, credential string) (string, string, error) {
+	gotAgentID, serverID, ok, err := s.store.AgentServerByCredential(ctx, hashToken(credential))
+	if err != nil {
+		return "", "", problem.Internalf(err, "authenticate agent")
+	}
+	if !ok {
+		return "", "", problem.PermissionDenied("unknown agent credential")
+	}
+	if agentID != "" && agentID != gotAgentID {
+		return "", "", problem.PermissionDenied("credential does not belong to agent %s", agentID)
+	}
+	return gotAgentID, serverID, nil
+}
+
+// validateImageRef trims and sanity-checks a container image reference, defaulting the
+// tag to :latest when none is given. This slice pulls PUBLIC images only.
+func validateImageRef(raw string) (string, error) {
+	ref := strings.TrimSpace(raw)
+	if ref == "" {
+		return "", problem.InvalidInput("an image reference is required")
+	}
+	if len(ref) > maxImageRefLen {
+		return "", problem.InvalidInput("image reference must be at most %d characters", maxImageRefLen)
+	}
+	if strings.ContainsAny(ref, " \t\n\r") {
+		return "", problem.InvalidInput("image reference must not contain whitespace")
+	}
+	// Default to :latest when the final path segment carries no tag and the ref is not
+	// pinned by digest. A colon in an earlier segment (a registry host:port) is ignored.
+	if !strings.Contains(ref, "@") {
+		seg := ref[strings.LastIndex(ref, "/")+1:]
+		if !strings.Contains(seg, ":") {
+			ref += ":latest"
+		}
+	}
+	return ref, nil
+}
+
+func isAgentReportableStatus(status string) bool {
+	switch status {
+	case StatusPulling, StatusStarting, StatusRunning, StatusFailed:
+		return true
+	}
+	return false
+}
+
+// hashToken is the one-way function applied to an agent credential before lookup,
+// matching how internal/agents stores and validates it.
+func hashToken(raw string) []byte {
+	h := sha256.Sum256([]byte(raw))
+	return h[:]
+}
+
+// mapErr preserves domain (*problem.Error) errors and wraps anything else as internal.
+func mapErr(err error, op string) error {
+	if err == nil {
+		return nil
+	}
+	var pe *problem.Error
+	if errors.As(err, &pe) {
+		return err
+	}
+	return problem.Internalf(err, "%s", op)
+}

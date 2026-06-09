@@ -37,8 +37,17 @@ message ListServersByWorkspaceResponse {
   repeated Server servers = 1;
 }
 
+message DeleteServerRequest {
+  string id = 1;
+}
+
+message DeleteServerResponse {}
+
 service ServerService {
   rpc CreateServer(CreateServerRequest) returns (CreateServerResponse);
   rpc GetServer(GetServerRequest) returns (GetServerResponse);
   rpc ListServersByWorkspace(ListServersByWorkspaceRequest) returns (ListServersByWorkspaceResponse);
+  // DeleteServer disconnects and removes a server. Its agent registration and
+  // deployment history are removed with it (ON DELETE CASCADE).
+  rpc DeleteServer(DeleteServerRequest) returns (DeleteServerResponse);
 }

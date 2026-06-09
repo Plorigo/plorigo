@@ -12,6 +12,9 @@ type Store interface {
 	InsertServer(ctx context.Context, tx database.Tx, s Server) (Server, error)
 	GetServer(ctx context.Context, id string) (Server, error)
 	ListByWorkspace(ctx context.Context, workspaceID string) ([]Server, error)
+	// DeleteServer removes the row. ok is false (with a nil error) when no row matched,
+	// so a delete that removed nothing is reported as NotFound rather than audited.
+	DeleteServer(ctx context.Context, tx database.Tx, id string) (ok bool, err error)
 }
 
 // TxRunner runs fn inside one transaction. Implemented by *database.DB; declared here as

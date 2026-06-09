@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { Menu, Plus, Search } from "lucide-react";
-import { toast } from "sonner";
 
 import { DemoBadge } from "@/components/DemoBadge";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { NewDeploymentDialog } from "@/features/deployments/NewDeploymentDialog";
+import { useWorkspaceStore } from "@/store";
 import { useCommandMenu } from "./commandMenuStore";
 import { Sidebar } from "./Sidebar";
 
@@ -13,7 +14,9 @@ import { Sidebar } from "./Sidebar";
 // lean: mobile menu, the ⌘K search trigger, theme, demo indicator, primary action.
 export function Topbar() {
   const toggleCommand = useCommandMenu((s) => s.toggle);
+  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [deployOpen, setDeployOpen] = useState(false);
 
   return (
     <header className="sticky top-0 z-20 flex h-14 items-center gap-3 border-b border-border bg-background/80 px-4 backdrop-blur sm:px-6">
@@ -44,14 +47,13 @@ export function Topbar() {
       <div className="ml-auto flex items-center gap-2">
         <DemoBadge />
         <ThemeToggle />
-        <Button
-          size="sm"
-          onClick={() => toast.info("Creating deployments from the dashboard is coming soon.")}
-        >
+        <Button size="sm" disabled={!workspaceId} onClick={() => setDeployOpen(true)}>
           <Plus className="h-4 w-4" aria-hidden="true" />
           <span className="hidden sm:inline">New deployment</span>
         </Button>
       </div>
+
+      <NewDeploymentDialog workspaceId={workspaceId} open={deployOpen} onOpenChange={setDeployOpen} />
     </header>
   );
 }

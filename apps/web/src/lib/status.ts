@@ -62,10 +62,10 @@ export function statusTone(status: string): Tone {
 
 // Maps free-form status strings (deploy/server/domain states) to an intent.
 export function statusIntent(status: string): Intent {
-  if (["ready", "healthy", "online", "passing", "active", "success"].includes(status)) {
+  if (["ready", "healthy", "online", "passing", "active", "success", "running"].includes(status)) {
     return "success";
   }
-  if (["building", "queued", "protected", "pending", "info"].includes(status)) {
+  if (["building", "queued", "protected", "pending", "info", "assigned", "pulling", "starting"].includes(status)) {
     return "info";
   }
   if (["degraded", "needs restore test", "warning", "warn"].includes(status)) {

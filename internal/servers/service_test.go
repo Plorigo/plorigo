@@ -23,6 +23,8 @@ type fakeStore struct {
 	got       Server
 	getErr    error
 	list      []Server
+	deleteOK  bool
+	deleted   bool
 }
 
 func (f *fakeStore) InsertServer(_ context.Context, _ database.Tx, s Server) (Server, error) {
@@ -38,6 +40,10 @@ func (f *fakeStore) GetServer(_ context.Context, _ string) (Server, error) {
 }
 func (f *fakeStore) ListByWorkspace(_ context.Context, _ string) ([]Server, error) {
 	return f.list, nil
+}
+func (f *fakeStore) DeleteServer(_ context.Context, _ database.Tx, _ string) (bool, error) {
+	f.deleted = f.deleteOK
+	return f.deleteOK, nil
 }
 
 type fakeRecorder struct {
@@ -206,6 +212,76 @@ func TestListByWorkspace_DeniedWhenUnauthorized(t *testing.T) {
 func TestListByWorkspace_RequiresWorkspaceID(t *testing.T) {
 	svc := newSvc(&fakeStore{}, fakeAuthz{}, &fakeRecorder{})
 	_, err := svc.ListByWorkspace(authedCtx(), "")
+	var pe *problem.Error
+	if !errors.As(err, &pe) || pe.Kind != problem.KindInvalidInput {
+		t.Errorf("got %v, want InvalidInput", err)
+	}
+}
+
+func TestDelete_AuthorizedDeletesAndAudits(t *testing.T) {
+	store := &fakeStore{got: Server{ID: testServerID, WorkspaceID: testWorkspace}, deleteOK: true}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, fakeAuthz{}, rec)
+
+	if err := svc.Delete(authedCtx(), testServerID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !store.deleted {
+		t.Error("expected the server to be deleted")
+	}
+	if !rec.called || rec.action != "server.delete" {
+		t.Errorf("audit not recorded correctly: called=%v action=%q", rec.called, rec.action)
+	}
+}
+
+func TestDelete_DeniedWhenUnauthorized(t *testing.T) {
+	store := &fakeStore{got: Server{ID: testServerID, WorkspaceID: testWorkspace}, deleteOK: true}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
+
+	err := svc.Delete(authedCtx(), testServerID)
+	var pe *problem.Error
+	if !errors.As(err, &pe) || pe.Kind != problem.KindPermissionDenied {
+		t.Errorf("got %v, want PermissionDenied", err)
+	}
+	if store.deleted {
+		t.Error("a denied delete must not remove the server")
+	}
+	if rec.called {
+		t.Error("a denied delete must not write an audit event")
+	}
+}
+
+func TestDelete_MissingServerNotFound(t *testing.T) {
+	store := &fakeStore{getErr: problem.NotFound("server %s not found", testServerID)}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	err := svc.Delete(authedCtx(), testServerID)
+	var pe *problem.Error
+	if !errors.As(err, &pe) || pe.Kind != problem.KindNotFound {
+		t.Errorf("got %v, want NotFound", err)
+	}
+}
+
+func TestDelete_RacedDeleteNotFoundAndNotAudited(t *testing.T) {
+	// The row vanished between Get and the tx (raced with another delete): the store
+	// reports nothing deleted, so the service returns NotFound and audits nothing.
+	store := &fakeStore{got: Server{ID: testServerID, WorkspaceID: testWorkspace}, deleteOK: false}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, fakeAuthz{}, rec)
+
+	err := svc.Delete(authedCtx(), testServerID)
+	var pe *problem.Error
+	if !errors.As(err, &pe) || pe.Kind != problem.KindNotFound {
+		t.Errorf("got %v, want NotFound", err)
+	}
+	if rec.called {
+		t.Error("a delete that removed nothing must not be audited")
+	}
+}
+
+func TestDelete_InvalidID(t *testing.T) {
+	svc := newSvc(&fakeStore{}, fakeAuthz{}, &fakeRecorder{})
+	err := svc.Delete(authedCtx(), "not-a-uuid")
 	var pe *problem.Error
 	if !errors.As(err, &pe) || pe.Kind != problem.KindInvalidInput {
 		t.Errorf("got %v, want InvalidInput", err)

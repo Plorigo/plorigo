@@ -34,6 +34,22 @@ func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Ser
 	return i, err
 }
 
+const deleteServer = `-- name: DeleteServer :one
+DELETE FROM servers
+WHERE id = $1
+RETURNING id
+`
+
+// DeleteServer removes the server (agents, registration tokens, and deployments
+// cascade). RETURNING id lets the caller tell a real delete from a no-op, so a delete
+// that removed nothing is never audited as a change (cf. DeleteEnvVar).
+func (q *Queries) DeleteServer(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, deleteServer, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const getServer = `-- name: GetServer :one
 SELECT id, workspace_id, name, slug, created_at
 FROM servers

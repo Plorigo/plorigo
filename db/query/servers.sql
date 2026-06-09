@@ -13,3 +13,11 @@ SELECT id, workspace_id, name, slug, created_at
 FROM servers
 WHERE workspace_id = $1
 ORDER BY created_at DESC;
+
+-- DeleteServer removes the server (agents, registration tokens, and deployments
+-- cascade). RETURNING id lets the caller tell a real delete from a no-op, so a delete
+-- that removed nothing is never audited as a change (cf. DeleteEnvVar).
+-- name: DeleteServer :one
+DELETE FROM servers
+WHERE id = $1
+RETURNING id;

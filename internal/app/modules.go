@@ -7,6 +7,7 @@ import (
 	"github.com/plorigo/plorigo/internal/agents"
 	"github.com/plorigo/plorigo/internal/audit"
 	"github.com/plorigo/plorigo/internal/auth"
+	"github.com/plorigo/plorigo/internal/deployments"
 	"github.com/plorigo/plorigo/internal/environments"
 	"github.com/plorigo/plorigo/internal/envvars"
 	"github.com/plorigo/plorigo/internal/membership"
@@ -86,13 +87,26 @@ func (a *App) buildModules() error {
 
 	// agents are the control-plane side of the server agent: registration tokens,
 	// keys, and liveness. Server-scoped — the owning workspace is resolved from the
-	// server, then authorized/audited like servers. BaseURL builds the install command.
+	// server, then authorized/audited like servers. PublicURL + Dev shape the install
+	// command (dev runs the agent from the local checkout).
 	a.agents = agents.New(agents.Deps{
 		DB:        a.db,
 		Audit:     auditSvc,
 		Policy:    policySvc,
 		PublicURL: a.cfg.PublicURL,
+		Dev:       a.cfg.Dev,
 		Log:       a.log,
+	})
+
+	// deployments record an attempt to run an image in an environment on a server and
+	// dispatch it to that server's agent. Environment-scoped like env vars (workspace
+	// resolved through environment -> project); also serves the agent-facing
+	// DeployService gateway (claim/report), public like the agent registration gateway.
+	a.deployments = deployments.New(deployments.Deps{
+		DB:     a.db,
+		Audit:  auditSvc,
+		Policy: policySvc,
+		Log:    a.log,
 	})
 
 	mailerSvc := mailer.New(mailer.Config{

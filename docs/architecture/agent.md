@@ -51,7 +51,11 @@ The first slice of this model is implemented: an agent can **register and report
 - The dashboard mints a **one-time registration token** via
   `controlplane.v1.AgentService/CreateRegistrationToken` — a workspace-scoped, authorized,
   audited action. The token is stored **hashed** with a short TTL and embedded in the
-  one-line install command.
+  install command. Tokens are single-use, so the dashboard can mint a **fresh** command
+  for an existing server at any time (re-running install rotates the credential). The
+  command follows the control plane's environment: production fetches the public
+  installer script; **dev runs the agent from the local source checkout** so a developer
+  tests their working copy, not the published agent.
 - The agent generates an **ed25519 keypair** on first start and calls
   `agent.v1.AgentService/Register` with the token and its **public key**. The control plane
   consumes the token (single-use), stores the public key, and returns a **durable agent
@@ -66,6 +70,29 @@ The first slice of this model is implemented: an agent can **register and report
 > [!NOTE]
 > The agent connects **outbound** over ConnectRPC and persists its credential and private
 > key locally (0600). A reinstall re-registers and rotates the credential.
+
+## Deploying a container
+
+The next slice of the agent runs deployments. Beside the heartbeat loop, the agent runs a
+**deploy loop** that polls `agent.v1.DeployService/PollDeployment` for work and reports
+progress with `ReportDeployment`. Both RPCs are public at the auth interceptor and
+authenticated by the agent **credential** (the same one Heartbeat uses); the control plane
+scopes a claim to the agent's own server, so an agent can only ever run its server's work.
+
+For one deployment the agent: pulls the image, **replaces** any previous container for that
+environment (matched by a `plorigo.environment` label), creates and starts the new container
+with the requested port published to an ephemeral host port, **health-checks** the published
+port, and reports `pulling → starting → running` (or `failed`) plus the container's recent
+logs. It manages Docker through the Engine API (the moby SDK), reaching the daemon via the
+standard environment (`DOCKER_HOST`).
+
+> [!NOTE]
+> **Scope of this first slice.** It deploys a **pre-built public image** reachable on a
+> **published host port** — build-from-Git/Dockerfile and Caddy routing/SSL are later slices.
+> Authentication is the agent credential plus per-agent server scoping; the **next hardening
+> step** is full cryptographic job signing — the control plane signs the job and the agent
+> signs its poll with the ed25519 key it already persists. Logs are delivered by **polling**
+> (unary `ReportDeployment` / `ListDeploymentEvents`), not SSE; streaming is a later slice.
 
 ## Caddy ownership
 
@@ -84,6 +111,11 @@ This is also how traffic is switched during a deploy or rollback — see
 The agent is designed to reconnect cleanly after a restart or a network drop, and to support a
 safe self-update mechanism (apply, verify, and roll back the agent itself if an update fails).
 Keep these paths conservative: a broken agent update must never take a server's apps down.
+
+One self-heal exists today: when the control plane **rejects the stored credential** (e.g. the
+server was deleted from the dashboard and connected again) and a registration token was
+provided, the agent **re-registers with it once** — rotating its identity in place — instead of
+erroring forever with a stale identity.
 
 ## Scope
 

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   agentClient,
   authClient,
+  deploymentClient,
   environmentClient,
   envVarClient,
   projectClient,
@@ -85,5 +86,55 @@ export function useSecrets(environmentId: string) {
     queryKey: ["secrets", environmentId],
     queryFn: async () => (await secretClient.listSecrets({ environmentId })).secrets,
     enabled: environmentId.length > 0,
+  });
+}
+
+// A deployment is terminal once it is running, failed, or superseded — at which point
+// the detail view stops polling.
+export function isTerminalDeploymentStatus(status: string): boolean {
+  return status === "running" || status === "failed" || status === "superseded";
+}
+
+export function useDeploymentsByWorkspace(workspaceId: string) {
+  return useQuery({
+    queryKey: ["deployments", "workspace", workspaceId],
+    queryFn: async () =>
+      (await deploymentClient.listDeploymentsByWorkspace({ workspaceId })).deployments,
+    enabled: workspaceId.length > 0,
+    // Keep the list fresh as in-flight deployments progress.
+    refetchInterval: 5000,
+  });
+}
+
+export function useDeploymentsByProject(projectId: string) {
+  return useQuery({
+    queryKey: ["deployments", "project", projectId],
+    queryFn: async () =>
+      (await deploymentClient.listDeploymentsByProject({ projectId })).deployments,
+    enabled: projectId.length > 0,
+    refetchInterval: 5000,
+  });
+}
+
+export function useDeployment(deploymentId: string) {
+  return useQuery({
+    queryKey: ["deployment", deploymentId],
+    queryFn: async () => (await deploymentClient.getDeployment({ id: deploymentId })).deployment ?? null,
+    enabled: deploymentId.length > 0,
+    // Poll while the deployment is in flight; stop once it reaches a terminal status.
+    refetchInterval: (query) => {
+      const d = query.state.data;
+      return d && isTerminalDeploymentStatus(d.status) ? false : 2000;
+    },
+  });
+}
+
+export function useDeploymentEvents(deploymentId: string, live: boolean) {
+  return useQuery({
+    queryKey: ["deploymentEvents", deploymentId],
+    queryFn: async () =>
+      (await deploymentClient.listDeploymentEvents({ deploymentId })).events,
+    enabled: deploymentId.length > 0,
+    refetchInterval: live ? 2000 : false,
   });
 }

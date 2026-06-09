@@ -31,4 +31,7 @@ type Service interface {
 	Create(ctx context.Context, in CreateInput) (Server, error)
 	Get(ctx context.Context, id string) (Server, error)
 	ListByWorkspace(ctx context.Context, workspaceID string) ([]Server, error)
+	// Delete removes a server; its agent registration and deployment history cascade
+	// with it (see migrations 00008/00009).
+	Delete(ctx context.Context, id string) error
 }
