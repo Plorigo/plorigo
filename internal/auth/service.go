@@ -120,6 +120,74 @@ func (s *service) Register(ctx context.Context, in RegisterInput) (Registered, e
 	return result, nil
 }
 
+// SeedUser idempotently ensures a verified user with a personal workspace exists,
+// for LOCAL DEVELOPMENT login. Re-running it resets the password and verifies the
+// address so a seeded login always works. It deliberately bypasses the public
+// registration gates (open-registration, email verification, anti-enumeration),
+// so it is NOT on the RPC Service interface — only the Module exposes it, and only
+// a dev-guarded caller (cmd/seed via App.SeedUser) ever invokes it.
+func (s *service) SeedUser(ctx context.Context, email, password string) (User, error) {
+	email, err := normalizeEmail(email)
+	if err != nil {
+		return User{}, err
+	}
+	if len(password) < minPasswordLen {
+		return User{}, problem.InvalidInput("password must be at least %d characters", minPasswordLen)
+	}
+	hash, err := passwd.Hash(password)
+	if err != nil {
+		return User{}, problem.Internalf(err, "hash password")
+	}
+
+	// Existing account: reset its password and verify it so the seeded login works.
+	if existing, e := s.store.GetUserByEmail(ctx, email); e == nil {
+		err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+			if txErr := s.store.SetPassword(ctx, tx, existing.ID, hash); txErr != nil {
+				return txErr
+			}
+			if !existing.EmailVerified {
+				if txErr := s.store.SetEmailVerified(ctx, tx, existing.ID); txErr != nil {
+					return txErr
+				}
+			}
+			return s.audit.Record(ctx, tx, "user.seed", "user", existing.ID, "", existing.ID)
+		})
+		if err != nil {
+			return User{}, mapErr(err, "seed user")
+		}
+		u := existing.User
+		u.EmailVerified = true
+		return u, nil
+	} else if !errors.Is(e, errNoUser) {
+		return User{}, mapErr(e, "seed user")
+	}
+
+	// New account: create the user, their personal workspace, and mark verified.
+	var created User
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		user, e := s.store.CreateUser(ctx, tx, email, hash)
+		if e != nil {
+			return e
+		}
+		if _, e = s.workspace.CreateInitialWorkspace(ctx, tx, user.ID, workspaceNameForEmail(email), user.ID); e != nil {
+			return e
+		}
+		if e = s.store.SetEmailVerified(ctx, tx, user.ID); e != nil {
+			return e
+		}
+		if e = s.audit.Record(ctx, tx, "user.seed", "user", user.ID, "", user.ID); e != nil {
+			return e
+		}
+		created = user
+		return nil
+	})
+	if err != nil {
+		return User{}, mapErr(err, "seed user")
+	}
+	created.EmailVerified = true
+	return created, nil
+}
+
 func (s *service) Login(ctx context.Context, in LoginInput) (Authenticated, error) {
 	email := strings.ToLower(strings.TrimSpace(in.Email))
 	su, err := s.store.GetUserByEmail(ctx, email)

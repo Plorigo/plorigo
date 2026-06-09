@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -35,25 +36,32 @@ type Deps struct {
 
 // Module is the auth module: the only wiring surface other code touches.
 type Module struct {
-	service Service
-	cookie  CookieConfig
+	svc    *service
+	cookie CookieConfig
 }
 
 // New assembles the service over its ports.
 func New(d Deps) *Module {
 	store := newPostgresStore(d.DB)
 	return &Module{
-		service: newService(d.Cfg, d.DB, store, d.Audit, d.Mailer, d.Workspace, d.Log),
-		cookie:  d.Cookie,
+		svc:    newService(d.Cfg, d.DB, store, d.Audit, d.Mailer, d.Workspace, d.Log),
+		cookie: d.Cookie,
 	}
 }
 
 // Service exposes the auth service — used by the app's auth interceptor (for the
 // session/token resolvers) and by tests.
-func (m *Module) Service() Service { return m.service }
+func (m *Module) Service() Service { return m.svc }
+
+// SeedUser creates/refreshes a local dev login user (verified, with a personal
+// workspace). It is intentionally NOT on the RPC Service interface — only the
+// dev-guarded App.SeedUser / cmd/seed path calls it. See service.SeedUser.
+func (m *Module) SeedUser(ctx context.Context, email, password string) (User, error) {
+	return m.svc.SeedUser(ctx, email, password)
+}
 
 // Route returns the AuthService mount path and handler. opts carries the app-wide
 // interceptors (notably the auth interceptor); see internal/app.
 func (m *Module) Route(opts ...connect.HandlerOption) (string, http.Handler) {
-	return controlplanev1connect.NewAuthServiceHandler(&handler{svc: m.service, cookie: m.cookie}, opts...)
+	return controlplanev1connect.NewAuthServiceHandler(&handler{svc: m.svc, cookie: m.cookie}, opts...)
 }

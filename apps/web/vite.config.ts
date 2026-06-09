@@ -1,3 +1,5 @@
+import { fileURLToPath, URL } from "node:url";
+
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -18,6 +20,11 @@ const controlPlaneServices = [
 // serves both the UI and the API from the same origin, so no proxy is needed.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    },
+  },
   build: { outDir: "dist" },
   server: {
     proxy: Object.fromEntries(

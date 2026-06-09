@@ -8,7 +8,7 @@ import { useCurrentUser } from "../lib/auth";
 export function Protected({ children }: { children: ReactNode }) {
   const { data: user, isLoading } = useCurrentUser();
   if (isLoading) {
-    return <div className="p-8 text-gray-500">Loading…</div>;
+    return <div className="p-8 text-muted-foreground">Loading…</div>;
   }
   if (!user) {
     return <Navigate to="/login" />;
