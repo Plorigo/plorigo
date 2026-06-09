@@ -56,7 +56,7 @@ build-embed: web ## Build the single binary with the dashboard embedded (bin/con
 	go build -tags embed_web -o bin/controlplane ./cmd/controlplane
 
 dev: ## Run the control plane in dev mode (expects `pnpm --dir apps/web dev` in another terminal)
-	PLORIGO_ENV=dev go run ./cmd/controlplane
+	PLORIGO_ENV=dev PLORIGO_PUBLIC_URL=http://localhost:8080 go run ./cmd/controlplane
 
 seed: ## Create/refresh a LOCAL dev login user (dev only). Override SEED_EMAIL / SEED_PASSWORD.
 	PLORIGO_ENV=dev APP_MASTER_KEY="$(APP_MASTER_KEY)" DATABASE_URL="$(DATABASE_URL)" \

@@ -43,6 +43,30 @@ hard to misuse. The intended model:
 > let the agent run unsigned/unscoped work. Those are exactly the trust problems this model
 > exists to remove.
 
+## Registration & liveness
+
+The first slice of this model is implemented: an agent can **register and report liveness**
+(building, deploying, Caddy, and **signed jobs** come next). Concretely:
+
+- The dashboard mints a **one-time registration token** via
+  `controlplane.v1.AgentService/CreateRegistrationToken` — a workspace-scoped, authorized,
+  audited action. The token is stored **hashed** with a short TTL and embedded in the
+  one-line install command.
+- The agent generates an **ed25519 keypair** on first start and calls
+  `agent.v1.AgentService/Register` with the token and its **public key**. The control plane
+  consumes the token (single-use), stores the public key, and returns a **durable agent
+  credential** (stored only as a hash). These agent-facing RPCs are *not* user-scoped: they
+  are public at the auth interceptor and authenticated by the token / credential carried in
+  the request, validated by the `agents` service.
+- The agent then calls `agent.v1.AgentService/Heartbeat` on an interval. Liveness
+  (online / offline / awaiting) is **derived from the last heartbeat**, not stored.
+- The stored public key is what the **next** step verifies signed jobs against; this slice
+  establishes it without dispatching jobs yet.
+
+> [!NOTE]
+> The agent connects **outbound** over ConnectRPC and persists its credential and private
+> key locally (0600). A reinstall re-registers and rotates the credential.
+
 ## Caddy ownership
 
 The agent owns Caddy's desired state on its server. The loop is:

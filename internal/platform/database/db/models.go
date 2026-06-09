@@ -8,6 +8,28 @@ import (
 	"time"
 )
 
+type Agent struct {
+	ID             string
+	ServerID       string
+	WorkspaceID    string
+	PublicKey      []byte
+	CredentialHash []byte
+	AgentVersion   string
+	LastSeenAt     *time.Time
+	CreatedAt      time.Time
+}
+
+type AgentRegistrationToken struct {
+	ID          string
+	ServerID    string
+	WorkspaceID string
+	TokenHash   []byte
+	CreatedBy   string
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
+	ConsumedAt  *time.Time
+}
+
 type ApiToken struct {
 	ID          string
 	UserID      string

@@ -18,6 +18,11 @@ type Config struct {
 	// dashboard runs on the Vite server; in the single binary it is the control
 	// plane's own public URL.
 	BaseURL string
+	// PublicURL is the control plane's own public URL — where the SERVER AGENT and the
+	// public API are reached. It equals the origin users hit in the single-binary
+	// deployment, but differs from BaseURL in a split/dev setup (dashboard vs API), so
+	// the agent install command uses this, not BaseURL.
+	PublicURL string
 	// AllowOpenRegistration lets anyone register; when false only the first
 	// (bootstrap) user and invited users may.
 	AllowOpenRegistration bool
@@ -38,13 +43,22 @@ func Load() Config {
 	// dev environment. Unset / typo / "production" all mean production, so a deploy that
 	// forgets the var still gets Secure cookies + the CSRF guard, never the reverse.
 	env := strings.ToLower(strings.TrimSpace(os.Getenv("PLORIGO_ENV")))
+	baseURL := envOr("PLORIGO_BASE_URL", "http://localhost:5173")
+	port := envOr("PORT", "8080")
+	publicURLDefault := baseURL
+	if env == "dev" || env == "development" || env == "local" {
+		publicURLDefault = "http://localhost:" + port
+	}
 	return Config{
 		MasterKey:   os.Getenv("APP_MASTER_KEY"),
 		DatabaseURL: os.Getenv("DATABASE_URL"),
-		Port:        envOr("PORT", "8080"),
+		Port:        port,
 		Dev:         env == "dev" || env == "development" || env == "local",
 
-		BaseURL:                  envOr("PLORIGO_BASE_URL", "http://localhost:5173"),
+		BaseURL: baseURL,
+		// Defaults to BaseURL in production where the dashboard and API share one
+		// origin; in dev, dashboard and API are split, so default to the API port.
+		PublicURL:                envOr("PLORIGO_PUBLIC_URL", publicURLDefault),
 		AllowOpenRegistration:    envBool("PLORIGO_ALLOW_OPEN_REGISTRATION", true),
 		RequireEmailVerification: envBool("PLORIGO_REQUIRE_EMAIL_VERIFICATION", false),
 

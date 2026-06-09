@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package agent.v1;
+
+// AgentService is the agent-facing gateway: a Plorigo server agent calls it
+// OUTBOUND to register and to send heartbeats. These RPCs are not authenticated by
+// a user session or API token — the agent proves itself with its one-time
+// registration token (Register) and its durable agent credential (Heartbeat), both
+// validated in the service. See docs/architecture/agent.md. The control-plane,
+// user-facing side (mint token, list agents) is controlplane.v1.AgentService.
+service AgentService {
+  // Register exchanges a one-time registration token (embedded in the install
+  // command) for a durable agent credential, recording the agent's ed25519 public
+  // key. It is idempotent per server: re-running install rotates the credential.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Heartbeat reports that the agent is alive and which version it runs; the control
+  // plane derives the server's online/offline state from the last heartbeat.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+}
+
+message RegisterRequest {
+  string registration_token = 1;
+  bytes public_key = 2; // ed25519 public key generated on install
+  string agent_version = 3;
+}
+
+message RegisterResponse {
+  string agent_id = 1;
+  string credential = 2; // durable agent credential, returned only once
+}
+
+message HeartbeatRequest {
+  string agent_id = 1;
+  string credential = 2;
+  string agent_version = 3;
+}
+
+message HeartbeatResponse {
+  // next_interval_seconds tells the agent how long to wait before its next heartbeat.
+  int64 next_interval_seconds = 1;
+}

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import {
+  agentClient,
   authClient,
   environmentClient,
   envVarClient,
@@ -34,6 +35,16 @@ export function useServers(workspaceId: string) {
     queryKey: ["servers", workspaceId],
     queryFn: async () => (await serverClient.listServersByWorkspace({ workspaceId })).servers,
     enabled: workspaceId.length > 0,
+  });
+}
+
+export function useAgents(workspaceId: string) {
+  return useQuery({
+    queryKey: ["agents", workspaceId],
+    queryFn: async () => (await agentClient.listAgentsByWorkspace({ workspaceId })).agents,
+    enabled: workspaceId.length > 0,
+    // Online/offline is derived from the last heartbeat, so poll to keep it fresh.
+    refetchInterval: 15_000,
   });
 }
 

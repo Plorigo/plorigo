@@ -14,6 +14,9 @@ source ./scripts/conductor-env.sh
 export PORT="$PLORIGO_API_PORT"
 export PLORIGO_ENV=dev
 export PLORIGO_BASE_URL="http://localhost:${PLORIGO_WEB_PORT}"
+# The agent connects to the control plane's API origin (not the dashboard), so the
+# install command shown in the dashboard must use this, not PLORIGO_BASE_URL.
+export PLORIGO_PUBLIC_URL="http://localhost:${PLORIGO_API_PORT}"
 export VITE_CONTROLPLANE_URL="http://localhost:${PLORIGO_API_PORT}"
 
 # Run is the single owner of the DB lifecycle: setup no longer touches Postgres, so

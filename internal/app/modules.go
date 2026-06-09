@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/plorigo/plorigo/internal/agents"
 	"github.com/plorigo/plorigo/internal/audit"
 	"github.com/plorigo/plorigo/internal/auth"
 	"github.com/plorigo/plorigo/internal/environments"
@@ -81,6 +82,17 @@ func (a *App) buildModules() error {
 		Audit:  auditSvc,
 		Policy: policySvc,
 		Log:    a.log,
+	})
+
+	// agents are the control-plane side of the server agent: registration tokens,
+	// keys, and liveness. Server-scoped — the owning workspace is resolved from the
+	// server, then authorized/audited like servers. BaseURL builds the install command.
+	a.agents = agents.New(agents.Deps{
+		DB:        a.db,
+		Audit:     auditSvc,
+		Policy:    policySvc,
+		PublicURL: a.cfg.PublicURL,
+		Log:       a.log,
 	})
 
 	mailerSvc := mailer.New(mailer.Config{

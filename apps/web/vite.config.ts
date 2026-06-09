@@ -13,6 +13,7 @@ const controlPlaneServices = [
   "EnvVarService",
   "SecretService",
   "ServerService",
+  "AgentService",
 ];
 
 // During development the dashboard runs on the Vite dev server and proxies RPC
