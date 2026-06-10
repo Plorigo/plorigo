@@ -30,6 +30,17 @@ jobs:
       - name: Generate code (proto + sqlc)
         run: make generate
 
+      # proto/gen and apps/web/src/gen are git-ignored (regenerated fresh, can't drift),
+      # so the only committed generated artifact is the sqlc package. Fail the build if it
+      # doesn't match what `sqlc generate` produces from the current migrations/queries —
+      # this is what makes CI the authoritative gate for generated-code consistency.
+      - name: Verify generated SQL is committed and up to date
+        run: |
+          if ! git diff --exit-code -- internal/platform/database/db; then
+            echo "::error::Committed sqlc output in internal/platform/database/db is out of date. Run 'make generate' and commit the changes."
+            exit 1
+          fi
+
       - name: Go build
         run: go build ./...
 
