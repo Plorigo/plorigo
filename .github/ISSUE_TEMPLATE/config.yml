@@ -12,3 +12,6 @@ contact_links:
   - name: 📖 Documentation
     url: https://github.com/Plorigo/plorigo/tree/main/docs
     about: Read the project documentation.
+  - name: 💜 Support Plorigo
+    url: https://github.com/Plorigo/plorigo/blob/main/SPONSORS.md
+    about: Help fund development of the open-source core.

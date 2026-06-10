@@ -40,6 +40,18 @@ Project docs live in the [`docs/`](./docs) directory and will grow alongside the
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) and our [Code of Conduct](./CODE_OF_CONDUCT.md).
 
+## 💜 Support the project
+
+Plorigo is free and open source. If it's useful to you or your company, you can help fund
+continued development:
+
+- **[Sponsor on GitHub](https://github.com/sponsors/Plorigo)** — recurring or one-off, any size.
+- **[Fund via Polar](https://polar.sh/plorigo)** — subscription tiers and one-time support; great
+  for companies that need an invoice.
+
+Company sponsors can have their logo featured — see **[SPONSORS.md](./SPONSORS.md)**. Prefer
+non-financial support? Star the repo, contribute, or help others in Discussions.
+
 ---
 
 Please remember that Plorigo is maintained by a small team and community volunteers. Kind,
