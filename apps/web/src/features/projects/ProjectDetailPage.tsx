@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { ConnectError } from "@connectrpc/connect";
+import { useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -6,7 +8,9 @@ import {
   Clock3,
   ExternalLink,
   GitBranch,
+  GitFork,
   Gauge,
+  Lock,
   Rocket,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -15,11 +19,13 @@ import { ComingSoon } from "@/components/ComingSoon";
 import { StatCard } from "@/components/StatCard";
 import { Timeline, type TimelineStep } from "@/components/Timeline";
 import { Badge, Button, EmptyState, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
+import { sourceClient } from "@/lib/clients";
 import { useDemoData } from "@/lib/demo";
-import { useDeploymentsByProject, useEnvironments } from "@/lib/queries";
+import { useDeploymentsByProject, useEnvironments, useProjectSource } from "@/lib/queries";
 import { statusTone, type Tone } from "@/lib/status";
 import { useWorkspaceStore } from "@/store";
 import { NewDeploymentDialog } from "../deployments/NewDeploymentDialog";
+import { ImportFromGitHubDialog } from "./ImportFromGitHubDialog";
 import { AddEnvironmentDialog } from "./NewProjectDialog";
 import { useDashboardProjects, frameworkTone } from "./projectData";
 
@@ -58,8 +64,23 @@ export function ProjectDetailPage() {
   const projectDeployments = useDeploymentsByProject(projectId ?? "");
   const latestDeployment = projectDeployments.data?.[0];
   const environments = useEnvironments(projectId ?? "");
+  const source = useProjectSource(projectId ?? "");
+  const queryClient = useQueryClient();
   const [deployOpen, setDeployOpen] = useState(false);
   const [addEnvOpen, setAddEnvOpen] = useState(false);
+  const [sourceOpen, setSourceOpen] = useState(false);
+
+  async function disconnectSource() {
+    if (!projectId) return;
+    try {
+      await sourceClient.disconnectRepository({ projectId });
+      await queryClient.invalidateQueries({ queryKey: ["projectSource", projectId] });
+      await queryClient.invalidateQueries({ queryKey: ["sources", workspaceId] });
+      toast.success("Repository disconnected");
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not disconnect the repository");
+    }
+  }
 
   if (query.isLoading && dashboardProjects.length === 0) {
     return <Skeleton className="h-64 w-full" />;
@@ -151,6 +172,68 @@ export function ProjectDetailPage() {
         </Panel>
 
         <div className="space-y-6">
+          <Panel>
+            <PanelHeader title="Source" description="The GitHub repository this project deploys from." />
+            <div className="p-4">
+              {source.isLoading ? (
+                <Skeleton className="h-12 w-full" />
+              ) : source.data ? (
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <a
+                      href={source.data.htmlUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 truncate text-sm font-medium text-foreground hover:underline"
+                    >
+                      <GitFork className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      {source.data.fullName}
+                      <ExternalLink className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    </a>
+                    <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span className="inline-flex items-center gap-1">
+                        <GitBranch className="h-3 w-3" aria-hidden="true" />
+                        {source.data.branch}
+                      </span>
+                      {source.data.isPrivate && (
+                        <span className="inline-flex items-center gap-1">
+                          <Lock className="h-3 w-3" aria-hidden="true" />
+                          private
+                        </span>
+                      )}
+                      {source.data.githubLogin && <span>connected as {source.data.githubLogin}</span>}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => setSourceOpen(true)}>
+                      Reconnect
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={disconnectSource}>
+                      Disconnect
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm text-muted-foreground">No repository connected.</p>
+                  <Button size="sm" variant="secondary" disabled={!workspaceId} onClick={() => setSourceOpen(true)}>
+                    <GitFork className="h-4 w-4" aria-hidden="true" />
+                    Connect repository
+                  </Button>
+                </div>
+              )}
+            </div>
+          </Panel>
+
+          {projectId && (
+            <ImportFromGitHubDialog
+              workspaceId={workspaceId}
+              open={sourceOpen}
+              onOpenChange={setSourceOpen}
+              projectId={projectId}
+            />
+          )}
+
           <Panel>
             <PanelHeader
               title="Environments"
