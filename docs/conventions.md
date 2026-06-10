@@ -52,7 +52,7 @@ Generated files (`*.pb.go`, `*_connect.go`, `proto/gen/**`, etc.) are marked
 ## Testing
 
 - Add or update tests for the behavior you change; bug fixes come with a **regression test**.
-- Run the relevant suites before pushing (`go test ./...`, `pnpm test`).
+- Run the relevant suites before pushing (`make test`, `make web-check`).
 - For changes to the **deployment, agent, secrets, or backup** paths, **test against a real
   Docker environment** and describe how in your PR — these paths affect users' production systems.
 
