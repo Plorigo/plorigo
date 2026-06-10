@@ -6,10 +6,14 @@ managed:
       value: github.com/plorigo/plorigo/proto/gen
 plugins:
   # Go messages + ConnectRPC handlers/clients -> proto/gen (gitignored, regenerated).
-  - remote: buf.build/protocolbuffers/go
+  # Pinned to match the runtimes in go.mod — bump both together
+  # (generated code requires runtime >= plugin version):
+  #   protocolbuffers/go  <-> google.golang.org/protobuf
+  #   connectrpc/go       <-> connectrpc.com/connect
+  - remote: buf.build/protocolbuffers/go:v1.36.11
     out: gen
     opt: paths=source_relative
-  - remote: buf.build/connectrpc/go
+  - remote: buf.build/connectrpc/go:v1.20.0
     out: gen
     opt: paths=source_relative
   # TypeScript (protobuf-es v2 includes service descriptors used by connect-es) -> dashboard.

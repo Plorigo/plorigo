@@ -33,7 +33,7 @@ help: ## Show this help
 setup: ## Install toolchain and dependencies
 	corepack enable pnpm
 	go mod download
-	pnpm --dir apps/web install
+	cd apps/web && pnpm install --config.confirm-modules-purge=false
 
 generate: proto sqlc ## Generate all code (proto + sqlc)
 
@@ -46,12 +46,15 @@ sqlc: ## Generate the type-safe DB package
 build: ## Build all Go binaries
 	go build ./...
 
+# Run pnpm from inside apps/web (not `pnpm --dir`) so corepack resolves the pinned
+# pnpm@9.15.0 from apps/web/package.json. `--dir` keeps the shell CWD at the repo root,
+# where corepack falls back to its default major and mismatches a 9.x-built node_modules.
 web: ## Build the dashboard
-	pnpm --dir apps/web build
+	cd apps/web && pnpm build
 
 web-check: ## Lint and typecheck the dashboard (mirrors CI's web steps)
-	pnpm --dir apps/web lint
-	pnpm --dir apps/web typecheck
+	cd apps/web && pnpm lint
+	cd apps/web && pnpm typecheck
 
 build-embed: web ## Build the single binary with the dashboard embedded (bin/controlplane)
 	rm -rf internal/platform/web/dist
