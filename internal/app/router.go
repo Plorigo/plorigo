@@ -27,6 +27,13 @@ func (a *App) router() http.Handler {
 	mux.Handle(a.servers.Route(ic))
 	mux.Handle(a.agents.Route(ic))
 	mux.Handle(a.deployments.Route(ic))
+	mux.Handle(a.sources.Route(ic))
+
+	// GitHub OAuth is a browser redirect flow, not ConnectRPC: these endpoints set a
+	// state cookie and 302, so they are plain HTTP handlers (outside the interceptor)
+	// that resolve the session themselves. See github_oauth.go.
+	mux.Handle("GET /api/github/connect", a.githubConnectHandler())
+	mux.Handle("GET /api/github/callback", a.githubCallbackHandler())
 	// The agent gateways: agent.v1 procedures are public (see auth_interceptor.go); the
 	// services validate the registration token / agent credential in the request body.
 	mux.Handle(a.agents.AgentRoute(ic))

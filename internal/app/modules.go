@@ -12,11 +12,13 @@ import (
 	"github.com/plorigo/plorigo/internal/envvars"
 	"github.com/plorigo/plorigo/internal/membership"
 	"github.com/plorigo/plorigo/internal/platform/crypto"
+	"github.com/plorigo/plorigo/internal/platform/github"
 	"github.com/plorigo/plorigo/internal/platform/mailer"
 	"github.com/plorigo/plorigo/internal/policy"
 	"github.com/plorigo/plorigo/internal/projects"
 	"github.com/plorigo/plorigo/internal/secrets"
 	"github.com/plorigo/plorigo/internal/servers"
+	"github.com/plorigo/plorigo/internal/sources"
 )
 
 // sessionTTL is how long a browser session (and its cookie) lasts.
@@ -107,6 +109,25 @@ func (a *App) buildModules() error {
 		Audit:  auditSvc,
 		Policy: policySvc,
 		Log:    a.log,
+	})
+
+	// sources connect a project to a GitHub repository via the workspace's OAuth
+	// connection. The OAuth token is sealed by the same crypto box as secrets (reused
+	// here); the GitHub client is the outbound adapter (*github.Client satisfies the
+	// module's GitHubClient port). The OAuth callback URL is derived from PublicURL.
+	a.sources = sources.New(sources.Deps{
+		DB:     a.db,
+		Audit:  auditSvc,
+		Policy: policySvc,
+		Crypto: box,
+		GitHub: github.NewClient(github.Config{}),
+		OAuth: sources.OAuthConfig{
+			ClientID:     a.cfg.GitHubClientID,
+			ClientSecret: a.cfg.GitHubClientSecret,
+			Scopes:       a.cfg.GitHubScopes,
+			RedirectURL:  a.cfg.GitHubRedirectURL(),
+		},
+		Log: a.log,
 	})
 
 	mailerSvc := mailer.New(mailer.Config{

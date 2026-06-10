@@ -20,6 +20,7 @@ import (
 	"github.com/plorigo/plorigo/internal/projects"
 	"github.com/plorigo/plorigo/internal/secrets"
 	"github.com/plorigo/plorigo/internal/servers"
+	"github.com/plorigo/plorigo/internal/sources"
 )
 
 // App is the assembled control plane.
@@ -38,6 +39,7 @@ type App struct {
 	secrets      *secrets.Module
 	servers      *servers.Module
 	deployments  *deployments.Module
+	sources      *sources.Module
 }
 
 // New validates config, opens the DB pool, builds modules, and prepares the server.
