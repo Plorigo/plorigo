@@ -35,6 +35,14 @@ type Config struct {
 	SMTPUser  string
 	SMTPPass  string
 	EmailFrom string
+
+	// GitHub OAuth App credentials for importing repositories. Optional: when unset,
+	// the "Connect GitHub" flow is reported as not configured and the dashboard
+	// disables it. The OAuth callback is served at PublicURL + "/api/github/callback",
+	// which must match the OAuth App's registered authorization callback URL.
+	GitHubClientID     string
+	GitHubClientSecret string
+	GitHubScopes       string
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -67,7 +75,25 @@ func Load() Config {
 		SMTPUser:  os.Getenv("SMTP_USERNAME"),
 		SMTPPass:  os.Getenv("SMTP_PASSWORD"),
 		EmailFrom: envOr("EMAIL_FROM", "no-reply@plorigo.local"),
+
+		GitHubClientID:     os.Getenv("GITHUB_OAUTH_CLIENT_ID"),
+		GitHubClientSecret: os.Getenv("GITHUB_OAUTH_CLIENT_SECRET"),
+		// "repo" grants access to private repositories too; narrow to "public_repo" by
+		// overriding GITHUB_OAUTH_SCOPES if only public repos should be importable.
+		GitHubScopes: envOr("GITHUB_OAUTH_SCOPES", "repo"),
 	}
+}
+
+// GitHubConfigured reports whether GitHub OAuth credentials are present, gating the
+// "Connect GitHub" flow.
+func (c Config) GitHubConfigured() bool {
+	return c.GitHubClientID != "" && c.GitHubClientSecret != ""
+}
+
+// GitHubRedirectURL is the OAuth callback URL; it must match the OAuth App's registered
+// authorization callback URL.
+func (c Config) GitHubRedirectURL() string {
+	return strings.TrimRight(c.PublicURL, "/") + "/api/github/callback"
 }
 
 // Validate checks the requirements for running the control plane.
