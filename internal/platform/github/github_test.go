@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -228,4 +229,76 @@ func TestAuthorizeURL(t *testing.T) {
 			t.Errorf("AuthorizeURL %q missing %q", got, want)
 		}
 	}
+}
+
+func TestGetBranch(t *testing.T) {
+	t.Run("exists", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/repos/o/r/branches/main" {
+				t.Errorf("path = %q", r.URL.Path)
+			}
+			_, _ = w.Write([]byte(`{"name":"main"}`))
+		}))
+		defer ts.Close()
+		if err := newTestClient(ts).GetBranch(context.Background(), "tok", "o", "r", "main"); err != nil {
+			t.Fatalf("GetBranch: %v", err)
+		}
+	})
+	t.Run("missing maps to ErrNotFound", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer ts.Close()
+		if err := newTestClient(ts).GetBranch(context.Background(), "tok", "o", "r", "nope"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("got %v, want ErrNotFound", err)
+		}
+	})
+}
+
+func TestRevokeToken(t *testing.T) {
+	t.Run("success sends basic auth, DELETE, and the token", func(t *testing.T) {
+		var gotUser, gotPass, gotMethod, gotPath, gotBody string
+		var hadBasic bool
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotUser, gotPass, hadBasic = r.BasicAuth()
+			gotMethod = r.Method
+			gotPath = r.URL.Path
+			b, _ := io.ReadAll(r.Body)
+			gotBody = string(b)
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer ts.Close()
+		if err := newTestClient(ts).RevokeToken(context.Background(), "cid", "csec", "gho_x"); err != nil {
+			t.Fatalf("RevokeToken: %v", err)
+		}
+		if !hadBasic || gotUser != "cid" || gotPass != "csec" {
+			t.Errorf("basic auth = (%q,%q,%v), want (cid,csec,true)", gotUser, gotPass, hadBasic)
+		}
+		if gotMethod != http.MethodDelete || gotPath != "/applications/cid/token" {
+			t.Errorf("request = %s %s, want DELETE /applications/cid/token", gotMethod, gotPath)
+		}
+		if !strings.Contains(gotBody, "gho_x") {
+			t.Errorf("body = %q, want it to carry the token", gotBody)
+		}
+	})
+	t.Run("404 and 422 are treated as success", func(t *testing.T) {
+		for _, status := range []int{http.StatusNotFound, http.StatusUnprocessableEntity} {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			if err := newTestClient(ts).RevokeToken(context.Background(), "cid", "csec", "t"); err != nil {
+				t.Errorf("status %d: got %v, want nil", status, err)
+			}
+			ts.Close()
+		}
+	})
+	t.Run("server error is returned", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer ts.Close()
+		if err := newTestClient(ts).RevokeToken(context.Background(), "cid", "csec", "t"); err == nil {
+			t.Error("expected an error for a 500")
+		}
+	})
 }

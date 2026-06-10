@@ -95,4 +95,6 @@ type GitHubClient interface {
 	GetRepository(ctx context.Context, token, owner, repo string) (github.RepoInfo, error)
 	ListUserRepos(ctx context.Context, token string, opts github.ListReposOptions) ([]github.RepoInfo, error)
 	ListBranches(ctx context.Context, token, owner, repo string) ([]string, error)
+	GetBranch(ctx context.Context, token, owner, repo, branch string) error
+	RevokeToken(ctx context.Context, clientID, clientSecret, token string) error
 }

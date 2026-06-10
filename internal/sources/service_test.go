@@ -132,11 +132,14 @@ type fakeGitHub struct {
 	user            github.User
 	repoErr         error
 	branchErr       error
+	getBranchErr    error
 	reposErr        error
 	exchangeErr     error
 	userErr         error
+	revokeErr       error
 	authorizeState  string
 	listReposCalled bool
+	revokedTokens   []string
 }
 
 func (f *fakeGitHub) AuthorizeURL(_, _, _, state string) string {
@@ -158,6 +161,11 @@ func (f *fakeGitHub) ListUserRepos(_ context.Context, _ string, _ github.ListRep
 }
 func (f *fakeGitHub) ListBranches(_ context.Context, _, _, _ string) ([]string, error) {
 	return f.branches, f.branchErr
+}
+func (f *fakeGitHub) GetBranch(_ context.Context, _, _, _, _ string) error { return f.getBranchErr }
+func (f *fakeGitHub) RevokeToken(_ context.Context, _, _, token string) error {
+	f.revokedTokens = append(f.revokedTokens, token)
+	return f.revokeErr
 }
 
 type fakeTx struct{}
@@ -203,6 +211,7 @@ func TestBeginGitHubAuth_DeniedWhenUnauthorized(t *testing.T) {
 
 func TestCompleteGitHubAuth_SealsTokenAndAudits(t *testing.T) {
 	store := newFakeStore()
+	store.tokenOK = false // a clean first-time connection (no prior token to revoke)
 	gh := &fakeGitHub{token: github.Token{AccessToken: "gho_secret_abc", Scope: "repo"}, user: github.User{Login: "octocat", ID: 42}}
 	rec := &fakeRecorder{}
 	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
@@ -226,6 +235,40 @@ func TestCompleteGitHubAuth_SealsTokenAndAudits(t *testing.T) {
 	}
 	if !rec.called || rec.action != "source.github.connect" {
 		t.Errorf("audit not recorded: called=%v action=%q", rec.called, rec.action)
+	}
+	if len(gh.revokedTokens) != 0 {
+		t.Errorf("first connect must not revoke any token, revoked: %v", gh.revokedTokens)
+	}
+}
+
+func TestCompleteGitHubAuth_RevokesSupersededToken(t *testing.T) {
+	store := newFakeStore()
+	store.tokenCipher = []byte("sealed:old_token") // a prior connection exists
+	gh := &fakeGitHub{token: github.Token{AccessToken: "new_token", Scope: "repo"}, user: github.User{Login: "octocat", ID: 42}}
+	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
+
+	begin, _ := svc.BeginGitHubAuth(authedCtx(), BeginAuthInput{WorkspaceID: testWorkspaceID})
+	if _, err := svc.CompleteGitHubAuth(authedCtx(), CompleteAuthInput{Code: "code", State: gh.authorizeState, CookieState: begin.State}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if len(gh.revokedTokens) != 1 || gh.revokedTokens[0] != "old_token" {
+		t.Errorf("revoked = %v, want exactly [old_token]", gh.revokedTokens)
+	}
+}
+
+func TestCompleteGitHubAuth_SameTokenNotRevoked(t *testing.T) {
+	store := newFakeStore()
+	store.tokenCipher = []byte("sealed:same_token")
+	// GitHub returned the same token on re-auth — revoking it would kill the live one.
+	gh := &fakeGitHub{token: github.Token{AccessToken: "same_token", Scope: "repo"}, user: github.User{Login: "octocat", ID: 42}}
+	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
+
+	begin, _ := svc.BeginGitHubAuth(authedCtx(), BeginAuthInput{WorkspaceID: testWorkspaceID})
+	if _, err := svc.CompleteGitHubAuth(authedCtx(), CompleteAuthInput{Code: "code", State: gh.authorizeState, CookieState: begin.State}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if len(gh.revokedTokens) != 0 {
+		t.Errorf("an unchanged token must not be revoked, revoked: %v", gh.revokedTokens)
 	}
 }
 
@@ -298,6 +341,33 @@ func TestDisconnectGitHub_AuditsOnSuccess(t *testing.T) {
 	}
 	if !rec.called || rec.action != "source.github.disconnect" {
 		t.Errorf("audit not recorded: called=%v action=%q", rec.called, rec.action)
+	}
+}
+
+func TestDisconnectGitHub_RevokesToken(t *testing.T) {
+	store := newFakeStore()
+	store.tokenCipher = []byte("sealed:gho_live") // the token currently stored
+	gh := &fakeGitHub{}
+	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
+	if err := svc.DisconnectGitHub(authedCtx(), testWorkspaceID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(gh.revokedTokens) != 1 || gh.revokedTokens[0] != "gho_live" {
+		t.Errorf("revoked = %v, want exactly [gho_live]", gh.revokedTokens)
+	}
+}
+
+func TestDisconnectGitHub_RevokeFailureDoesNotFail(t *testing.T) {
+	store := newFakeStore()
+	rec := &fakeRecorder{}
+	gh := &fakeGitHub{revokeErr: errors.New("github down")}
+	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
+	// A failed revoke is logged and swallowed — the disconnect still succeeds and audits.
+	if err := svc.DisconnectGitHub(authedCtx(), testWorkspaceID); err != nil {
+		t.Fatalf("disconnect must succeed even if revoke fails: %v", err)
+	}
+	if !rec.called {
+		t.Error("disconnect should still audit even when revoke fails")
 	}
 }
 
@@ -378,7 +448,7 @@ func TestConnectRepository_Success(t *testing.T) {
 
 func TestConnectRepository_BranchNotFound(t *testing.T) {
 	store := newFakeStore()
-	gh := &fakeGitHub{repo: github.RepoInfo{Owner: "o", Name: "r", FullName: "o/r"}, branches: []string{"main"}}
+	gh := &fakeGitHub{repo: github.RepoInfo{Owner: "o", Name: "r", FullName: "o/r"}, getBranchErr: github.ErrNotFound}
 	rec := &fakeRecorder{}
 	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
 	_, err := svc.ConnectRepository(authedCtx(), ConnectRepoInput{ProjectID: testProjectID, Owner: "o", Repo: "r", Branch: "nope"})

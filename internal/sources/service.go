@@ -122,6 +122,10 @@ func (s *service) CompleteGitHubAuth(ctx context.Context, in CompleteAuthInput) 
 	if err != nil {
 		return CompleteAuthResult{}, mapGitHubErr(err)
 	}
+	// If this workspace was already connected, capture the previous token so it can be
+	// revoked after the new one is stored (the upsert would otherwise orphan it, and the
+	// old token would stay valid at GitHub).
+	oldToken, _ := s.openConnectionToken(ctx, st.WorkspaceID)
 	sealed, err := s.box.Seal([]byte(token.AccessToken))
 	if err != nil {
 		return CompleteAuthResult{}, problem.Internalf(err, "seal github token")
@@ -148,6 +152,10 @@ func (s *service) CompleteGitHubAuth(ctx context.Context, in CompleteAuthInput) 
 	})
 	if err != nil {
 		return CompleteAuthResult{}, mapErr(err, "connect github")
+	}
+	// Revoke the superseded token, unless GitHub returned the same one on re-auth.
+	if oldToken != "" && oldToken != token.AccessToken {
+		s.revokeBestEffort(ctx, oldToken)
 	}
 	// Log the account login and never the token — the connection is write-only.
 	s.log.Info("github connected", "workspace_id", st.WorkspaceID, "github_login", user.Login, "actor", caller.UserID)
@@ -192,6 +200,9 @@ func (s *service) DisconnectGitHub(ctx context.Context, workspaceID string) erro
 	if count > 0 {
 		return problem.InvalidInput("disconnect the %d project(s) using this GitHub connection first", count)
 	}
+	// Capture the current token before deleting the row so we can revoke it at GitHub —
+	// OAuth-App tokens don't expire, so "disconnect" must cut off access, not just forget.
+	oldToken, _ := s.openConnectionToken(ctx, workspaceID)
 	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
 		deletedID, deleted, txErr := s.store.DeleteConnection(ctx, tx, workspaceID, provider)
 		if txErr != nil {
@@ -205,6 +216,7 @@ func (s *service) DisconnectGitHub(ctx context.Context, workspaceID string) erro
 	if err != nil {
 		return mapErr(err, "disconnect github")
 	}
+	s.revokeBestEffort(ctx, oldToken)
 	s.log.Info("github disconnected", "workspace_id", workspaceID, "actor", caller.UserID)
 	return nil
 }
@@ -300,12 +312,14 @@ func (s *service) ConnectRepository(ctx context.Context, in ConnectRepoInput) (S
 	if err != nil {
 		return Source{}, mapGitHubErr(err)
 	}
-	branches, err := s.gh.ListBranches(ctx, token, info.Owner, info.Name)
-	if err != nil {
+	// Verify the chosen branch directly — the repo is known to exist (GetRepository
+	// above), so a NotFound here means the branch, not the repo. A direct lookup avoids
+	// the capped branch-list page rejecting a valid branch beyond the first 100.
+	if err := s.gh.GetBranch(ctx, token, info.Owner, info.Name, branch); err != nil {
+		if errors.Is(err, github.ErrNotFound) {
+			return Source{}, problem.InvalidInput("branch %q was not found in %s", branch, info.FullName)
+		}
 		return Source{}, mapGitHubErr(err)
-	}
-	if !contains(branches, branch) {
-		return Source{}, problem.InvalidInput("branch %q was not found in %s", branch, info.FullName)
 	}
 
 	var saved Source
@@ -404,6 +418,19 @@ func (s *service) DisconnectRepository(ctx context.Context, projectID string) er
 	return nil
 }
 
+// revokeBestEffort revokes a token at the provider, logging and swallowing failures —
+// the local record is the source of truth, so a failed revoke must not fail the action
+// that already removed or replaced the token. No-ops on an empty token or unconfigured
+// OAuth.
+func (s *service) revokeBestEffort(ctx context.Context, token string) {
+	if token == "" || !s.oauth.Configured() {
+		return
+	}
+	if err := s.gh.RevokeToken(ctx, s.oauth.ClientID, s.oauth.ClientSecret, token); err != nil {
+		s.log.Warn("failed to revoke github token at the provider (the local connection is already updated)", "error", err)
+	}
+}
+
 // openConnectionToken loads and opens the workspace's sealed token for a server-side
 // provider call. The plaintext stays in memory for the call only and is never returned
 // to a caller.
@@ -490,13 +517,4 @@ func newNonce() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-func contains(items []string, want string) bool {
-	for _, it := range items {
-		if it == want {
-			return true
-		}
-	}
-	return false
 }

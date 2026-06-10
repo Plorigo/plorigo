@@ -10,6 +10,7 @@
 package github
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -210,6 +211,47 @@ func (c *Client) ListBranches(ctx context.Context, token, owner, repo string) ([
 		names = append(names, b.Name)
 	}
 	return names, nil
+}
+
+// GetBranch reports whether a branch exists: nil if it does, ErrNotFound if it does not.
+// It validates a chosen branch without paging the full branch list (which is capped).
+func (c *Client) GetBranch(ctx context.Context, token, owner, repo, branch string) error {
+	var ignore struct {
+		Name string `json:"name"`
+	}
+	path := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/branches/" + url.PathEscape(branch)
+	return c.getJSON(ctx, token, path, &ignore)
+}
+
+// RevokeToken revokes a single OAuth access token for this app at GitHub (the app
+// authorization is otherwise left intact). It authenticates with the app's client
+// credentials, not the token. Best-effort by contract: callers log and continue on
+// failure, since the local record is the source of truth.
+func (c *Client) RevokeToken(ctx context.Context, clientID, clientSecret, token string) error {
+	body, err := json.Marshal(map[string]string{"access_token": token})
+	if err != nil {
+		return fmt.Errorf("github: marshal revoke body: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete,
+		c.apiBaseURL+"/applications/"+url.PathEscape(clientID)+"/token", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("github: build revoke request: %w", err)
+	}
+	req.SetBasicAuth(clientID, clientSecret)
+	req.Header.Set("Accept", acceptJSON)
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("github: revoke token: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	// 204 = revoked. 404/422 mean GitHub no longer knows this token (already invalid),
+	// which is the desired end state, so treat them as success too.
+	if resp.StatusCode/100 != 2 && resp.StatusCode != http.StatusNotFound && resp.StatusCode != http.StatusUnprocessableEntity {
+		return classify(resp)
+	}
+	return nil
 }
 
 // repoJSON is the wire shape of a GitHub repository; mapped to RepoInfo.
