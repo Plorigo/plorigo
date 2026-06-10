@@ -41,8 +41,8 @@ agree to uphold it. Report unacceptable behavior to **i.babirli@outlook.com**.
 
 ## Development setup
 
-> 🚧 As the codebase lands, exact commands will be documented in `docs/development.md`.
-> The toolchain the project is built on:
+> The full setup and verification loop lives in **[docs/development.md](./docs/development.md)** —
+> this is a quick overview. The toolchain the project is built on:
 
 **Backend / agent / CLI (Go)**
 
@@ -67,14 +67,15 @@ A typical loop will look like:
 # clone your fork
 git clone git@github.com:<you>/plorigo.git && cd plorigo
 
-# bring up local dependencies (Postgres, etc.)
-docker compose -f deploy/docker-compose.yml up -d   # (coming soon)
+# install the toolchain + deps, then generate the protobuf/SQL clients
+make setup && make generate
 
-# backend
-go run ./cmd/controlplane
+# bring up Postgres, then run the control plane (dev mode for http://localhost)
+docker compose -f deploy/docker-compose.yml up -d postgres
+make dev
 
-# dashboard
-cd apps/web && pnpm install && pnpm dev
+# dashboard, in another terminal
+pnpm --dir apps/web dev
 ```
 
 ## Project structure
@@ -113,7 +114,7 @@ and [`docs/conventions.md`](./docs/conventions.md) covers formatting, generated 
 ## Testing
 
 - Add or update tests for the behavior you change. Bug fixes should come with a regression test.
-- Run the relevant suites locally before pushing (`go test ./...`, `pnpm test`).
+- Run the relevant suites locally before pushing (`make test`, `make web-check`).
 - For changes to the **deployment, agent, secrets, or backup** paths, describe how you tested
   against a real Docker environment in your PR — these paths affect users' production systems.
 
