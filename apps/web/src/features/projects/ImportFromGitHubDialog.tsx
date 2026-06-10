@@ -221,6 +221,11 @@ export function ImportFromGitHubDialog({
                     </option>
                   ))}
                 </Select>
+                {(repos.data?.length ?? 0) >= 100 && (
+                  <p className="text-xs text-muted-foreground">
+                    Showing the 100 most recently updated repositories. Use the filter to find others.
+                  </p>
+                )}
               </div>
             </Field>
 
