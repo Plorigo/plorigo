@@ -40,11 +40,24 @@ make generate   # generate protobuf/ConnectRPC clients (buf) and the SQL layer (
 > **Run `make generate` before you build or test.** The generated Go (`proto/gen/`) and
 > TypeScript (`apps/web/src/gen/`) clients are git-ignored, so a fresh checkout won't compile
 > until you generate them. Re-run `make generate` whenever you change a `.proto` or a `.sql` file.
+> If you forget, `make build`, `make test`, `make lint`, and the dashboard targets stop with that
+> same instruction instead of a confusing compiler error.
+>
+> The sqlc output (`internal/platform/database/db/`) is the exception — it **is** committed. After
+> changing a query in `db/query/` or a migration, run `make generate` and commit the regenerated
+> files; CI verifies they're in sync and fails the build if they drift.
 
 ## The verification loop
 
-These are the checks CI runs, and the ones to run locally before pushing. None of them need
-Docker or a database. Run `make setup` once and `make generate` first (see above), then:
+These are the same checks CI runs, in the same order, and the ones to run locally before pushing.
+None of them need Docker or a database. After `make setup` (once), the quickest path is a single
+command:
+
+```bash
+make verify   # regenerates, then runs build → test → lint (Go) and the dashboard lint + typecheck
+```
+
+To run the steps individually instead, `make generate` first (see above), then:
 
 **Backend (Go + proto)**
 

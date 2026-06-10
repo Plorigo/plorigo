@@ -24,7 +24,7 @@ SEED_PASSWORD ?= devpassword
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup generate proto sqlc build build-embed web web-check dev seed test lint fmt tidy migrate
+.PHONY: help setup generate proto sqlc check-generated verify build build-embed web web-check dev seed test lint fmt tidy migrate
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -43,16 +43,33 @@ proto: ## Generate Go + TS clients from protobuf
 sqlc: ## Generate the type-safe DB package
 	go tool sqlc generate
 
-build: ## Build all Go binaries
+# proto/gen (Go) and apps/web/src/gen (TS) are git-ignored and only exist after
+# `make generate`. Without them, `go build`/`tsc` fail with a confusing "package not
+# found" (the Go loader even suggests `go get`, which won't help). Fail fast with the
+# real fix instead. The committed sqlc output is always present, so it isn't checked here.
+check-generated: ## Verify generated clients exist (run `make generate` if this fails)
+	@if [ ! -d proto/gen ] || [ -z "$$(ls -A proto/gen 2>/dev/null)" ] || \
+	    [ ! -d apps/web/src/gen ] || [ -z "$$(ls -A apps/web/src/gen 2>/dev/null)" ]; then \
+		echo "error: generated clients are missing (proto/gen and/or apps/web/src/gen)." >&2; \
+		echo "       These are git-ignored and generated from the .proto sources." >&2; \
+		echo "       Run 'make generate' first. See docs/development.md." >&2; \
+		exit 1; \
+	fi
+
+# Run the same checks CI runs, in the same order, with one command. Regenerates first
+# so a stale or missing client never trips you up mid-loop.
+verify: generate build test lint web-check ## Run the full CI-order check loop (recommended before pushing)
+
+build: check-generated ## Build all Go binaries
 	go build ./...
 
 # Run pnpm from inside apps/web (not `pnpm --dir`) so corepack resolves the pinned
 # pnpm@9.15.0 from apps/web/package.json. `--dir` keeps the shell CWD at the repo root,
 # where corepack falls back to its default major and mismatches a 9.x-built node_modules.
-web: ## Build the dashboard
+web: check-generated ## Build the dashboard
 	cd apps/web && pnpm build
 
-web-check: ## Lint and typecheck the dashboard (mirrors CI's web steps)
+web-check: check-generated ## Lint and typecheck the dashboard (mirrors CI's web steps)
 	cd apps/web && pnpm lint
 	cd apps/web && pnpm typecheck
 
@@ -62,7 +79,7 @@ build-embed: web ## Build the single binary with the dashboard embedded (bin/con
 	mkdir -p bin
 	go build -tags embed_web -o bin/controlplane ./cmd/controlplane
 
-dev: ## Run the control plane in dev mode (expects `pnpm --dir apps/web dev` in another terminal)
+dev: check-generated ## Run the control plane in dev mode (expects `pnpm --dir apps/web dev` in another terminal)
 	PLORIGO_ENV=dev PLORIGO_PUBLIC_URL=http://localhost:8080 go run ./cmd/controlplane
 
 seed: ## Create/refresh a LOCAL dev login user (dev only). Override SEED_EMAIL / SEED_PASSWORD.
@@ -70,10 +87,10 @@ seed: ## Create/refresh a LOCAL dev login user (dev only). Override SEED_EMAIL /
 		PLORIGO_SEED_EMAIL="$(SEED_EMAIL)" PLORIGO_SEED_PASSWORD="$(SEED_PASSWORD)" \
 		go run ./cmd/seed
 
-test: ## Run Go tests
+test: check-generated ## Run Go tests
 	go test ./...
 
-lint: ## Run golangci-lint (incl. depguard module-boundary rules) and buf lint
+lint: check-generated ## Run golangci-lint (incl. depguard module-boundary rules) and buf lint
 	go tool golangci-lint run
 	cd proto && go tool buf lint
 
