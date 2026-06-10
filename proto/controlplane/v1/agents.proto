@@ -9,9 +9,20 @@ message Agent {
   string server_id = 2;
   string workspace_id = 3;
   string agent_version = 4;
-  string status = 5; // "awaiting" | "online" | "offline"
+  string status = 5; // liveness: "awaiting" | "online" | "offline"
   string last_seen_at = 6; // RFC 3339; empty if the agent has never connected
   string created_at = 7; // RFC 3339
+
+  // Server readiness for deployment, derived (not stored) from liveness + the reported
+  // compatibility facts below. readiness is "ready" | "degraded" | "unavailable";
+  // readiness_reason is a plain-English explanation (empty when ready) a user can act on
+  // without SSHing in. The raw facts are kept available for progressive disclosure.
+  string readiness = 8;
+  string readiness_reason = 9;
+  bool docker_available = 10;
+  string docker_version = 11; // Docker daemon version; empty when unknown/unavailable
+  string os = 12; // host GOOS; empty if the agent predates health reporting
+  string arch = 13; // host GOARCH
 }
 
 message CreateRegistrationTokenRequest {

@@ -71,7 +71,7 @@ export function statusIntent(status: string): Intent {
   if (["degraded", "needs restore test", "warning", "warn"].includes(status)) {
     return "warning";
   }
-  if (["failed", "offline", "attention", "error", "danger"].includes(status)) {
+  if (["failed", "offline", "unavailable", "attention", "error", "danger"].includes(status)) {
     return "danger";
   }
   return "neutral";

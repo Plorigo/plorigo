@@ -34,15 +34,31 @@ const (
 	StatusOffline  = "offline"
 )
 
-// Agent is the program registered to a server. The control plane stores its public
-// key and derives liveness from the last heartbeat.
+// Server readiness states, derived (never stored) from liveness plus the agent's reported
+// compatibility facts. This is what the dashboard leads with on a server card: whether the
+// server can safely run a deployment.
+const (
+	ReadinessReady       = "ready"       // online and Docker is available
+	ReadinessDegraded    = "degraded"    // online but Docker is unavailable, or facts unknown
+	ReadinessUnavailable = "unavailable" // offline or never connected
+)
+
+// Agent is the program registered to a server. The control plane stores its public key,
+// derives liveness from the last heartbeat, and records the compatibility facts the agent
+// reports each beat.
 type Agent struct {
 	ID           string
 	ServerID     string
 	WorkspaceID  string
 	AgentVersion string
-	LastSeenAt   *time.Time
-	CreatedAt    time.Time
+	// Reported compatibility facts (see HeartbeatInput). DockerAvailable is a tri-state:
+	// nil means the agent hasn't reported health yet (or predates the feature).
+	DockerAvailable *bool
+	DockerVersion   string
+	OS              string
+	Arch            string
+	LastSeenAt      *time.Time
+	CreatedAt       time.Time
 }
 
 // Status derives the agent's liveness at time now from its last heartbeat.
@@ -54,6 +70,27 @@ func (a Agent) Status(now time.Time) string {
 		return StatusOnline
 	}
 	return StatusOffline
+}
+
+// Readiness derives whether the server can safely run a deployment at time now, plus a
+// plain-English reason a user can act on without SSHing in. It composes liveness with the
+// reported Docker facts; like Status it is derived, never stored. Offline/awaiting are
+// single-sourced through Status, so liveness and readiness can never disagree.
+func (a Agent) Readiness(now time.Time) (state, reason string) {
+	switch a.Status(now) {
+	case StatusAwaiting:
+		return ReadinessUnavailable, "Waiting for the agent to connect. Run the install command on the server."
+	case StatusOffline:
+		return ReadinessUnavailable, "Agent offline — no heartbeat in over 90 seconds. Check the machine is on and the plorigo-agent service is running."
+	}
+	switch {
+	case a.DockerAvailable == nil:
+		return ReadinessDegraded, "Compatibility checks pending — update the agent to the latest version so it reports Docker and host readiness."
+	case !*a.DockerAvailable:
+		return ReadinessDegraded, "Docker isn't reachable on this server. Install or start Docker; the agent recovers automatically once it's running."
+	default:
+		return ReadinessReady, ""
+	}
 }
 
 // RegistrationToken is a one-time credential authorizing a single registration onto a
@@ -77,11 +114,18 @@ type Registered struct {
 	Credential string // durable agent credential, returned once
 }
 
-// HeartbeatInput is what an agent presents on each heartbeat.
+// HeartbeatInput is what an agent presents on each heartbeat: its identity plus the
+// compatibility facts it observed. DockerAvailable is nil when the agent did not report
+// health (it predates the feature), which the control plane renders as "checks pending"
+// rather than as "Docker down".
 type HeartbeatInput struct {
-	AgentID      string
-	Credential   string
-	AgentVersion string
+	AgentID         string
+	Credential      string
+	AgentVersion    string
+	DockerAvailable *bool
+	DockerVersion   string
+	OS              string
+	Arch            string
 }
 
 // HeartbeatResult tells the agent when to send its next heartbeat.

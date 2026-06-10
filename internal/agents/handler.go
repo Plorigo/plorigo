@@ -74,9 +74,13 @@ func (h *gatewayHandler) Register(ctx context.Context, req *connect.Request[agen
 
 func (h *gatewayHandler) Heartbeat(ctx context.Context, req *connect.Request[agentv1.HeartbeatRequest]) (*connect.Response[agentv1.HeartbeatResponse], error) {
 	res, err := h.svc.Heartbeat(ctx, HeartbeatInput{
-		AgentID:      req.Msg.GetAgentId(),
-		Credential:   req.Msg.GetCredential(),
-		AgentVersion: req.Msg.GetAgentVersion(),
+		AgentID:         req.Msg.GetAgentId(),
+		Credential:      req.Msg.GetCredential(),
+		AgentVersion:    req.Msg.GetAgentVersion(),
+		DockerAvailable: reportedDockerAvailable(req.Msg),
+		DockerVersion:   clampFact(req.Msg.GetDockerVersion()),
+		OS:              clampFact(req.Msg.GetOs()),
+		Arch:            clampFact(req.Msg.GetArch()),
 	})
 	if err != nil {
 		return nil, problem.ToConnect(err)
@@ -84,19 +88,55 @@ func (h *gatewayHandler) Heartbeat(ctx context.Context, req *connect.Request[age
 	return connect.NewResponse(&agentv1.HeartbeatResponse{NextIntervalSeconds: int64(res.NextInterval.Seconds())}), nil
 }
 
+// maxFactLen caps an agent-reported compatibility fact before it is stored or shown. The
+// agent gateway is authenticated only by the credential carried in the request, so these
+// strings are untrusted; bounding them keeps a misbehaving agent from writing an unbounded
+// value into a text column. Real values (a semver, a GOOS, a GOARCH) are far shorter.
+const maxFactLen = 64
+
+func clampFact(s string) string {
+	if len(s) <= maxFactLen {
+		return s
+	}
+	r := []rune(s)
+	if len(r) > maxFactLen {
+		r = r[:maxFactLen]
+	}
+	return string(r)
+}
+
+// reportedDockerAvailable distinguishes "the agent reported Docker is down" from "the
+// agent did not report health at all". A health-reporting agent always sets os
+// (runtime.GOOS, never empty), so an empty os means the facts are absent and Docker
+// availability is unknown (nil) — rendered as "checks pending", not as a false alarm.
+func reportedDockerAvailable(m *agentv1.HeartbeatRequest) *bool {
+	if m.GetOs() == "" {
+		return nil
+	}
+	v := m.GetDockerAvailable()
+	return &v
+}
+
 func toProto(a Agent, now time.Time) *controlplanev1.Agent {
 	lastSeen := ""
 	if a.LastSeenAt != nil {
 		lastSeen = a.LastSeenAt.UTC().Format(time.RFC3339)
 	}
+	readiness, reason := a.Readiness(now)
 	return &controlplanev1.Agent{
-		Id:           a.ID,
-		ServerId:     a.ServerID,
-		WorkspaceId:  a.WorkspaceID,
-		AgentVersion: a.AgentVersion,
-		Status:       a.Status(now),
-		LastSeenAt:   lastSeen,
-		CreatedAt:    a.CreatedAt.UTC().Format(time.RFC3339),
+		Id:              a.ID,
+		ServerId:        a.ServerID,
+		WorkspaceId:     a.WorkspaceID,
+		AgentVersion:    a.AgentVersion,
+		Status:          a.Status(now),
+		Readiness:       readiness,
+		ReadinessReason: reason,
+		DockerAvailable: a.DockerAvailable != nil && *a.DockerAvailable,
+		DockerVersion:   a.DockerVersion,
+		Os:              a.OS,
+		Arch:            a.Arch,
+		LastSeenAt:      lastSeen,
+		CreatedAt:       a.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 

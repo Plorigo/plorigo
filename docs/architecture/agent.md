@@ -64,6 +64,14 @@ The first slice of this model is implemented: an agent can **register and report
   the request, validated by the `agents` service.
 - The agent then calls `agent.v1.AgentService/Heartbeat` on an interval. Liveness
   (online / offline / awaiting) is **derived from the last heartbeat**, not stored.
+- Each heartbeat also carries a few **compatibility facts** — whether the Docker daemon is
+  reachable, its version, and the host's OS/arch — recorded on the agent row. From these
+  plus liveness the control plane **derives a readiness** signal (`ready` / `degraded` /
+  `unavailable`, also never stored) with a plain-English reason, so a user can tell whether a
+  server can actually run a deployment without SSHing in. The facts expose nothing sensitive;
+  an agent that predates them reads as "checks pending" rather than as a false alarm. The
+  richer readiness model (disk / memory / CPU, Caddy, ports, outbound connectivity, and
+  setup/blocked states) is a later slice — see [ROADMAP.md](../../ROADMAP.md).
 - The stored public key is what the **next** step verifies signed jobs against; this slice
   establishes it without dispatching jobs yet.
 

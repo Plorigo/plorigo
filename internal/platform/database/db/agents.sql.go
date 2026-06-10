@@ -91,35 +91,60 @@ func (q *Queries) GetServerWorkspace(ctx context.Context, id string) (string, er
 
 const heartbeatAgent = `-- name: HeartbeatAgent :one
 UPDATE agents
-SET last_seen_at = now(), agent_version = $2
+SET last_seen_at     = now(),
+    agent_version    = $2,
+    docker_available = $3,
+    docker_version   = $4,
+    os               = $5,
+    arch             = $6
 WHERE credential_hash = $1
-RETURNING id, server_id, workspace_id, agent_version, last_seen_at, created_at
+RETURNING id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, last_seen_at, created_at
 `
 
 type HeartbeatAgentParams struct {
-	CredentialHash []byte
-	AgentVersion   string
+	CredentialHash  []byte
+	AgentVersion    string
+	DockerAvailable *bool
+	DockerVersion   string
+	Os              string
+	Arch            string
 }
 
 type HeartbeatAgentRow struct {
-	ID           string
-	ServerID     string
-	WorkspaceID  string
-	AgentVersion string
-	LastSeenAt   *time.Time
-	CreatedAt    time.Time
+	ID              string
+	ServerID        string
+	WorkspaceID     string
+	AgentVersion    string
+	DockerAvailable *bool
+	DockerVersion   string
+	Os              string
+	Arch            string
+	LastSeenAt      *time.Time
+	CreatedAt       time.Time
 }
 
-// HeartbeatAgent validates the durable credential by its hash AND records liveness in
-// one statement (see UseAPIToken in auth.sql). Returns the agent when the hash matches.
+// HeartbeatAgent validates the durable credential by its hash AND records liveness plus
+// the latest compatibility facts in one statement (see UseAPIToken in auth.sql). Returns
+// the agent when the hash matches.
 func (q *Queries) HeartbeatAgent(ctx context.Context, arg HeartbeatAgentParams) (HeartbeatAgentRow, error) {
-	row := q.db.QueryRow(ctx, heartbeatAgent, arg.CredentialHash, arg.AgentVersion)
+	row := q.db.QueryRow(ctx, heartbeatAgent,
+		arg.CredentialHash,
+		arg.AgentVersion,
+		arg.DockerAvailable,
+		arg.DockerVersion,
+		arg.Os,
+		arg.Arch,
+	)
 	var i HeartbeatAgentRow
 	err := row.Scan(
 		&i.ID,
 		&i.ServerID,
 		&i.WorkspaceID,
 		&i.AgentVersion,
+		&i.DockerAvailable,
+		&i.DockerVersion,
+		&i.Os,
+		&i.Arch,
 		&i.LastSeenAt,
 		&i.CreatedAt,
 	)
@@ -127,19 +152,23 @@ func (q *Queries) HeartbeatAgent(ctx context.Context, arg HeartbeatAgentParams) 
 }
 
 const listAgentsByWorkspace = `-- name: ListAgentsByWorkspace :many
-SELECT id, server_id, workspace_id, agent_version, last_seen_at, created_at
+SELECT id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, last_seen_at, created_at
 FROM agents
 WHERE workspace_id = $1
 ORDER BY created_at DESC
 `
 
 type ListAgentsByWorkspaceRow struct {
-	ID           string
-	ServerID     string
-	WorkspaceID  string
-	AgentVersion string
-	LastSeenAt   *time.Time
-	CreatedAt    time.Time
+	ID              string
+	ServerID        string
+	WorkspaceID     string
+	AgentVersion    string
+	DockerAvailable *bool
+	DockerVersion   string
+	Os              string
+	Arch            string
+	LastSeenAt      *time.Time
+	CreatedAt       time.Time
 }
 
 func (q *Queries) ListAgentsByWorkspace(ctx context.Context, workspaceID string) ([]ListAgentsByWorkspaceRow, error) {
@@ -156,6 +185,10 @@ func (q *Queries) ListAgentsByWorkspace(ctx context.Context, workspaceID string)
 			&i.ServerID,
 			&i.WorkspaceID,
 			&i.AgentVersion,
+			&i.DockerAvailable,
+			&i.DockerVersion,
+			&i.Os,
+			&i.Arch,
 			&i.LastSeenAt,
 			&i.CreatedAt,
 		); err != nil {
@@ -173,11 +206,15 @@ const upsertAgent = `-- name: UpsertAgent :one
 INSERT INTO agents (server_id, workspace_id, public_key, credential_hash, agent_version)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (server_id) DO UPDATE
-    SET public_key      = EXCLUDED.public_key,
-        credential_hash = EXCLUDED.credential_hash,
-        agent_version   = EXCLUDED.agent_version,
-        last_seen_at    = NULL
-RETURNING id, server_id, workspace_id, agent_version, last_seen_at, created_at
+    SET public_key       = EXCLUDED.public_key,
+        credential_hash  = EXCLUDED.credential_hash,
+        agent_version    = EXCLUDED.agent_version,
+        last_seen_at     = NULL,
+        docker_available = NULL,
+        docker_version   = '',
+        os               = '',
+        arch             = ''
+RETURNING id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, last_seen_at, created_at
 `
 
 type UpsertAgentParams struct {
@@ -189,16 +226,21 @@ type UpsertAgentParams struct {
 }
 
 type UpsertAgentRow struct {
-	ID           string
-	ServerID     string
-	WorkspaceID  string
-	AgentVersion string
-	LastSeenAt   *time.Time
-	CreatedAt    time.Time
+	ID              string
+	ServerID        string
+	WorkspaceID     string
+	AgentVersion    string
+	DockerAvailable *bool
+	DockerVersion   string
+	Os              string
+	Arch            string
+	LastSeenAt      *time.Time
+	CreatedAt       time.Time
 }
 
 // UpsertAgent registers (or re-registers) the single agent for a server. A reinstall
-// rotates the public key and credential and clears the last heartbeat.
+// rotates the public key and credential and clears the last heartbeat and reported health
+// facts, so a re-connected server starts from "unknown" until its first beat.
 func (q *Queries) UpsertAgent(ctx context.Context, arg UpsertAgentParams) (UpsertAgentRow, error) {
 	row := q.db.QueryRow(ctx, upsertAgent,
 		arg.ServerID,
@@ -213,6 +255,10 @@ func (q *Queries) UpsertAgent(ctx context.Context, arg UpsertAgentParams) (Upser
 		&i.ServerID,
 		&i.WorkspaceID,
 		&i.AgentVersion,
+		&i.DockerAvailable,
+		&i.DockerVersion,
+		&i.Os,
+		&i.Arch,
 		&i.LastSeenAt,
 		&i.CreatedAt,
 	)

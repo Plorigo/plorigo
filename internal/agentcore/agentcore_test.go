@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -57,7 +58,7 @@ func TestHeartbeatLoop_SelfHealsWithProvidedToken(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	var out strings.Builder
-	go func() { done <- heartbeatLoop(ctx, &out, client, ident, opts) }()
+	go func() { done <- heartbeatLoop(ctx, &out, client, ident, nil, opts) }()
 
 	select {
 	case <-client.healed:
@@ -94,7 +95,7 @@ func TestHeartbeatLoop_NoTokenKeepsBackingOff(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	if err := heartbeatLoop(ctx, io.Discard, client, ident, Options{HeartbeatInterval: time.Millisecond}); err != nil {
+	if err := heartbeatLoop(ctx, io.Discard, client, ident, nil, Options{HeartbeatInterval: time.Millisecond}); err != nil {
 		t.Fatalf("heartbeatLoop returned error: %v", err)
 	}
 	if calls := client.registerCalls.Load(); calls != 0 {
@@ -103,6 +104,51 @@ func TestHeartbeatLoop_NoTokenKeepsBackingOff(t *testing.T) {
 	if got := ident.get(); got.Credential != "plag_stale" {
 		t.Errorf("identity = %+v, want unchanged", got)
 	}
+}
+
+// recordingClient accepts any heartbeat and hands the request to a test so it can assert
+// what the agent put on the wire.
+type recordingClient struct {
+	got chan *agentv1.HeartbeatRequest
+}
+
+func (c *recordingClient) Register(_ context.Context, _ *connect.Request[agentv1.RegisterRequest]) (*connect.Response[agentv1.RegisterResponse], error) {
+	return nil, errors.New("register is not exercised by this test")
+}
+
+func (c *recordingClient) Heartbeat(_ context.Context, req *connect.Request[agentv1.HeartbeatRequest]) (*connect.Response[agentv1.HeartbeatResponse], error) {
+	select {
+	case c.got <- req.Msg:
+	default:
+	}
+	return connect.NewResponse(&agentv1.HeartbeatResponse{}), nil
+}
+
+func TestHeartbeatLoop_ReportsHealthFacts(t *testing.T) {
+	client := &recordingClient{got: make(chan *agentv1.HeartbeatRequest, 1)}
+	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- heartbeatLoop(ctx, io.Discard, client, ident, stubProber{version: "27.1.1"}, Options{HeartbeatInterval: time.Millisecond})
+	}()
+
+	select {
+	case msg := <-client.got:
+		if !msg.GetDockerAvailable() || msg.GetDockerVersion() != "27.1.1" {
+			t.Errorf("docker facts = (%v, %q), want (true, 27.1.1)", msg.GetDockerAvailable(), msg.GetDockerVersion())
+		}
+		if msg.GetOs() != runtime.GOOS || msg.GetArch() != runtime.GOARCH {
+			t.Errorf("os/arch = %q/%q, want %q/%q", msg.GetOs(), msg.GetArch(), runtime.GOOS, runtime.GOARCH)
+		}
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("no heartbeat observed within the timeout")
+	}
+	cancel()
+	<-done
 }
 
 // --- identity persistence & resume ------------------------------------------
