@@ -1,12 +1,12 @@
 import { useState, type FormEvent } from "react";
 import { ConnectError } from "@connectrpc/connect";
 import { useQueryClient } from "@tanstack/react-query";
-import { Cpu, Server, TerminalSquare, Trash2 } from "lucide-react";
+import { Container, Cpu, Server, TerminalSquare, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageHeader } from "@/components/PageHeader";
-import { Button, EmptyState, Input, Panel, Skeleton, StatusDot } from "@/components/ui";
+import { Badge, Button, EmptyState, Input, Panel, Skeleton } from "@/components/ui";
 import {
   Dialog,
   DialogContent,
@@ -21,7 +21,7 @@ import { errorMessage, percentFromLabel } from "@/lib/format";
 import { serverHealth } from "@/lib/mockDashboard";
 import { agentClient, serverClient } from "@/lib/clients";
 import { useAgents, useServers } from "@/lib/queries";
-import { intentDot, statusTone, type Intent } from "@/lib/status";
+import { intentDot, intentSoft, statusIntent, statusTone, type Intent } from "@/lib/status";
 import { useWorkspaceStore } from "@/store";
 
 interface ServerRow {
@@ -32,6 +32,13 @@ interface ServerRow {
   memory: string;
   disk: string;
   status: string;
+  // Deployment readiness derived by the control plane (ready | degraded | unavailable),
+  // its plain-English reason, and the raw compatibility facts behind it.
+  readiness?: string;
+  readinessReason?: string;
+  dockerVersion?: string;
+  os?: string;
+  arch?: string;
   version?: string;
   lastSeen?: string;
 }
@@ -67,6 +74,11 @@ export function ServersPage() {
       memory: "not reported",
       disk: "not reported",
       status: agent ? agent.status : "no agent",
+      readiness: agent?.readiness,
+      readinessReason: agent?.readinessReason,
+      dockerVersion: agent?.dockerVersion,
+      os: agent?.os,
+      arch: agent?.arch,
       version: agent?.agentVersion,
       lastSeen: agent?.lastSeenAt,
     };
@@ -111,7 +123,7 @@ export function ServersPage() {
     <div className="space-y-6">
       <PageHeader
         title="Servers"
-        description="The machines you own and connect. Connect a server to install the agent; it reports online once it's running. Runtime metrics are on the way."
+        description="The machines you own and connect. Connect a server to install the agent; each card shows whether it's ready to deploy, with Docker and host details. Runtime metrics are on the way."
         actions={
           <Button size="sm" disabled={!workspaceId} onClick={() => setConnectOpen(true)}>
             <Server className="h-4 w-4" aria-hidden="true" />
@@ -149,13 +161,31 @@ export function ServersPage() {
                   <p className="truncate text-sm font-semibold text-foreground">{server.name}</p>
                   <p className="mt-1 truncate text-xs text-muted-foreground">{server.region}</p>
                 </div>
-                <StatusDot tone={statusTone(server.status)} label={server.status} />
+                <Badge tone={statusTone(server.readiness ?? server.status)} className="shrink-0 capitalize">
+                  {server.readiness ?? server.status}
+                </Badge>
               </div>
+              {server.readinessReason && (
+                <p
+                  className={cn(
+                    "mt-3 rounded-md border px-3 py-2 text-xs leading-5",
+                    intentSoft[statusIntent(server.readiness ?? "")],
+                  )}
+                >
+                  {server.readinessReason}
+                </p>
+              )}
               <div className="mt-4 space-y-3">
                 <ResourceMeter label="CPU" value={server.cpu} intent="info" />
                 <ResourceMeter label="Memory" value={server.memory} intent="violet" />
                 <ResourceMeter label="Disk" value={server.disk} intent="success" />
               </div>
+              {(server.os || server.dockerVersion) && (
+                <div className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Container className="h-4 w-4" aria-hidden="true" />
+                  <span className="truncate">{dockerFactsLabel(server)}</span>
+                </div>
+              )}
               <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
                 <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                   <Cpu className="h-4 w-4" aria-hidden="true" />
@@ -349,6 +379,15 @@ function copy(text: string) {
     () => toast.success("Install command copied"),
     () => toast.error("Could not copy to clipboard"),
   );
+}
+
+// dockerFactsLabel renders the raw compatibility facts behind a server's readiness, so the
+// detail is one glance away (progressive disclosure). Shown only for health-reporting
+// agents (those that set os); "Docker unavailable" when the daemon isn't reachable.
+function dockerFactsLabel(server: ServerRow): string {
+  const docker = server.dockerVersion ? `Docker ${server.dockerVersion}` : "Docker unavailable";
+  const host = server.os ? `${server.os}${server.arch ? `/${server.arch}` : ""}` : "";
+  return host ? `${docker} · ${host}` : docker;
 }
 
 // lastSeenLabel renders a short relative time for an agent's last heartbeat.

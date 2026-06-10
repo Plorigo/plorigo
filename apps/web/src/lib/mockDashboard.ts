@@ -50,6 +50,11 @@ export interface ServerHealth {
   memory: string;
   disk: string;
   status: "online" | "degraded" | "offline";
+  readiness: "ready" | "degraded" | "unavailable";
+  readinessReason?: string;
+  dockerVersion?: string;
+  os?: string;
+  arch?: string;
   source: DataStatus;
 }
 
@@ -376,6 +381,10 @@ export const serverHealth: ServerHealth[] = [
     memory: "4.1 / 16 GB",
     disk: "118 / 240 GB",
     status: "online",
+    readiness: "ready",
+    dockerVersion: "27.1.1",
+    os: "linux",
+    arch: "amd64",
     source: "prototype",
   },
   {
@@ -385,6 +394,11 @@ export const serverHealth: ServerHealth[] = [
     memory: "10.8 / 16 GB",
     disk: "191 / 240 GB",
     status: "degraded",
+    readiness: "degraded",
+    readinessReason:
+      "Docker isn't reachable on this server. Install or start Docker; the agent recovers automatically once it's running.",
+    os: "linux",
+    arch: "amd64",
     source: "prototype",
   },
   {
@@ -394,6 +408,9 @@ export const serverHealth: ServerHealth[] = [
     memory: "standby",
     disk: "standby",
     status: "offline",
+    readiness: "unavailable",
+    readinessReason:
+      "Agent offline — no heartbeat in over 90 seconds. Check the machine is on and the plorigo-agent service is running.",
     source: "planned",
   },
 ];
