@@ -16,7 +16,7 @@ rollbacks, and production safety — on infrastructure you own, without surprise
 [![Made with Go](https://img.shields.io/badge/Go-control%20plane%20%7C%20agent%20%7C%20cli-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![Made with React](https://img.shields.io/badge/React%20%2B%20TypeScript-dashboard-61DAFB?logo=react&logoColor=white)](https://react.dev)
 
-[Roadmap](./ROADMAP.md) · [Contributing](./CONTRIBUTING.md) · [Security](./SECURITY.md) · [Discussions](https://github.com/Plorigo/plorigo/discussions)
+[Roadmap](./ROADMAP.md) · [Contributing](./CONTRIBUTING.md) · [Security](./SECURITY.md) · [Discussions](https://github.com/Plorigo/plorigo/discussions) · [Sponsor](#-support-plorigo)
 
 </div>
 
@@ -122,6 +122,23 @@ In plain English:
 The **Plorigo** name and logo are trademarks and are **not** covered by the AGPL — see
 [TRADEMARK.md](./TRADEMARK.md). You're welcome to run and fork the code; please don't pass off
 a fork as the official Plorigo product.
+
+## 💜 Support Plorigo
+
+Plorigo is independent and open source (AGPL-3.0). Sponsorships fund focused work on the
+**free, self-hostable core** — the deployment engine, agent safety, backups, and docs everyone
+keeps forever.
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub_Sponsors-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Plorigo)
+[![Fund on Polar](https://img.shields.io/badge/Fund-Polar-0062FF)](https://polar.sh/plorigo)
+
+- **Individuals** — a recurring sponsorship of any size genuinely helps and keeps you in the loop.
+- **Companies** — sponsor a tier to get your logo on this README and back the infrastructure tooling
+  your team relies on. Invoices/VAT are handled (Polar is a merchant of record), so it's easy to
+  expense. Details in **[SPONSORS.md](./SPONSORS.md)**.
+
+Not able to sponsor? **⭐ Star the repo**, file good bug reports, improve the docs, or tell a
+friend — that support matters just as much.
 
 ## Community & contributing
 
