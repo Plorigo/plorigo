@@ -38,8 +38,9 @@ type Config struct {
 
 	// GitHub OAuth App credentials for importing repositories. Optional: when unset,
 	// the "Connect GitHub" flow is reported as not configured and the dashboard
-	// disables it. The OAuth callback is served at PublicURL + "/api/github/callback",
-	// which must match the OAuth App's registered authorization callback URL.
+	// disables it. The OAuth callback is served at BaseURL + "/api/github/callback"
+	// (the dashboard origin, where the browser and the state cookie live), which must
+	// match the OAuth App's registered authorization callback URL.
 	GitHubClientID     string
 	GitHubClientSecret string
 	GitHubScopes       string
@@ -91,9 +92,11 @@ func (c Config) GitHubConfigured() bool {
 }
 
 // GitHubRedirectURL is the OAuth callback URL; it must match the OAuth App's registered
-// authorization callback URL.
+// authorization callback URL. It is built from BaseURL — the OAuth handshake is a
+// browser flow, so the callback (and its state cookie) belong on the dashboard origin,
+// which is proxied to the control plane in dev and shares the origin in production.
 func (c Config) GitHubRedirectURL() string {
-	return strings.TrimRight(c.PublicURL, "/") + "/api/github/callback"
+	return strings.TrimRight(c.BaseURL, "/") + "/api/github/callback"
 }
 
 // Validate checks the requirements for running the control plane.
