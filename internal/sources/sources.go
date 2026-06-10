@@ -19,8 +19,8 @@ import (
 )
 
 // provider is the only Git provider supported in this slice. It is stored on every row
-// (the schema is provider-agnostic) so additional providers can be added without a
-// migration.
+// so the schema and queries are provider-agnostic; adding another provider would extend
+// the `provider` CHECK constraint (a migration) rather than reshaping the tables.
 const provider = "github"
 
 // Source is a project's connected repository + branch (the domain model, independent of

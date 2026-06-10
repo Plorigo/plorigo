@@ -85,12 +85,6 @@ func Load() Config {
 	}
 }
 
-// GitHubConfigured reports whether GitHub OAuth credentials are present, gating the
-// "Connect GitHub" flow.
-func (c Config) GitHubConfigured() bool {
-	return c.GitHubClientID != "" && c.GitHubClientSecret != ""
-}
-
 // GitHubRedirectURL is the OAuth callback URL; it must match the OAuth App's registered
 // authorization callback URL. It is built from BaseURL — the OAuth handshake is a
 // browser flow, so the callback (and its state cookie) belong on the dashboard origin,

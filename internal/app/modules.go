@@ -114,7 +114,8 @@ func (a *App) buildModules() error {
 	// sources connect a project to a GitHub repository via the workspace's OAuth
 	// connection. The OAuth token is sealed by the same crypto box as secrets (reused
 	// here); the GitHub client is the outbound adapter (*github.Client satisfies the
-	// module's GitHubClient port). The OAuth callback URL is derived from PublicURL.
+	// module's GitHubClient port). The OAuth callback URL is derived from BaseURL (the
+	// dashboard origin, where the browser and the state cookie live).
 	a.sources = sources.New(sources.Deps{
 		DB:     a.db,
 		Audit:  auditSvc,
