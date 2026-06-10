@@ -66,19 +66,27 @@ func (s *postgresStore) UpsertAgent(ctx context.Context, tx database.Tx, a Agent
 		return Agent{}, err
 	}
 	return Agent{
-		ID:           row.ID,
-		ServerID:     row.ServerID,
-		WorkspaceID:  row.WorkspaceID,
-		AgentVersion: row.AgentVersion,
-		LastSeenAt:   row.LastSeenAt,
-		CreatedAt:    row.CreatedAt,
+		ID:              row.ID,
+		ServerID:        row.ServerID,
+		WorkspaceID:     row.WorkspaceID,
+		AgentVersion:    row.AgentVersion,
+		DockerAvailable: row.DockerAvailable,
+		DockerVersion:   row.DockerVersion,
+		OS:              row.Os,
+		Arch:            row.Arch,
+		LastSeenAt:      row.LastSeenAt,
+		CreatedAt:       row.CreatedAt,
 	}, nil
 }
 
-func (s *postgresStore) Heartbeat(ctx context.Context, credentialHash []byte, agentVersion string) (Agent, bool, error) {
+func (s *postgresStore) Heartbeat(ctx context.Context, credentialHash []byte, facts HeartbeatFacts) (Agent, bool, error) {
 	row, err := db.New(s.pool).HeartbeatAgent(ctx, db.HeartbeatAgentParams{
-		CredentialHash: credentialHash,
-		AgentVersion:   agentVersion,
+		CredentialHash:  credentialHash,
+		AgentVersion:    facts.AgentVersion,
+		DockerAvailable: facts.DockerAvailable,
+		DockerVersion:   facts.DockerVersion,
+		Os:              facts.OS,
+		Arch:            facts.Arch,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -87,12 +95,16 @@ func (s *postgresStore) Heartbeat(ctx context.Context, credentialHash []byte, ag
 		return Agent{}, false, err
 	}
 	return Agent{
-		ID:           row.ID,
-		ServerID:     row.ServerID,
-		WorkspaceID:  row.WorkspaceID,
-		AgentVersion: row.AgentVersion,
-		LastSeenAt:   row.LastSeenAt,
-		CreatedAt:    row.CreatedAt,
+		ID:              row.ID,
+		ServerID:        row.ServerID,
+		WorkspaceID:     row.WorkspaceID,
+		AgentVersion:    row.AgentVersion,
+		DockerAvailable: row.DockerAvailable,
+		DockerVersion:   row.DockerVersion,
+		OS:              row.Os,
+		Arch:            row.Arch,
+		LastSeenAt:      row.LastSeenAt,
+		CreatedAt:       row.CreatedAt,
 	}, true, nil
 }
 
@@ -104,12 +116,16 @@ func (s *postgresStore) ListByWorkspace(ctx context.Context, workspaceID string)
 	out := make([]Agent, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, Agent{
-			ID:           r.ID,
-			ServerID:     r.ServerID,
-			WorkspaceID:  r.WorkspaceID,
-			AgentVersion: r.AgentVersion,
-			LastSeenAt:   r.LastSeenAt,
-			CreatedAt:    r.CreatedAt,
+			ID:              r.ID,
+			ServerID:        r.ServerID,
+			WorkspaceID:     r.WorkspaceID,
+			AgentVersion:    r.AgentVersion,
+			DockerAvailable: r.DockerAvailable,
+			DockerVersion:   r.DockerVersion,
+			OS:              r.Os,
+			Arch:            r.Arch,
+			LastSeenAt:      r.LastSeenAt,
+			CreatedAt:       r.CreatedAt,
 		})
 	}
 	return out, nil

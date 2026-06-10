@@ -139,7 +139,13 @@ func (s *service) Heartbeat(ctx context.Context, in HeartbeatInput) (HeartbeatRe
 	if in.Credential == "" {
 		return HeartbeatResult{}, problem.InvalidInput("a credential is required")
 	}
-	agent, ok, err := s.store.Heartbeat(ctx, hashToken(in.Credential), in.AgentVersion)
+	agent, ok, err := s.store.Heartbeat(ctx, hashToken(in.Credential), HeartbeatFacts{
+		AgentVersion:    in.AgentVersion,
+		DockerAvailable: in.DockerAvailable,
+		DockerVersion:   in.DockerVersion,
+		OS:              in.OS,
+		Arch:            in.Arch,
+	})
 	if err != nil {
 		return HeartbeatResult{}, problem.Internalf(err, "heartbeat")
 	}

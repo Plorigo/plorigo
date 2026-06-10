@@ -19,10 +19,20 @@ type Store interface {
 	// ok is false (nil error) when the token is unknown, already used, or expired.
 	ConsumeRegistrationToken(ctx context.Context, tx database.Tx, tokenHash []byte) (c ConsumedToken, ok bool, err error)
 	UpsertAgent(ctx context.Context, tx database.Tx, a AgentUpsert) (Agent, error)
-	// Heartbeat records liveness and returns the agent matching the credential hash.
-	// ok is false (nil error) when no agent has that credential.
-	Heartbeat(ctx context.Context, credentialHash []byte, agentVersion string) (a Agent, ok bool, err error)
+	// Heartbeat records liveness and the latest reported facts, returning the agent
+	// matching the credential hash. ok is false (nil error) when no agent has that credential.
+	Heartbeat(ctx context.Context, credentialHash []byte, facts HeartbeatFacts) (a Agent, ok bool, err error)
 	ListByWorkspace(ctx context.Context, workspaceID string) ([]Agent, error)
+}
+
+// HeartbeatFacts is the mutable data an agent reports on each heartbeat: its version and
+// the compatibility facts. DockerAvailable is nil when the agent did not report health.
+type HeartbeatFacts struct {
+	AgentVersion    string
+	DockerAvailable *bool
+	DockerVersion   string
+	OS              string
+	Arch            string
 }
 
 // RegistrationTokenRow is the persisted form of a minted registration token.

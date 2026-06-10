@@ -18,27 +18,38 @@ WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > now()
 RETURNING id, server_id, workspace_id;
 
 -- UpsertAgent registers (or re-registers) the single agent for a server. A reinstall
--- rotates the public key and credential and clears the last heartbeat.
+-- rotates the public key and credential and clears the last heartbeat and reported health
+-- facts, so a re-connected server starts from "unknown" until its first beat.
 -- name: UpsertAgent :one
 INSERT INTO agents (server_id, workspace_id, public_key, credential_hash, agent_version)
 VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT (server_id) DO UPDATE
-    SET public_key      = EXCLUDED.public_key,
-        credential_hash = EXCLUDED.credential_hash,
-        agent_version   = EXCLUDED.agent_version,
-        last_seen_at    = NULL
-RETURNING id, server_id, workspace_id, agent_version, last_seen_at, created_at;
+    SET public_key       = EXCLUDED.public_key,
+        credential_hash  = EXCLUDED.credential_hash,
+        agent_version    = EXCLUDED.agent_version,
+        last_seen_at     = NULL,
+        docker_available = NULL,
+        docker_version   = '',
+        os               = '',
+        arch             = ''
+RETURNING id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, last_seen_at, created_at;
 
--- HeartbeatAgent validates the durable credential by its hash AND records liveness in
--- one statement (see UseAPIToken in auth.sql). Returns the agent when the hash matches.
+-- HeartbeatAgent validates the durable credential by its hash AND records liveness plus
+-- the latest compatibility facts in one statement (see UseAPIToken in auth.sql). Returns
+-- the agent when the hash matches.
 -- name: HeartbeatAgent :one
 UPDATE agents
-SET last_seen_at = now(), agent_version = $2
+SET last_seen_at     = now(),
+    agent_version    = $2,
+    docker_available = $3,
+    docker_version   = $4,
+    os               = $5,
+    arch             = $6
 WHERE credential_hash = $1
-RETURNING id, server_id, workspace_id, agent_version, last_seen_at, created_at;
+RETURNING id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, last_seen_at, created_at;
 
 -- name: ListAgentsByWorkspace :many
-SELECT id, server_id, workspace_id, agent_version, last_seen_at, created_at
+SELECT id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, last_seen_at, created_at
 FROM agents
 WHERE workspace_id = $1
 ORDER BY created_at DESC;

@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/plorigo/plorigo/internal/agents"
 	"github.com/plorigo/plorigo/internal/auth"
@@ -684,6 +685,80 @@ func TestIntegration_DeploymentClaimAndReport(t *testing.T) {
 	if len(events) == 0 {
 		t.Fatal("expected timeline events to be recorded")
 	}
+}
+
+func TestIntegration_AgentHeartbeatRecordsHealth(t *testing.T) {
+	a := newApp(t)
+	ctx := context.Background()
+	authSvc := a.auth.Service()
+	projSvc := a.projects.Service()
+	serversSvc := a.servers.Service()
+	agentsSvc := a.agents.Service()
+
+	owner, _ := registerAndLogin(t, authSvc, ctx, "hb-owner")
+	ownerCtx := principal.NewContext(ctx, principal.Principal{UserID: owner.User.ID, Method: principal.MethodSession})
+	wss, _ := projSvc.ListMyWorkspaces(ctx, owner.User.ID)
+	ws := wss[0]
+	srv, _ := serversSvc.Create(ownerCtx, servers.CreateInput{WorkspaceID: ws.ID, Name: "Edge"})
+
+	tok, err := agentsSvc.CreateRegistrationToken(ownerCtx, srv.ID)
+	if err != nil {
+		t.Fatalf("CreateRegistrationToken: %v", err)
+	}
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	reg, err := agentsSvc.Register(ctx, agents.RegisterInput{RegistrationToken: tok.Raw, PublicKey: pub, AgentVersion: "v1"})
+	if err != nil {
+		t.Fatalf("Register agent: %v", err)
+	}
+
+	// Before any heartbeat the agent has never connected: facts unknown, readiness unavailable.
+	pre := agentForServer(t, agentsSvc, ownerCtx, ws.ID, srv.ID)
+	if pre.DockerAvailable != nil {
+		t.Fatalf("pre-heartbeat DockerAvailable = %v, want nil (unknown)", *pre.DockerAvailable)
+	}
+	if state, _ := pre.Readiness(time.Now()); state != agents.ReadinessUnavailable {
+		t.Fatalf("pre-heartbeat readiness = %q, want %q", state, agents.ReadinessUnavailable)
+	}
+
+	// A heartbeat carrying Docker availability records liveness AND the compatibility facts
+	// in one statement — this is the sqlc round-trip the unit tests can't cover.
+	dockerUp := true
+	if _, err := agentsSvc.Heartbeat(ctx, agents.HeartbeatInput{
+		AgentID: reg.AgentID, Credential: reg.Credential, AgentVersion: "v1",
+		DockerAvailable: &dockerUp, DockerVersion: "27.1.1", OS: "linux", Arch: "amd64",
+	}); err != nil {
+		t.Fatalf("Heartbeat: %v", err)
+	}
+
+	got := agentForServer(t, agentsSvc, ownerCtx, ws.ID, srv.ID)
+	if got.DockerAvailable == nil || !*got.DockerAvailable {
+		t.Fatalf("DockerAvailable = %v, want true", got.DockerAvailable)
+	}
+	if got.DockerVersion != "27.1.1" || got.OS != "linux" || got.Arch != "amd64" {
+		t.Fatalf("facts = (%q, %q, %q), want (27.1.1, linux, amd64)", got.DockerVersion, got.OS, got.Arch)
+	}
+	if state, reason := got.Readiness(time.Now()); state != agents.ReadinessReady || reason != "" {
+		t.Fatalf("readiness = (%q, %q), want (%q, empty)", state, reason, agents.ReadinessReady)
+	}
+}
+
+// agentForServer returns the single agent registered to a server, via the authorized list.
+func agentForServer(t *testing.T, svc agents.Service, ctx context.Context, workspaceID, serverID string) agents.Agent {
+	t.Helper()
+	list, err := svc.ListByWorkspace(ctx, workspaceID)
+	if err != nil {
+		t.Fatalf("ListByWorkspace: %v", err)
+	}
+	for _, ag := range list {
+		if ag.ServerID == serverID {
+			return ag
+		}
+	}
+	t.Fatalf("no agent found for server %s", serverID)
+	return agents.Agent{}
 }
 
 func TestIntegration_SessionsAndAPITokens(t *testing.T) {

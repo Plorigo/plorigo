@@ -40,6 +40,7 @@ type fakeStore struct {
 	hbAgent Agent
 	hbOK    bool
 	hbErr   error
+	hbFacts HeartbeatFacts
 
 	list []Agent
 }
@@ -67,7 +68,8 @@ func (f *fakeStore) UpsertAgent(_ context.Context, _ database.Tx, a AgentUpsert)
 	}
 	return ag, nil
 }
-func (f *fakeStore) Heartbeat(_ context.Context, _ []byte, _ string) (Agent, bool, error) {
+func (f *fakeStore) Heartbeat(_ context.Context, _ []byte, facts HeartbeatFacts) (Agent, bool, error) {
+	f.hbFacts = facts
 	return f.hbAgent, f.hbOK, f.hbErr
 }
 func (f *fakeStore) ListByWorkspace(_ context.Context, _ string) ([]Agent, error) {
@@ -236,12 +238,27 @@ func TestRegister_InvalidToken(t *testing.T) {
 func TestHeartbeat_HappyPath(t *testing.T) {
 	store := &fakeStore{hbOK: true, hbAgent: Agent{ID: testAgentID, ServerID: testServerID}}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	res, err := svc.Heartbeat(context.Background(), HeartbeatInput{Credential: "plag_x", AgentVersion: "v1"})
+	dockerUp := true
+	res, err := svc.Heartbeat(context.Background(), HeartbeatInput{
+		Credential:      "plag_x",
+		AgentVersion:    "v1",
+		DockerAvailable: &dockerUp,
+		DockerVersion:   "27.1.1",
+		OS:              "linux",
+		Arch:            "amd64",
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.NextInterval != heartbeatInterval {
 		t.Errorf("next interval = %v, want %v", res.NextInterval, heartbeatInterval)
+	}
+	// The reported facts must reach the store, so liveness and compatibility are recorded together.
+	if store.hbFacts.AgentVersion != "v1" || store.hbFacts.DockerVersion != "27.1.1" || store.hbFacts.OS != "linux" || store.hbFacts.Arch != "amd64" {
+		t.Errorf("forwarded facts = %+v, want version/docker/os/arch set", store.hbFacts)
+	}
+	if store.hbFacts.DockerAvailable == nil || !*store.hbFacts.DockerAvailable {
+		t.Error("expected DockerAvailable=true to be forwarded to the store")
 	}
 }
 
@@ -283,6 +300,40 @@ func TestAgentStatus(t *testing.T) {
 			got := Agent{LastSeenAt: c.last}.Status(now)
 			if got != c.want {
 				t.Errorf("Status = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestAgentReadiness(t *testing.T) {
+	now := time.Date(2026, 6, 9, 12, 0, 0, 0, time.UTC)
+	recent := now.Add(-10 * time.Second)
+	stale := now.Add(-10 * time.Minute)
+	up, down := true, false
+
+	cases := []struct {
+		name       string
+		last       *time.Time
+		docker     *bool
+		wantState  string
+		wantReason bool // a non-empty, actionable reason is expected
+	}{
+		{"never connected", nil, nil, ReadinessUnavailable, true},
+		// Offline wins over stale facts: an offline agent is unavailable even if it last
+		// reported Docker up — liveness is single-sourced through Status.
+		{"offline despite stale docker-up", &stale, &up, ReadinessUnavailable, true},
+		{"online, docker not yet reported", &recent, nil, ReadinessDegraded, true},
+		{"online, docker down", &recent, &down, ReadinessDegraded, true},
+		{"online, docker up", &recent, &up, ReadinessReady, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			state, reason := Agent{LastSeenAt: c.last, DockerAvailable: c.docker}.Readiness(now)
+			if state != c.wantState {
+				t.Errorf("state = %q, want %q", state, c.wantState)
+			}
+			if (reason != "") != c.wantReason {
+				t.Errorf("reason = %q, want non-empty=%v", reason, c.wantReason)
 			}
 		})
 	}
