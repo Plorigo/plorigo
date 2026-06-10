@@ -55,6 +55,21 @@ func (d *dockerClient) close() {
 	}
 }
 
+// serverVersion returns the Docker daemon's version string, or an error if the daemon is
+// unreachable. It is a cheap liveness+version probe the heartbeat uses each beat (see
+// health.go) over the same negotiated client the deploy loop uses — so a daemon that goes
+// down or comes back after startup is reflected without reconstructing the client.
+func (d *dockerClient) serverVersion(ctx context.Context) (string, error) {
+	if d == nil || d.cli == nil {
+		return "", errors.New("docker client is not initialized")
+	}
+	v, err := d.cli.ServerVersion(ctx, client.ServerVersionOptions{})
+	if err != nil {
+		return "", err
+	}
+	return v.Version, nil
+}
+
 // runInput is everything needed to run one deployment's container.
 type runInput struct {
 	name          string

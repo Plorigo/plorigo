@@ -34,6 +34,16 @@ message HeartbeatRequest {
   string agent_id = 1;
   string credential = 2;
   string agent_version = 3;
+
+  // Compatibility facts the agent reports on every beat so the control plane can derive
+  // server readiness (see docs/architecture/agent.md). They expose nothing sensitive:
+  // whether the Docker daemon is reachable, its version, and the host's OS/arch. A
+  // non-empty os marks a health-reporting agent — the control plane uses it to tell
+  // "Docker unavailable" apart from "this agent predates health reporting".
+  bool docker_available = 4;
+  string docker_version = 5; // daemon version; empty when Docker is unreachable
+  string os = 6; // host GOOS (e.g. "linux")
+  string arch = 7; // host GOARCH (e.g. "amd64")
 }
 
 message HeartbeatResponse {

@@ -123,10 +123,12 @@ func Run(ctx context.Context, out io.Writer, opts Options) error {
 	// failed with a clear message, rather than going down.
 	dk, derr := newDockerClient()
 	var runtime deploymentRuntime
+	var prober dockerProber // left nil when the client can't be built, so health reports Docker unavailable
 	if derr != nil {
 		fmt.Fprintf(out, "warning: Docker is unavailable; deployments will be reported as failed: %v\n", derr)
 	} else {
 		runtime = dk
+		prober = dk
 	}
 	defer dk.close()
 
@@ -135,7 +137,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) error {
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	errc := make(chan error, 2)
-	go func() { errc <- heartbeatLoop(loopCtx, out, client, ident, opts) }()
+	go func() { errc <- heartbeatLoop(loopCtx, out, client, ident, prober, opts) }()
 	go func() { errc <- deployLoop(loopCtx, out, deployClient, ident, runtime, opts.PollInterval) }()
 	first := <-errc
 	cancel()
@@ -175,15 +177,20 @@ func register(ctx context.Context, client agentv1connect.AgentServiceClient, opt
 // registration token was provided, the loop re-registers with it once — rotating the
 // identity in place — instead of erroring forever with a stale identity. Tokens are
 // single-use, so only one attempt is made per process run.
-func heartbeatLoop(ctx context.Context, out io.Writer, client agentv1connect.AgentServiceClient, ident *identity, opts Options) error {
+func heartbeatLoop(ctx context.Context, out io.Writer, client agentv1connect.AgentServiceClient, ident *identity, prober dockerProber, opts Options) error {
 	backoff := time.Second
 	reregisterTried := false
 	for {
 		st := ident.get()
+		facts := collectHealth(ctx, prober)
 		resp, err := client.Heartbeat(ctx, connect.NewRequest(&agentv1.HeartbeatRequest{
-			AgentId:      st.AgentID,
-			Credential:   st.Credential,
-			AgentVersion: Version,
+			AgentId:         st.AgentID,
+			Credential:      st.Credential,
+			AgentVersion:    Version,
+			DockerAvailable: facts.DockerAvailable,
+			DockerVersion:   facts.DockerVersion,
+			Os:              facts.OS,
+			Arch:            facts.Arch,
 		}))
 		if err != nil {
 			if ctx.Err() != nil {
