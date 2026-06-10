@@ -38,7 +38,12 @@ echo "Plorigo dashboard: http://localhost:${PLORIGO_WEB_PORT}"
 echo "Plorigo control plane: http://localhost:${PLORIGO_API_PORT}"
 echo "Dev login: dev@plorigo.local / devpassword (override via make seed SEED_EMAIL=… SEED_PASSWORD=…)"
 
-exec pnpm --dir apps/web exec concurrently \
+# Run pnpm from inside apps/web (not `pnpm --dir`) so corepack resolves the pinned
+# pnpm@9.15.0 from apps/web/package.json. `--dir` keeps the shell CWD at the repo root,
+# where corepack falls back to its default major (11.x) and mismatches the 9.x-built
+# node_modules (ERR_PNPM_PUBLIC_HOIST_PATTERN_DIFF). Mirrors the Makefile web targets.
+cd apps/web
+exec pnpm exec concurrently \
   --kill-others \
   --kill-others-on-fail \
   --names controlplane,web \
