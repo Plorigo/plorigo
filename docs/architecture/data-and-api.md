@@ -33,6 +33,7 @@ users                workspaces           workspace_members
 projects             environments         services
 servers              agents               agent_jobs
 deployments          deployment_steps     domains
+source_connections   project_sources
 env_vars             secrets              resources
 backups              restore_jobs         audit_events
 invitations          log_streams          readiness_checks
@@ -53,8 +54,9 @@ on top of it is built or committed. For what's actually planned, see [ROADMAP.md
 
 - Migrations are **forward-only** and reviewed like code.
 - After a schema change, **regenerate `sqlc`** in the same change; never hand-edit generated files.
-- Privileged data (secrets) follows the rules in [security.md](./security.md) — store
-  ciphertext and metadata, never plaintext.
+- Privileged data — secret values, and the GitHub OAuth tokens in `source_connections` —
+  follows the rules in [security.md](./security.md): store ciphertext and metadata, never
+  plaintext.
 
 ## API: ConnectRPC + Protocol Buffers
 

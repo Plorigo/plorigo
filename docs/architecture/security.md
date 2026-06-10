@@ -47,6 +47,26 @@ tokens and reset/verify links must never reach the audit trail or logs.
 
 See [data-and-api.md](./data-and-api.md) for how secret ciphertext and metadata are stored.
 
+### Source integration credentials (GitHub OAuth)
+
+Connecting a project to a Git repository stores a provider credential, so it follows the
+secret discipline with one deliberate difference — the token is **opened server-side** to call
+the provider on the user's behalf:
+
+- The OAuth **App** credentials (`GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET`) are
+  **server config**, not per-workspace data; when unset, the connect flow reports itself as not
+  configured and the UI disables it.
+- The per-workspace OAuth **access token** is **sealed at rest** with the same AES-256-GCM box
+  and `APP_MASTER_KEY` as secrets. It is **write-only through the API**: no RPC returns it and it
+  is **never logged**. It is decrypted only in-process to call the provider (list repositories,
+  read a repo/branch); a future build job will open it the same way to fetch source.
+- One connection per workspace (`source.connect` / `source.read` / `source.disconnect` actions),
+  authorized **before** the write and **audited** in the same transaction. Disconnecting the
+  provider is blocked while projects still reference it (a recovery path, not a silent cascade).
+- The browser OAuth handshake is protected by a **sealed, expiring, single-use `state`** bound to
+  the initiating workspace and user (set as an `HttpOnly` cookie, echoed back and verified on the
+  callback) — the callback is the one cross-site entry point and must not act on a forged request.
+
 ### Audit, approvals, recovery
 
 - An **append-only audit log** records deploys, secret changes, terminal sessions,
