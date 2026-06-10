@@ -105,6 +105,87 @@ func TestHeartbeatLoop_NoTokenKeepsBackingOff(t *testing.T) {
 	}
 }
 
+// --- identity persistence & resume ------------------------------------------
+//
+// AC#2 of the install flow is "register AND resume using the installed identity".
+// These cover the resume contract deterministically (no Docker, no network); the
+// full online -> restart -> resume path on a real server is covered by the Docker
+// end-to-end harness (make e2e-agent).
+
+func TestStatePersistenceRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	want := &state{AgentID: "agent-7", Credential: "plag_durable", PrivateKeyB64: "a2V5"}
+	if err := saveState(dir, want); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	got, err := loadState(dir)
+	if err != nil {
+		t.Fatalf("loadState: %v", err)
+	}
+	if got == nil || *got != *want {
+		t.Fatalf("loadState = %+v, want %+v", got, want)
+	}
+	// The credential and private key are secret, so the file is written 0600.
+	fi, err := os.Stat(filepath.Join(dir, stateFileName))
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("state file mode = %o, want 600", perm)
+	}
+}
+
+func TestLoadStateMissingOrIncompleteTriggersRegister(t *testing.T) {
+	// No file yet: there is no identity, so Run() registers rather than resumes.
+	if st, err := loadState(t.TempDir()); err != nil || st != nil {
+		t.Fatalf("loadState(missing) = %+v, %v; want nil, nil", st, err)
+	}
+	// A half-written file (id but no credential) is treated as no identity, so the
+	// agent re-registers instead of resuming with an unusable credential.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, stateFileName), []byte(`{"agent_id":"agent-7"}`), 0o600); err != nil {
+		t.Fatalf("write incomplete state: %v", err)
+	}
+	if st, err := loadState(dir); err != nil || st != nil {
+		t.Fatalf("loadState(incomplete) = %+v, %v; want nil, nil", st, err)
+	}
+}
+
+func TestRunWithoutStateOrTokenErrors(t *testing.T) {
+	// No persisted identity and no registration token: the agent cannot register and
+	// says so clearly (before any network or Docker work) instead of hanging.
+	err := Run(context.Background(), io.Discard, Options{
+		ControlPlaneURL: "http://127.0.0.1:1",
+		DataDir:         t.TempDir(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "no registration token") {
+		t.Fatalf("Run err = %v, want a no-registration-token error", err)
+	}
+}
+
+func TestRunResumesFromPersistedIdentity(t *testing.T) {
+	// With a persisted identity, Run() resumes as that agent — it does NOT re-register —
+	// even before the control plane is reachable. We assert the resume log line here; the
+	// online + same-identity path is proven against a real server by make e2e-agent.
+	dir := t.TempDir()
+	if err := saveState(dir, &state{AgentID: "agent-resume", Credential: "plag_durable", PrivateKeyB64: "a2V5"}); err != nil {
+		t.Fatalf("saveState: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	var out strings.Builder
+	// 127.0.0.1:1 refuses fast, so the heartbeat/deploy loops just back off until ctx ends.
+	_ = Run(ctx, &out, Options{
+		ControlPlaneURL:   "http://127.0.0.1:1",
+		DataDir:           dir,
+		HeartbeatInterval: time.Millisecond,
+		PollInterval:      time.Millisecond,
+	})
+	if !strings.Contains(out.String(), "resuming as agent agent-resume") {
+		t.Fatalf("output = %q, want a resume line (no re-registration)", out.String())
+	}
+}
+
 type fakeDeployClient struct {
 	reports []*agentv1.ReportDeploymentRequest
 }

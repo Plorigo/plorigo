@@ -22,9 +22,12 @@ APP_MASTER_KEY ?= cGxvcmlnby1kZXYtb25seS1ub3QtYS1zZWNyZXQtMzI=
 SEED_EMAIL ?= dev@plorigo.local
 SEED_PASSWORD ?= devpassword
 
+# Output path for the linux agent binary the e2e harness installs into a container.
+E2E_AGENT_BIN ?= dist/plorigo-agent
+
 .DEFAULT_GOAL := help
 
-.PHONY: help setup generate proto sqlc check-generated verify build build-embed web web-check dev seed test lint fmt tidy migrate
+.PHONY: help setup generate proto sqlc check-generated verify build build-embed web web-check dev seed test lint fmt tidy migrate e2e-agent
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -102,3 +105,13 @@ tidy: ## Tidy go.mod
 
 migrate: ## Apply database migrations (uses $$DATABASE_URL)
 	go tool goose -dir migrations postgres "$(DATABASE_URL)" up
+
+# Agent install end-to-end: builds a linux agent binary, then runs the real installer +
+# agent in a clean ubuntu container against an in-process control plane, proving register
+# AND resume. Needs Docker and a running, migrated Postgres. Local-only (not in CI); the
+# fuller fresh-Ubuntu preparation lands later (see ROADMAP.md). See docs/development.md.
+e2e-agent: check-generated migrate ## Run the agent install e2e on a real container (Docker + Postgres; not in CI)
+	GOOS=linux GOARCH=$$(go env GOARCH) CGO_ENABLED=0 go build -o $(E2E_AGENT_BIN) ./cmd/agent
+	APP_MASTER_KEY="$(APP_MASTER_KEY)" DATABASE_URL="$(DATABASE_URL)" \
+		PLORIGO_E2E_AGENT_BIN="$(CURDIR)/$(E2E_AGENT_BIN)" \
+		go test -tags e2e -run TestE2EAgentInstall -count=1 -v ./internal/app/...

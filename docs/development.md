@@ -112,6 +112,42 @@ pnpm --dir apps/web dev       # dashboard (Vite), in a second terminal
 
 Sign in with the credentials from `make seed`.
 
+## Connect a server
+
+Plorigo deploys to servers you connect by running a small **agent** on them. The dashboard's
+**Servers → Connect server** flow creates a server record and shows a **one-line install
+command** carrying a single-use registration token:
+
+- In a normal deployment the command is `curl -fsSL <installer> | sh -s -- --control-plane <url>
+  --token <token>`, where the installer is [`scripts/install-agent.sh`](../scripts/install-agent.sh):
+  it puts the agent binary in place and runs it as a systemd service.
+- In dev mode (`make dev`) the command instead runs the agent straight from your checkout —
+  `go run ./cmd/agent --control-plane http://localhost:8080 --token <token>` — so you exercise
+  your working copy, not a published binary.
+
+On first start the agent generates an ed25519 keypair, exchanges the one-time token for a durable
+credential via `agent.v1.AgentService/Register`, and writes both to its data dir (`--data-dir`,
+mode `0600`). It then heartbeats over an **outbound** connection, so the server card flips to
+**online** within a few seconds. Restart the agent and it **resumes** from that stored identity —
+no token needed; the token is only for the first registration, is single-use, and expires after an
+hour. Re-running the install command mints a fresh token and rotates the credential, so mint a new
+one from the server card if you ever need it again. See
+[docs/architecture/agent.md](./architecture/agent.md) for the trust model.
+
+> [!NOTE]
+> Today the installer assumes a Linux host that already has Docker, run as root with systemd
+> (otherwise it runs the agent in the foreground). Preparing a *bare* server — installing
+> Docker/Caddy, OS checks, idempotent re-runs — is a later step; see [ROADMAP.md](../ROADMAP.md).
+
+### Verifying the install flow end-to-end
+
+`make e2e-agent` exercises the whole loop against a **real server-like environment**. With Docker
+running and a migrated Postgres up (see [Database setup](#database-setup)), it builds a Linux agent
+binary, boots an in-process control plane, then runs the real installer and agent in a clean
+`ubuntu:24.04` container — asserting the server comes **online**, and that after a restart the agent
+**resumes** the same identity instead of re-registering. It needs Docker and is **not** part of
+`make test` or CI, so run it locally before changing the agent or installer.
+
 ## Integration tests
 
 Integration tests sit behind a build tag and run against a real Postgres, so `make test`
