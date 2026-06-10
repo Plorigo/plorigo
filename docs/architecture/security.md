@@ -66,6 +66,17 @@ the provider on the user's behalf:
 - The browser OAuth handshake is protected by a **sealed, expiring, single-use `state`** bound to
   the initiating workspace and user (set as an `HttpOnly` cookie, echoed back and verified on the
   callback) — the callback is the one cross-site entry point and must not act on a forged request.
+- **Disconnect (and reconnect) revoke the token at GitHub** (best-effort `DELETE
+  /applications/{client_id}/token`), so "disconnect" actually cuts off access rather than only
+  forgetting the token locally — OAuth-App tokens do not expire on their own.
+
+> [!IMPORTANT]
+> **Blast radius.** The OAuth-App scope defaults to `repo` (`GITHUB_OAUTH_SCOPES`), which grants
+> read/write to **all** of the connecting user's repositories — there is no per-repo or read-only
+> grant with an OAuth App. The token is encrypted at rest and revoked on disconnect, but a
+> highly-privileged credential still exists while connected. Set `GITHUB_OAUTH_SCOPES=public_repo`
+> to limit it to public repositories. The narrower, per-repo, read-only path is a **GitHub App**,
+> which is the likely direction before clone/build lands — see [ROADMAP.md](../../ROADMAP.md).
 
 ### Audit, approvals, recovery
 
