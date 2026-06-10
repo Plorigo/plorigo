@@ -38,6 +38,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionSecretDelete:      true,
 		authz.ActionDeploymentCreate:  true,
 		authz.ActionDeploymentRead:    true,
+		authz.ActionSourceConnect:     true,
+		authz.ActionSourceRead:        true,
+		authz.ActionSourceDisconnect:  true,
 	},
 	authz.RoleAdmin: {
 		authz.ActionMemberInvite:      true,
@@ -61,6 +64,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionSecretDelete:      true,
 		authz.ActionDeploymentCreate:  true,
 		authz.ActionDeploymentRead:    true,
+		authz.ActionSourceConnect:     true,
+		authz.ActionSourceRead:        true,
+		authz.ActionSourceDisconnect:  true,
 	},
 	authz.RoleMember: {
 		authz.ActionMemberList:        true,
@@ -80,6 +86,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionSecretDelete:      true,
 		authz.ActionDeploymentCreate:  true,
 		authz.ActionDeploymentRead:    true,
+		authz.ActionSourceConnect:     true,
+		authz.ActionSourceRead:        true,
+		authz.ActionSourceDisconnect:  true,
 	},
 	authz.RoleViewer: {
 		authz.ActionMemberList:      true,
@@ -92,6 +101,9 @@ var permissions = map[string]map[authz.Action]bool{
 		// never set, delete, or read a value.
 		authz.ActionSecretList:     true,
 		authz.ActionDeploymentRead: true,
+		// A viewer may see the connected repository metadata but not connect, list
+		// repositories (which uses the token), or disconnect.
+		authz.ActionSourceRead: true,
 	},
 }
 
