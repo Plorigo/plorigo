@@ -13,6 +13,8 @@ plugins:
     out: gen
     opt: paths=source_relative
   # TypeScript (protobuf-es v2 includes service descriptors used by connect-es) -> dashboard.
-  - remote: buf.build/bufbuild/es
+  # Pinned to match the @bufbuild/protobuf runtime in apps/web/package.json — bump both
+  # together (generated code requires runtime >= plugin version).
+  - remote: buf.build/bufbuild/es:v2.12.0
     out: ../apps/web/src/gen
     opt: target=ts

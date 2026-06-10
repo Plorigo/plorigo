@@ -24,7 +24,7 @@ SEED_PASSWORD ?= devpassword
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup generate proto sqlc build build-embed web dev seed test lint fmt tidy migrate
+.PHONY: help setup generate proto sqlc build build-embed web web-check dev seed test lint fmt tidy migrate
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -48,6 +48,10 @@ build: ## Build all Go binaries
 
 web: ## Build the dashboard
 	pnpm --dir apps/web build
+
+web-check: ## Lint and typecheck the dashboard (mirrors CI's web steps)
+	pnpm --dir apps/web lint
+	pnpm --dir apps/web typecheck
 
 build-embed: web ## Build the single binary with the dashboard embedded (bin/controlplane)
 	rm -rf internal/platform/web/dist
