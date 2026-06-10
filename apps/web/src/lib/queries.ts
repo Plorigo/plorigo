@@ -1,3 +1,4 @@
+import { Code, ConnectError } from "@connectrpc/connect";
 import { useQuery } from "@tanstack/react-query";
 
 import {
@@ -9,6 +10,7 @@ import {
   projectClient,
   secretClient,
   serverClient,
+  sourceClient,
   workspaceClient,
 } from "./clients";
 
@@ -86,6 +88,60 @@ export function useSecrets(environmentId: string) {
     queryKey: ["secrets", environmentId],
     queryFn: async () => (await secretClient.listSecrets({ environmentId })).secrets,
     enabled: environmentId.length > 0,
+  });
+}
+
+// GitHub source integration. getConnection reports whether the server has OAuth
+// configured and whether this workspace is connected, driving the import UI.
+export function useGitHubConnection(workspaceId: string) {
+  return useQuery({
+    queryKey: ["githubConnection", workspaceId],
+    queryFn: async () => sourceClient.getConnection({ workspaceId }),
+    enabled: workspaceId.length > 0,
+  });
+}
+
+// useRepositories lists the connected account's repositories (first page, ~100, newest
+// first). Enable only once connected; the caller filters client-side for snappy search.
+export function useRepositories(workspaceId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["githubRepos", workspaceId],
+    queryFn: async () => (await sourceClient.listRepositories({ workspaceId })).repositories,
+    enabled: enabled && workspaceId.length > 0,
+  });
+}
+
+export function useBranches(workspaceId: string, owner: string, repo: string) {
+  return useQuery({
+    queryKey: ["githubBranches", workspaceId, owner, repo],
+    queryFn: async () => (await sourceClient.listBranches({ workspaceId, owner, repo })).branches,
+    enabled: workspaceId.length > 0 && owner.length > 0 && repo.length > 0,
+  });
+}
+
+// useProjectSource returns the project's connected repository, or null when none is
+// connected (the backend reports NotFound, which is the expected "not connected" state).
+export function useProjectSource(projectId: string) {
+  return useQuery({
+    queryKey: ["projectSource", projectId],
+    queryFn: async () => {
+      try {
+        return (await sourceClient.getProjectSource({ projectId })).source ?? null;
+      } catch (err) {
+        if (err instanceof ConnectError && err.code === Code.NotFound) return null;
+        throw err;
+      }
+    },
+    enabled: projectId.length > 0,
+  });
+}
+
+// useSourcesByWorkspace batches every project's source for the grid (avoids an N+1).
+export function useSourcesByWorkspace(workspaceId: string) {
+  return useQuery({
+    queryKey: ["sources", workspaceId],
+    queryFn: async () => (await sourceClient.listSourcesByWorkspace({ workspaceId })).sources,
+    enabled: workspaceId.length > 0,
   });
 }
 
