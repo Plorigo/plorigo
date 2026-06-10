@@ -1,7 +1,12 @@
 # Funding options for Plorigo.
-# Uncomment and fill these in once the corresponding accounts exist; until then,
-# GitHub simply shows no "Sponsor" button.
+#
+# These are filled in but kept COMMENTED on purpose: an un-enrolled `github:` shows no
+# button, and a `polar:` link would 404 until the Polar org exists. Activate by deleting
+# the two leading "#" below — but only AFTER the accounts are live:
+#   - the Plorigo GitHub Sponsors organization profile is approved and published
+#   - the Polar "plorigo" organization exists at https://polar.sh/plorigo
+# See SPONSORS.md and the sponsorship setup notes for the full enrollment runbook.
+# (If you enroll a personal account instead of the org, use `github: ismatBabirli`.)
 
-# github: [ismatBabirli]
-# open_collective: plorigo
-# custom: ["https://plorigo.dev"]
+# github: Plorigo
+# polar: plorigo
