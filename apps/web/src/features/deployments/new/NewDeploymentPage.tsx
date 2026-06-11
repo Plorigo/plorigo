@@ -607,12 +607,16 @@ const BACK_LINK_CLS =
   "inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground";
 
 // looksLikeGitUrl decides whether the quick box should connect a repo (a clear Git URL)
-// rather than deploy an image. A bare "owner/name" stays an image (the common quick path) —
-// only an explicit URL/SSH/github.com reference is treated as a repository.
+// rather than deploy an image. A bare "owner/name" stays an image (the common quick path),
+// and so do registry refs like ghcr.io/org/img; only an explicit scheme or a GitHub host
+// counts as a repo. The GitHub match is anchored to the start with a trailing slash so a
+// lookalike host (github.com.evil.com) or a smuggled mid-string "github.com" can't slip
+// through — this is a routing hint, not a security gate, but the substring form is fragile.
 function looksLikeGitUrl(raw: string): boolean {
   const s = raw.trim().toLowerCase();
   if (!s) return false;
-  return s.startsWith("http://") || s.startsWith("https://") || s.startsWith("git@") || s.includes("github.com");
+  if (/^(https?:\/\/|git@|ssh:\/\/)/.test(s)) return true;
+  return /^(www\.)?github\.com\//.test(s);
 }
 
 // shortRepo strips protocol/host noise from a repo URL for a compact "owner/repo" label.
