@@ -106,6 +106,24 @@ export function NewDeploymentPage() {
   );
   const branches = useBranches(workspaceId, selectedRepo?.owner ?? "", selectedRepo?.name ?? "");
 
+  // Surface the GitHub OAuth outcome (?github=connected|error) on return, refresh the
+  // connection so the repo list appears, then strip the params so it doesn't repeat.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("github");
+    if (!status) return;
+    if (status === "connected") {
+      toast.success("GitHub connected");
+      void queryClient.invalidateQueries({ queryKey: ["githubConnection"] });
+    } else if (status === "error") {
+      toast.error(params.get("reason") || "Could not connect GitHub");
+    }
+    params.delete("github");
+    params.delete("reason");
+    const qs = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+  }, [queryClient]);
+
   // Default the project: a valid current selection wins, then ?project= / the active filter,
   // then the first project (guarding against a stale or foreign ?project= id).
   useEffect(() => {
@@ -165,7 +183,13 @@ export function NewDeploymentPage() {
   const canConnect = Boolean(projectId);
 
   function startConnect() {
-    window.location.assign(`/api/github/connect?workspace_id=${encodeURIComponent(workspaceId)}`);
+    // Return to this import flow after GitHub authorizes — the OAuth handler defaults to
+    // /projects otherwise. The server's safeReturnPath strips any query, so we send a clean
+    // path; the page re-resolves the target project from the active scope on return.
+    const returnTo = encodeURIComponent("/deployments/new");
+    window.location.assign(
+      `/api/github/connect?workspace_id=${encodeURIComponent(workspaceId)}&return_to=${returnTo}`,
+    );
   }
 
   async function invalidateSource() {
