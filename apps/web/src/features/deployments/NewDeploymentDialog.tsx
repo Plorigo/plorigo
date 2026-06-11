@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { deploymentClient } from "@/lib/clients";
 import { useAgents, useEnvironments, useProjects, useServers } from "@/lib/queries";
+import { pickDefaultServer, serverStatusLabel } from "@/lib/serverSelection";
 
 // NewDeploymentDialog triggers a deployment: pick a project, environment, and connected
 // server, give an image reference and the port it listens on, and the server's agent
@@ -63,13 +64,11 @@ export function NewDeploymentDialog({
     setEnvironmentId((cur) => (cur && envs.some((e) => e.id === cur) ? cur : envs[0].id));
   }, [environments.data]);
 
-  // Default the server to one with an online agent, else the first server.
+  // Default the server to a ready one (then any online, then the first server).
   useEffect(() => {
-    if (serverId || !servers.data?.length) return;
-    const online = servers.data.find((s) =>
-      agents.data?.some((a) => a.serverId === s.id && a.status === "online"),
-    );
-    setServerId((online ?? servers.data[0]).id);
+    if (serverId) return;
+    const def = pickDefaultServer(servers.data, agents.data);
+    if (def) setServerId(def.id);
   }, [servers.data, agents.data, serverId]);
 
   function reset() {
@@ -164,14 +163,11 @@ export function NewDeploymentDialog({
               onChange={(e) => setServerId(e.target.value)}
               disabled={!servers.data?.length}
             >
-              {(servers.data ?? []).map((s) => {
-                const status = agents.data?.find((a) => a.serverId === s.id)?.status ?? "no agent";
-                return (
-                  <option key={s.id} value={s.id}>
-                    {s.name} — {status}
-                  </option>
-                );
-              })}
+              {(servers.data ?? []).map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} — {serverStatusLabel(s.id, agents.data)}
+                </option>
+              ))}
             </Select>
             {noServers && (
               <p className="mt-1 text-xs text-muted-foreground">

@@ -9,6 +9,7 @@ import { DeploymentsPage } from "./features/deployments/DeploymentsPage";
 import { OverviewPage } from "./features/overview/OverviewPage";
 import { ProjectDetailPage } from "./features/projects/ProjectDetailPage";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
+import { NewProjectLaunchpad } from "./features/projects/new/NewProjectLaunchpad";
 import { ResourcesPage } from "./features/resources/ResourcesPage";
 import { SecurityPage } from "./features/security/SecurityPage";
 import { ServersPage } from "./features/servers/ServersPage";
@@ -37,6 +38,11 @@ const appLayoutRoute = createRoute({
 
 const overviewRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/", component: OverviewPage });
 const projectsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/projects", component: ProjectsPage });
+const projectsNewRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/projects/new",
+  component: NewProjectLaunchpad,
+});
 const projectDetailRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/projects/$projectId",
@@ -66,6 +72,7 @@ export const routeTree = rootRoute.addChildren([
   appLayoutRoute.addChildren([
     overviewRoute,
     projectsRoute,
+    projectsNewRoute,
     projectDetailRoute,
     serversRoute,
     resourcesRoute,
