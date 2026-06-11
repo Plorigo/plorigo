@@ -1,0 +1,138 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// A Source links a project to a Git repository and branch it deploys from. This slice
+// stores and displays the connection only — building/cloning from it is a later slice
+// (see docs/architecture/deployment-engine.md). The OAuth access token used to reach
+// the repo lives on the workspace's Connection, is sealed at rest, and is NEVER
+// returned by any RPC. See docs/architecture/security.md.
+message Source {
+  string id = 1;
+  string project_id = 2;
+  string connection_id = 3;
+  string provider = 4; // "github"
+  string owner = 5;
+  string repo = 6;
+  string full_name = 7; // "owner/repo"
+  string branch = 8;
+  string default_branch = 9;
+  bool is_private = 10;
+  string html_url = 11;
+  string github_login = 12; // the connected account this source resolves through
+  string created_at = 13; // RFC 3339
+  string updated_at = 14; // RFC 3339
+}
+
+// A Connection is a workspace's link to a Git provider account (one per workspace).
+// It carries metadata only — the OAuth access token is sealed at rest and never
+// returned by any RPC (write-only, cf. Secret). See docs/architecture/security.md.
+message Connection {
+  string workspace_id = 1;
+  string provider = 2; // "github"
+  string github_login = 3;
+  string scopes = 4;
+  string connected_by = 5; // user id that authorized the connection
+  string created_at = 6; // RFC 3339
+  string updated_at = 7; // RFC 3339
+}
+
+// A Repository is a candidate repo the connected account can access, returned by
+// ListRepositories so the dashboard can offer a picker. It is not persisted.
+message Repository {
+  string owner = 1;
+  string name = 2;
+  string full_name = 3;
+  string default_branch = 4;
+  bool is_private = 5;
+  string html_url = 6;
+  string description = 7;
+}
+
+message GetConnectionRequest {
+  string workspace_id = 1;
+}
+
+message GetConnectionResponse {
+  // Whether the server has GitHub OAuth configured (client id + secret present).
+  bool configured = 1;
+  // Whether this workspace has an active connection; connection is set when true.
+  bool connected = 2;
+  Connection connection = 3;
+}
+
+message ListRepositoriesRequest {
+  string workspace_id = 1;
+  string query = 2; // optional case-insensitive filter on full_name
+  int32 page = 3; // 1-based; 0 means the first page
+}
+
+message ListRepositoriesResponse {
+  repeated Repository repositories = 1;
+}
+
+message ListBranchesRequest {
+  string workspace_id = 1;
+  string owner = 2;
+  string repo = 3;
+}
+
+message ListBranchesResponse {
+  repeated string branches = 1;
+}
+
+message ConnectRepositoryRequest {
+  string project_id = 1;
+  string owner = 2;
+  string repo = 3;
+  string branch = 4;
+}
+
+message ConnectRepositoryResponse {
+  Source source = 1;
+}
+
+message GetProjectSourceRequest {
+  string project_id = 1;
+}
+
+message GetProjectSourceResponse {
+  Source source = 1;
+}
+
+message ListSourcesByWorkspaceRequest {
+  string workspace_id = 1;
+}
+
+message ListSourcesByWorkspaceResponse {
+  repeated Source sources = 1;
+}
+
+message DisconnectRepositoryRequest {
+  string project_id = 1;
+}
+
+message DisconnectRepositoryResponse {}
+
+message DisconnectGitHubRequest {
+  string workspace_id = 1;
+}
+
+message DisconnectGitHubResponse {}
+
+// SourceService manages a workspace's Git provider connection (GitHub OAuth, one per
+// workspace) and each project's connected repository + branch. The OAuth token is
+// sealed at rest and used server-side to reach the provider; it is never returned by
+// any RPC. The browser OAuth begin/callback steps are plain HTTP endpoints
+// (/api/github/connect, /api/github/callback), not RPCs, because they set cookies and
+// redirect. See docs/architecture/security.md and deployment-engine.md.
+service SourceService {
+  rpc GetConnection(GetConnectionRequest) returns (GetConnectionResponse);
+  rpc ListRepositories(ListRepositoriesRequest) returns (ListRepositoriesResponse);
+  rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse);
+  rpc ConnectRepository(ConnectRepositoryRequest) returns (ConnectRepositoryResponse);
+  rpc GetProjectSource(GetProjectSourceRequest) returns (GetProjectSourceResponse);
+  rpc ListSourcesByWorkspace(ListSourcesByWorkspaceRequest) returns (ListSourcesByWorkspaceResponse);
+  rpc DisconnectRepository(DisconnectRepositoryRequest) returns (DisconnectRepositoryResponse);
+  rpc DisconnectGitHub(DisconnectGitHubRequest) returns (DisconnectGitHubResponse);
+}

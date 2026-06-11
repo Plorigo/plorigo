@@ -120,6 +120,22 @@ type Project struct {
 	CreatedAt   time.Time
 }
 
+type ProjectSource struct {
+	ID            string
+	ProjectID     string
+	ConnectionID  string
+	Provider      string
+	Owner         string
+	Repo          string
+	FullName      string
+	Branch        string
+	DefaultBranch string
+	IsPrivate     bool
+	HtmlUrl       string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 type Secret struct {
 	ID            string
 	EnvironmentID string
@@ -146,6 +162,19 @@ type Session struct {
 	LastUsedAt time.Time
 	ExpiresAt  time.Time
 	RevokedAt  *time.Time
+}
+
+type SourceConnection struct {
+	ID                    string
+	WorkspaceID           string
+	Provider              string
+	GithubLogin           string
+	GithubUserID          *int64
+	AccessTokenCiphertext []byte
+	Scopes                string
+	ConnectedBy           *string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 type User struct {

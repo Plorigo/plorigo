@@ -112,6 +112,34 @@ pnpm --dir apps/web dev       # dashboard (Vite), in a second terminal
 
 Sign in with the credentials from `make seed`.
 
+## Import from GitHub (optional)
+
+To exercise GitHub repository import, register a GitHub **OAuth App**
+(<https://github.com/settings/applications/new>) and point its **Authorization callback URL** at
+the dashboard origin's `/api/github/callback`. In dev that origin is the Vite server, which
+proxies `/api/github/*` to the control plane:
+
+```text
+Homepage URL:               http://localhost:5173
+Authorization callback URL: http://localhost:5173/api/github/callback
+```
+
+Then export the credentials and run the dev servers — the callback URL is derived from
+`PLORIGO_BASE_URL` (default `http://localhost:5173`), so it matches the App without further config:
+
+```bash
+export GITHUB_OAUTH_CLIENT_ID=<client id>
+export GITHUB_OAUTH_CLIENT_SECRET=<client secret>
+# GITHUB_OAUTH_SCOPES defaults to "repo" (private + public); set "public_repo" to narrow it.
+make dev                      # control plane; reads the GITHUB_OAUTH_* vars from the environment
+pnpm --dir apps/web dev       # dashboard (Vite), in a second terminal
+```
+
+When the variables are unset the dashboard shows the import flow as **not configured**. With them
+set, **Projects → Import from GitHub** runs the OAuth handshake, then lets you pick a repository
+and branch. The access token is stored encrypted and is never returned by the API — see
+[security.md](./architecture/security.md).
+
 ## Connect a server
 
 Plorigo deploys to servers you connect by running a small **agent** on them. The dashboard's

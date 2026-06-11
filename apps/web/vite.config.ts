@@ -14,6 +14,7 @@ const controlPlaneServices = [
   "EnvVarService",
   "SecretService",
   "ServerService",
+  "SourceService",
   "AgentService",
 ];
 
@@ -29,11 +30,16 @@ export default defineConfig({
   },
   build: { outDir: "dist" },
   server: {
-    proxy: Object.fromEntries(
-      controlPlaneServices.map((service) => [
-        `/controlplane.v1.${service}`,
-        { target: controlPlaneURL, changeOrigin: true },
-      ]),
-    ),
+    proxy: {
+      ...Object.fromEntries(
+        controlPlaneServices.map((service) => [
+          `/controlplane.v1.${service}`,
+          { target: controlPlaneURL, changeOrigin: true },
+        ]),
+      ),
+      // The GitHub OAuth browser redirects (begin + callback) are served by the
+      // control plane, not the dashboard.
+      "/api/github": { target: controlPlaneURL, changeOrigin: true },
+    },
   },
 });
