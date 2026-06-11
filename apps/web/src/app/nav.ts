@@ -30,18 +30,21 @@ export interface NavItem {
   to: NavTo;
   icon: LucideIcon;
   description: string;
+  // Which group the item belongs to when a project is selected (the split nav).
+  // With no project selected the nav is one flat list and scope is ignored.
+  scope: "project" | "workspace";
 }
 
 export const navItems: NavItem[] = [
-  { label: "Overview", to: "/", icon: Home, description: "Workspace at a glance" },
-  { label: "Projects", to: "/projects", icon: Box, description: "Apps, environments, and health" },
-  { label: "Deployments", to: "/deployments", icon: Rocket, description: "Release timeline and logs" },
-  { label: "Servers", to: "/servers", icon: Server, description: "Owned infrastructure" },
-  { label: "Resources", to: "/resources", icon: Layers3, description: "Env vars and secrets" },
-  { label: "Backups", to: "/backups", icon: HardDrive, description: "Recovery and restore" },
-  { label: "Security", to: "/security", icon: Shield, description: "Production guardrails" },
-  { label: "Team", to: "/team", icon: Users, description: "Members and access" },
-  { label: "Activity", to: "/activity", icon: Clock3, description: "Audit-ready timeline" },
+  { label: "Overview", to: "/", icon: Home, description: "Workspace at a glance", scope: "project" },
+  { label: "Projects", to: "/projects", icon: Box, description: "Apps, environments, and health", scope: "workspace" },
+  { label: "Deployments", to: "/deployments", icon: Rocket, description: "Release timeline and logs", scope: "project" },
+  { label: "Servers", to: "/servers", icon: Server, description: "Owned infrastructure", scope: "workspace" },
+  { label: "Resources", to: "/resources", icon: Layers3, description: "Env vars and secrets", scope: "project" },
+  { label: "Backups", to: "/backups", icon: HardDrive, description: "Recovery and restore", scope: "workspace" },
+  { label: "Security", to: "/security", icon: Shield, description: "Production guardrails", scope: "workspace" },
+  { label: "Team", to: "/team", icon: Users, description: "Members and access", scope: "workspace" },
+  { label: "Activity", to: "/activity", icon: Clock3, description: "Audit-ready timeline", scope: "project" },
 ];
 
 // The mobile bottom bar shows the five most-used sections.

@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { Outlet } from "@tanstack/react-router";
 
-import { useWorkspaces } from "@/lib/queries";
+import { useDemoData } from "@/lib/demo";
+import { useProjects, useWorkspaces } from "@/lib/queries";
 import { useWorkspaceStore } from "@/store";
 import { CommandMenu } from "./CommandMenu";
 import { MobileNav } from "./MobileNav";
@@ -12,9 +13,13 @@ import { Topbar } from "./Topbar";
 // page <Outlet/>. Mounted once by the protected layout route, so navigating
 // between sections never remounts the shell.
 export function AppShell() {
+  const demo = useDemoData();
   const workspaces = useWorkspaces();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
   const setWorkspaceId = useWorkspaceStore((s) => s.setWorkspaceId);
+  const projectId = useWorkspaceStore((s) => s.projectId);
+  const setProjectId = useWorkspaceStore((s) => s.setProjectId);
+  const projects = useProjects(workspaceId);
 
   // Default to the first workspace until the user picks one.
   useEffect(() => {
@@ -24,6 +29,17 @@ export function AppShell() {
       }
     }
   }, [workspaces.data, workspaceId, setWorkspaceId]);
+
+  // Drop a stale project filter once we know it isn't in this workspace (deleted, or
+  // the workspace changed before the list reloaded). Skip in demo mode: demo project
+  // ids are prototype-* and never appear in the live list, so validating would wipe a
+  // perfectly valid demo selection.
+  useEffect(() => {
+    if (demo || !projectId) return;
+    if (projects.data && !projects.data.some((p) => p.id === projectId)) {
+      setProjectId("");
+    }
+  }, [demo, projects.data, projectId, setProjectId]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">

@@ -9,8 +9,18 @@ import { useDemoData } from "@/lib/demo";
 import { projectDashboardActivity } from "@/lib/mockDashboard";
 import { useApiTokens, useMembers, useProjects, useServers, useWorkspaces } from "@/lib/queries";
 import { useWorkspaceStore } from "@/store";
+import { ProjectOverview } from "@/features/projects/ProjectOverview";
 
+// Overview is project-aware: with a project selected it shows that project's overview
+// (the same surface as /projects/$projectId); otherwise the workspace summary. Splitting
+// into two components keeps each one's hooks unconditional (no hook-order surprises).
 export function OverviewPage() {
+  const projectId = useWorkspaceStore((s) => s.projectId);
+  if (projectId) return <ProjectOverview projectId={projectId} embedded />;
+  return <WorkspaceOverview />;
+}
+
+function WorkspaceOverview() {
   const demo = useDemoData();
   const { data: user } = useCurrentUser();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);

@@ -28,17 +28,24 @@ interface ConfigRow {
 export function ResourcesPage() {
   const demo = useDemoData();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  const selectedProjectId = useWorkspaceStore((s) => s.projectId);
   const projects = useProjects(workspaceId);
 
-  const [projectId, setProjectId] = useState("");
+  const [localProjectId, setLocalProjectId] = useState("");
   const [environmentId, setEnvironmentId] = useState("");
 
+  // When a project filter is active, lock onto it; otherwise default to the first project
+  // and let the user pick freely.
+  const locked = Boolean(selectedProjectId);
+  const projectId = selectedProjectId || localProjectId;
+
   useEffect(() => {
+    if (locked) return;
     const list = projects.data ?? [];
-    if (list.length > 0 && !list.some((p) => p.id === projectId)) {
-      setProjectId(list[0].id);
+    if (list.length > 0 && !list.some((p) => p.id === localProjectId)) {
+      setLocalProjectId(list[0].id);
     }
-  }, [projects.data, projectId]);
+  }, [projects.data, localProjectId, locked]);
 
   const environments = useEnvironments(projectId);
   useEffect(() => {
@@ -81,9 +88,16 @@ export function ResourcesPage() {
       />
 
       <Panel>
-        <PanelHeader title="Environment" description="Pick a project and environment to inspect its configuration." />
+        <PanelHeader
+          title="Environment"
+          description={
+            locked
+              ? "Showing the selected project. Clear the project filter to switch projects."
+              : "Pick a project and environment to inspect its configuration."
+          }
+        />
         <div className="grid gap-3 p-4 sm:grid-cols-2">
-          <Select value={projectId} onChange={(e) => setProjectId(e.target.value)} disabled={!projects.data?.length} aria-label="Project">
+          <Select value={projectId} onChange={(e) => setLocalProjectId(e.target.value)} disabled={locked || !projects.data?.length} aria-label="Project">
             {projects.data?.map((project) => (
               <option key={project.id} value={project.id}>
                 {project.name}

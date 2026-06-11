@@ -19,7 +19,7 @@ import { useDemoData } from "@/lib/demo";
 import { errorMessage } from "@/lib/format";
 import { deployments, logLines } from "@/lib/mockDashboard";
 import { statusTone } from "@/lib/status";
-import { useDeploymentsByWorkspace, useProjects } from "@/lib/queries";
+import { useDeploymentsByProject, useDeploymentsByWorkspace, useProjects } from "@/lib/queries";
 import { useWorkspaceStore } from "@/store";
 import { NewDeploymentDialog } from "./NewDeploymentDialog";
 
@@ -27,7 +27,12 @@ export function DeploymentsPage() {
   const demo = useDemoData();
   const navigate = useNavigate();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
-  const deps = useDeploymentsByWorkspace(workspaceId);
+  const projectId = useWorkspaceStore((s) => s.projectId);
+  // Both hooks are called (hooks rule); the project one is gated on a non-empty id, so it
+  // makes no request when no project is selected. Read whichever matches the active scope.
+  const byWorkspace = useDeploymentsByWorkspace(workspaceId);
+  const byProject = useDeploymentsByProject(projectId);
+  const deps = projectId ? byProject : byWorkspace;
   const projects = useProjects(workspaceId);
   const [open, setOpen] = useState(false);
 
@@ -57,7 +62,10 @@ export function DeploymentsPage() {
 
       {!loading && !error && rows.length > 0 && (
         <Panel>
-          <PanelHeader title="Deployments" description="Recent releases across this workspace." />
+          <PanelHeader
+            title="Deployments"
+            description={projectId ? "Recent releases for this project." : "Recent releases across this workspace."}
+          />
           <div className="overflow-x-auto">
             <Table>
               <TableHeader>
