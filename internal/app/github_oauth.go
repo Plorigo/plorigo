@@ -15,17 +15,23 @@ import (
 // callback. It is scoped to the OAuth path and short-lived; the callback clears it.
 const oauthStateCookie = "plorigo_gh_oauth"
 
+// oauthReturnCookie remembers the dashboard path to land on after the flow, so a
+// connect started from the launchpad (/projects/new) returns there rather than the
+// default projects list. It rides next to the state cookie and is cleared with it.
+const oauthReturnCookie = "plorigo_gh_return"
+
 // githubConnectHandler begins the GitHub OAuth flow: it resolves the browser session,
 // asks the sources service for an authorize URL + sealed state, sets the state cookie,
 // and redirects to GitHub. On any error it bounces back to the dashboard with a reason.
 func (a *App) githubConnectHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		returnTo := safeReturnPath(r.URL.Query().Get("return_to"))
 		ctx := principal.NewContext(r.Context(), a.resolveBrowserPrincipal(r))
 		res, err := a.sources.Service().BeginGitHubAuth(ctx, sources.BeginAuthInput{
 			WorkspaceID: r.URL.Query().Get("workspace_id"),
 		})
 		if err != nil {
-			a.redirectToDashboard(w, r, "error", reasonFor(err))
+			a.redirectToDashboard(w, r, returnTo, "error", reasonFor(err))
 			return
 		}
 		http.SetCookie(w, &http.Cookie{
@@ -33,6 +39,15 @@ func (a *App) githubConnectHandler() http.Handler {
 			Value:    res.State,
 			Path:     "/api/github",
 			MaxAge:   600, // 10 minutes, matching the state TTL
+			HttpOnly: true,
+			Secure:   !a.cfg.Dev,
+			SameSite: http.SameSiteLaxMode,
+		})
+		http.SetCookie(w, &http.Cookie{
+			Name:     oauthReturnCookie,
+			Value:    returnTo,
+			Path:     "/api/github",
+			MaxAge:   600,
 			HttpOnly: true,
 			Secure:   !a.cfg.Dev,
 			SameSite: http.SameSiteLaxMode,
@@ -50,8 +65,13 @@ func (a *App) githubCallbackHandler() http.Handler {
 		if c, err := r.Cookie(oauthStateCookie); err == nil {
 			cookieState = c.Value
 		}
-		// Clear the state cookie regardless of outcome — it is single-use.
+		returnTo := "/projects"
+		if c, err := r.Cookie(oauthReturnCookie); err == nil && c.Value != "" {
+			returnTo = safeReturnPath(c.Value)
+		}
+		// Clear the state and return cookies regardless of outcome — they are single-use.
 		http.SetCookie(w, &http.Cookie{Name: oauthStateCookie, Path: "/api/github", MaxAge: -1, HttpOnly: true, Secure: !a.cfg.Dev, SameSite: http.SameSiteLaxMode})
+		http.SetCookie(w, &http.Cookie{Name: oauthReturnCookie, Path: "/api/github", MaxAge: -1, HttpOnly: true, Secure: !a.cfg.Dev, SameSite: http.SameSiteLaxMode})
 
 		ctx := principal.NewContext(r.Context(), a.resolveBrowserPrincipal(r))
 		_, err := a.sources.Service().CompleteGitHubAuth(ctx, sources.CompleteAuthInput{
@@ -60,10 +80,10 @@ func (a *App) githubCallbackHandler() http.Handler {
 			CookieState: cookieState,
 		})
 		if err != nil {
-			a.redirectToDashboard(w, r, "error", reasonFor(err))
+			a.redirectToDashboard(w, r, returnTo, "error", reasonFor(err))
 			return
 		}
-		a.redirectToDashboard(w, r, "connected", "")
+		a.redirectToDashboard(w, r, returnTo, "connected", "")
 	})
 }
 
@@ -82,16 +102,31 @@ func (a *App) resolveBrowserPrincipal(r *http.Request) principal.Principal {
 	return p
 }
 
-// redirectToDashboard sends the browser back to the projects page with a github status
-// (and optional reason) the dashboard surfaces as a toast.
-func (a *App) redirectToDashboard(w http.ResponseWriter, r *http.Request, status, reason string) {
+// redirectToDashboard sends the browser back to a dashboard path with a github status
+// (and optional reason) the dashboard surfaces as a toast. returnPath is a sanitized
+// same-origin path (see safeReturnPath).
+func (a *App) redirectToDashboard(w http.ResponseWriter, r *http.Request, returnPath, status, reason string) {
 	q := url.Values{}
 	q.Set("github", status)
 	if reason != "" {
 		q.Set("reason", reason)
 	}
-	target := strings.TrimRight(a.cfg.BaseURL, "/") + "/projects?" + q.Encode()
+	target := strings.TrimRight(a.cfg.BaseURL, "/") + returnPath + "?" + q.Encode()
 	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+// safeReturnPath restricts the post-OAuth landing to a same-origin dashboard path,
+// defaulting to /projects. It blocks absolute and protocol-relative URLs so the
+// return_to parameter can never be used as an open redirect, and drops any query or
+// fragment a caller tries to smuggle in (the status params are added by the caller).
+func safeReturnPath(raw string) string {
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") {
+		return "/projects"
+	}
+	if i := strings.IndexAny(raw, "?#"); i >= 0 {
+		raw = raw[:i]
+	}
+	return raw
 }
 
 // reasonFor extracts a safe, user-facing message from a domain error for the redirect.

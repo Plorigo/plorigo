@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Box, GitBranch, GitFork, Globe2, Grid2X2, List, Plus, Search } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { AlertTriangle, Box, GitBranch, Globe2, Grid2X2, List, Plus, Search } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/PageHeader";
@@ -11,8 +12,6 @@ import { errorMessage } from "@/lib/format";
 import type { DashboardProject } from "@/lib/mockDashboard";
 import { useWorkspaceStore } from "@/store";
 import { ProjectCard, ProjectListRow } from "./components/ProjectViews";
-import { ImportFromGitHubDialog } from "./ImportFromGitHubDialog";
-import { NewProjectDialog } from "./NewProjectDialog";
 import { useDashboardProjects } from "./projectData";
 
 function statusRank(status: DashboardProject["status"]): number {
@@ -31,9 +30,8 @@ export function ProjectsPage() {
   const [healthFilter, setHealthFilter] = useState("all");
   const [sortKey, setSortKey] = useState("newest");
   const [view, setView] = useState<"grid" | "list">("grid");
-  const [createOpen, setCreateOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   // Surface the outcome of the GitHub OAuth redirect (?github=connected|error) as a
   // toast, refresh the connection state, then strip the params so it doesn't repeat.
@@ -112,21 +110,12 @@ export function ProjectsPage() {
         title="Projects"
         description="Manage applications, environments, deploys, and project health."
         actions={
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="secondary" disabled={!workspaceId} onClick={() => setImportOpen(true)}>
-              <GitFork className="h-4 w-4" aria-hidden="true" />
-              Import from GitHub
-            </Button>
-            <Button size="sm" disabled={!workspaceId} onClick={() => setCreateOpen(true)}>
-              <Plus className="h-4 w-4" aria-hidden="true" />
-              New project
-            </Button>
-          </div>
+          <Button size="sm" disabled={!workspaceId} onClick={() => navigate({ to: "/projects/new" })}>
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            Add Project
+          </Button>
         }
       />
-
-      <NewProjectDialog workspaceId={workspaceId} open={createOpen} onOpenChange={setCreateOpen} />
-      <ImportFromGitHubDialog workspaceId={workspaceId} open={importOpen} onOpenChange={setImportOpen} />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Total projects" value={String(dashboardProjects.length)} detail={liveCount > 0 ? "Live workspace records" : "Prototype set"} icon={Box} intent="info" accentBar />

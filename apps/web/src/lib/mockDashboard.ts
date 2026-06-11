@@ -86,12 +86,6 @@ export interface ProjectAttentionItem {
   tone: "amber" | "red";
 }
 
-export interface ProjectStartAction {
-  title: string;
-  detail: string;
-  icon: "github" | "template" | "empty";
-}
-
 export const projectDashboardActivity: ProjectActivityItem[] = [
   {
     title: "Payments API",
@@ -129,24 +123,6 @@ export const projectAttentionItems: ProjectAttentionItem[] = [
   { project: "Analytics", detail: "Readiness 68%", tone: "red" },
   { project: "Queue Worker", detail: "Readiness 82%", tone: "amber" },
   { project: "Auth Service", detail: "Staging deploy failing", tone: "red" },
-];
-
-export const projectStartActions: ProjectStartAction[] = [
-  {
-    title: "Import from GitHub",
-    detail: "Connect and import a repository",
-    icon: "github",
-  },
-  {
-    title: "Use a template",
-    detail: "Start with a pre-configured stack",
-    icon: "template",
-  },
-  {
-    title: "Create empty project",
-    detail: "Configure everything from scratch",
-    icon: "empty",
-  },
 ];
 
 export const releaseHealth = [
