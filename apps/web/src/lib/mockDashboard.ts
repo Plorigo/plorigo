@@ -2,6 +2,15 @@
 // whether a target feature is backed by a live API, a prototype, or planned.
 export type DataStatus = "live" | "prototype" | "planned";
 
+// Demo fixtures use ids prefixed `prototype-` (never real UUIDs). isPrototypeId lets
+// project-scoped queries skip the live API when a demo project is selected, so a
+// non-UUID id is never sent to a backend that requires a UUID (see lib/queries.ts).
+export const PROTOTYPE_ID_PREFIX = "prototype-";
+
+export function isPrototypeId(id: string): boolean {
+  return id.startsWith(PROTOTYPE_ID_PREFIX);
+}
+
 export interface DashboardProject {
   id: string;
   name: string;
