@@ -96,13 +96,15 @@ func (s *postgresStore) DeleteConnection(ctx context.Context, tx database.Tx, wo
 }
 
 func (s *postgresStore) CountProjectSourcesByConnection(ctx context.Context, connectionID string) (int64, error) {
-	return db.New(s.pool).CountProjectSourcesByConnection(ctx, connectionID)
+	// connection_id became nullable (public sources have none), so the generated query
+	// takes *string; callers always pass a real connection id.
+	return db.New(s.pool).CountProjectSourcesByConnection(ctx, &connectionID)
 }
 
 func (s *postgresStore) UpsertProjectSource(ctx context.Context, tx database.Tx, w ProjectSourceWrite) (Source, error) {
 	row, err := db.New(tx).UpsertProjectSource(ctx, db.UpsertProjectSourceParams{
 		ProjectID:     w.ProjectID,
-		ConnectionID:  w.ConnectionID,
+		ConnectionID:  nullableUUID(w.ConnectionID), // NULL for a public source
 		Provider:      w.Provider,
 		Owner:         w.Owner,
 		Repo:          w.Repo,
@@ -111,6 +113,7 @@ func (s *postgresStore) UpsertProjectSource(ctx context.Context, tx database.Tx,
 		DefaultBranch: w.DefaultBranch,
 		IsPrivate:     w.IsPrivate,
 		HtmlUrl:       w.HTMLURL,
+		Access:        w.Access,
 	})
 	if err != nil {
 		return Source{}, err
@@ -120,7 +123,7 @@ func (s *postgresStore) UpsertProjectSource(ctx context.Context, tx database.Tx,
 	return Source{
 		ID:            row.ID,
 		ProjectID:     row.ProjectID,
-		ConnectionID:  row.ConnectionID,
+		ConnectionID:  derefString(row.ConnectionID),
 		Provider:      row.Provider,
 		Owner:         row.Owner,
 		Repo:          row.Repo,
@@ -129,6 +132,7 @@ func (s *postgresStore) UpsertProjectSource(ctx context.Context, tx database.Tx,
 		DefaultBranch: row.DefaultBranch,
 		IsPrivate:     row.IsPrivate,
 		HTMLURL:       row.HtmlUrl,
+		Access:        row.Access,
 		CreatedAt:     row.CreatedAt,
 		UpdatedAt:     row.UpdatedAt,
 	}, nil
@@ -145,7 +149,7 @@ func (s *postgresStore) GetProjectSource(ctx context.Context, projectID string) 
 	return Source{
 		ID:            row.ID,
 		ProjectID:     row.ProjectID,
-		ConnectionID:  row.ConnectionID,
+		ConnectionID:  derefString(row.ConnectionID),
 		Provider:      row.Provider,
 		Owner:         row.Owner,
 		Repo:          row.Repo,
@@ -154,7 +158,8 @@ func (s *postgresStore) GetProjectSource(ctx context.Context, projectID string) 
 		DefaultBranch: row.DefaultBranch,
 		IsPrivate:     row.IsPrivate,
 		HTMLURL:       row.HtmlUrl,
-		GitHubLogin:   row.GithubLogin,
+		GitHubLogin:   derefString(row.GithubLogin),
+		Access:        row.Access,
 		CreatedAt:     row.CreatedAt,
 		UpdatedAt:     row.UpdatedAt,
 	}, true, nil
@@ -170,7 +175,7 @@ func (s *postgresStore) ListByWorkspace(ctx context.Context, workspaceID string)
 		out = append(out, Source{
 			ID:            r.ID,
 			ProjectID:     r.ProjectID,
-			ConnectionID:  r.ConnectionID,
+			ConnectionID:  derefString(r.ConnectionID),
 			WorkspaceID:   workspaceID,
 			Provider:      r.Provider,
 			Owner:         r.Owner,
@@ -180,7 +185,8 @@ func (s *postgresStore) ListByWorkspace(ctx context.Context, workspaceID string)
 			DefaultBranch: r.DefaultBranch,
 			IsPrivate:     r.IsPrivate,
 			HTMLURL:       r.HtmlUrl,
-			GitHubLogin:   r.GithubLogin,
+			GitHubLogin:   derefString(r.GithubLogin),
+			Access:        r.Access,
 			CreatedAt:     r.CreatedAt,
 			UpdatedAt:     r.UpdatedAt,
 		})
@@ -197,6 +203,24 @@ func (s *postgresStore) DeleteProjectSource(ctx context.Context, tx database.Tx,
 		return "", false, err
 	}
 	return id, true, nil
+}
+
+// nullableUUID maps an empty id to a SQL NULL (nil *string) and a non-empty id to a
+// pointer — a public source has no connection, stored as NULL connection_id.
+func nullableUUID(id string) *string {
+	if id == "" {
+		return nil
+	}
+	return &id
+}
+
+// derefString reads a nullable column (NULL -> ""), the inverse of nullableUUID for the
+// id columns and the natural mapping for a LEFT JOINed github_login.
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // WorkspaceIDForProject reuses the shared project->workspace resolution query.

@@ -18,7 +18,8 @@ type ConnectionWrite struct {
 	ConnectedBy     *string
 }
 
-// ProjectSourceWrite is the data UpsertProjectSource persists.
+// ProjectSourceWrite is the data UpsertProjectSource persists. ConnectionID is empty for
+// a public source (no connection); Access records how the source is reached.
 type ProjectSourceWrite struct {
 	ProjectID     string
 	ConnectionID  string
@@ -30,6 +31,7 @@ type ProjectSourceWrite struct {
 	DefaultBranch string
 	IsPrivate     bool
 	HTMLURL       string
+	Access        string
 }
 
 // Store is the repository port the service needs. Implemented by postgres.go, faked in

@@ -10,6 +10,7 @@ import {
   GitBranch,
   GitFork,
   Gauge,
+  Globe,
   Lock,
   Rocket,
 } from "lucide-react";
@@ -201,7 +202,14 @@ export function ProjectDetailPage() {
                           private
                         </span>
                       )}
-                      {source.data.githubLogin && <span>connected as {source.data.githubLogin}</span>}
+                      {source.data.access === "public" ? (
+                        <span className="inline-flex items-center gap-1">
+                          <Globe className="h-3 w-3" aria-hidden="true" />
+                          public repo
+                        </span>
+                      ) : (
+                        source.data.githubLogin && <span>connected as {source.data.githubLogin}</span>
+                      )}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">

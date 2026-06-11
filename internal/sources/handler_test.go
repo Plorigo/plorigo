@@ -22,6 +22,7 @@ type fakeService struct {
 	list        []Source
 	err         error
 	gotProject  string
+	gotRepoURL  string
 	gotDisconnW string
 }
 
@@ -46,6 +47,11 @@ func (f *fakeService) ListBranches(context.Context, string, string, string) ([]s
 }
 func (f *fakeService) ConnectRepository(_ context.Context, in ConnectRepoInput) (Source, error) {
 	f.gotProject = in.ProjectID
+	return f.source, f.err
+}
+func (f *fakeService) ConnectPublicRepository(_ context.Context, in ConnectPublicRepoInput) (Source, error) {
+	f.gotProject = in.ProjectID
+	f.gotRepoURL = in.RepoURL
 	return f.source, f.err
 }
 func (f *fakeService) GetProjectSource(context.Context, string) (Source, error) {
@@ -118,6 +124,24 @@ func TestHandler_ConnectRepository(t *testing.T) {
 	}
 	if svc.gotProject != "p1" {
 		t.Errorf("project = %q, want p1", svc.gotProject)
+	}
+}
+
+func TestHandler_ConnectPublicRepository(t *testing.T) {
+	svc := &fakeService{source: Source{ID: "s1", ProjectID: "p1", FullName: "octocat/Hello-World", Branch: "main", Access: accessPublic, CreatedAt: time.Now(), UpdatedAt: time.Now()}}
+	h := &handler{svc: svc}
+	resp, err := h.ConnectPublicRepository(context.Background(), connect.NewRequest(&controlplanev1.ConnectPublicRepositoryRequest{ProjectId: "p1", RepoUrl: "https://github.com/octocat/Hello-World", Branch: "main"}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if svc.gotProject != "p1" || svc.gotRepoURL != "https://github.com/octocat/Hello-World" {
+		t.Errorf("inputs not forwarded: project=%q url=%q", svc.gotProject, svc.gotRepoURL)
+	}
+	if got := resp.Msg.GetSource().GetAccess(); got != "public" {
+		t.Errorf("access = %q, want public", got)
+	}
+	if resp.Msg.GetSource().GetFullName() != "octocat/Hello-World" {
+		t.Errorf("full_name = %q", resp.Msg.GetSource().GetFullName())
 	}
 }
 

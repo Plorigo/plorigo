@@ -23,6 +23,15 @@ import (
 // the `provider` CHECK constraint (a migration) rather than reshaping the tables.
 const provider = "github"
 
+// access records how a project source is reached, mirrored on the `access` column and
+// Source.Access. A public source carries no connection and no credential; an oauth
+// source resolves through the workspace's OAuth Connection. ('app' — the GitHub App — is
+// a later slice; the column's CHECK already permits it.)
+const (
+	accessOAuth  = "oauth"
+	accessPublic = "public"
+)
+
 // Source is a project's connected repository + branch (the domain model, independent of
 // DB and transport types). It carries no token. WorkspaceID is resolved through the
 // parent project for authorization/audit and is not part of the wire contract.
@@ -39,7 +48,8 @@ type Source struct {
 	DefaultBranch string
 	IsPrivate     bool
 	HTMLURL       string
-	GitHubLogin   string // the connected account this source resolves through
+	GitHubLogin   string // the connected account this source resolves through; empty when public
+	Access        string // how the source is reached: "oauth" | "public" | "app"
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
@@ -83,6 +93,16 @@ type ConnectRepoInput struct {
 	ProjectID string
 	Owner     string
 	Repo      string
+	Branch    string
+}
+
+// ConnectPublicRepoInput connects a public repository to a project with no provider
+// connection. RepoURL is a public repo URL ("https://github.com/owner/repo", with or
+// without ".git") or a bare "owner/repo"; Branch is optional (empty selects the
+// repository's default branch).
+type ConnectPublicRepoInput struct {
+	ProjectID string
+	RepoURL   string
 	Branch    string
 }
 
@@ -147,6 +167,7 @@ type Service interface {
 	ListBranches(ctx context.Context, workspaceID, owner, repo string) ([]string, error)
 
 	ConnectRepository(ctx context.Context, in ConnectRepoInput) (Source, error)
+	ConnectPublicRepository(ctx context.Context, in ConnectPublicRepoInput) (Source, error)
 	GetProjectSource(ctx context.Context, projectID string) (Source, error)
 	ListByWorkspace(ctx context.Context, workspaceID string) ([]Source, error)
 	DisconnectRepository(ctx context.Context, projectID string) error

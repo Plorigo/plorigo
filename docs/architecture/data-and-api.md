@@ -56,7 +56,9 @@ on top of it is built or committed. For what's actually planned, see [ROADMAP.md
 - After a schema change, **regenerate `sqlc`** in the same change; never hand-edit generated files.
 - Privileged data — secret values, and the GitHub OAuth tokens in `source_connections` —
   follows the rules in [security.md](./security.md): store ciphertext and metadata, never
-  plaintext.
+  plaintext. A `project_sources` row records how the repo is reached in an `access` column
+  (`oauth` | `public` | `app`); a **public** source has a **NULL `connection_id`** and stores no
+  credential at all, so `connection_id` is nullable and the reads `LEFT JOIN source_connections`.
 
 ## API: ConnectRPC + Protocol Buffers
 

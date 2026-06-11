@@ -47,22 +47,30 @@ tokens and reset/verify links must never reach the audit trail or logs.
 
 See [data-and-api.md](./data-and-api.md) for how secret ciphertext and metadata are stored.
 
-### Source integration credentials (GitHub OAuth)
+### Source integration credentials (GitHub OAuth, public repos)
 
-Connecting a project to a Git repository stores a provider credential, so it follows the
+Connecting a project to a Git repository may store a provider credential, so it follows the
 secret discipline with one deliberate difference — the token is **opened server-side** to call
-the provider on the user's behalf:
+the provider on the user's behalf. How a source is reached is recorded in an explicit `access`
+discriminator on the project source (`oauth` | `public` | `app`):
 
 - The OAuth **App** credentials (`GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET`) are
   **server config**, not per-workspace data; when unset, the connect flow reports itself as not
-  configured and the UI disables it.
-- The per-workspace OAuth **access token** is **sealed at rest** with the same AES-256-GCM box
-  and `APP_MASTER_KEY` as secrets. It is **write-only through the API**: no RPC returns it and it
-  is **never logged**. It is decrypted only in-process to call the provider (list repositories,
-  read a repo/branch); a future build job will open it the same way to fetch source.
-- One connection per workspace (`source.connect` / `source.read` / `source.disconnect` actions),
-  authorized **before** the write and **audited** in the same transaction. Disconnecting the
-  provider is blocked while projects still reference it (a recovery path, not a silent cascade).
+  configured and the UI disables it (the public path stays available regardless).
+- The per-workspace OAuth **access token** (`access = 'oauth'`) is **sealed at rest** with the
+  same AES-256-GCM box and `APP_MASTER_KEY` as secrets. It is **write-only through the API**: no
+  RPC returns it and it is **never logged**. It is decrypted only in-process to call the provider
+  (list repositories, read a repo/branch); a future build job will open it the same way to fetch
+  source.
+- **Public repositories (`access = 'public'`) carry no credential at all.** The repo is read
+  **unauthenticated** (empty token, no connection), so only genuinely public repos resolve — a
+  private or missing repo is invisible to an anonymous request and surfaces as "not found". The
+  project source stores a **NULL connection**, so it is never blocked by — and never blocks — a
+  workspace's OAuth connection. This is the lowest-blast-radius way to deploy an open-source app.
+- One OAuth connection per workspace (`source.connect` / `source.read` / `source.disconnect`
+  actions), authorized **before** the write and **audited** in the same transaction. Disconnecting
+  the provider is blocked while projects still reference it (a recovery path, not a silent
+  cascade); public sources hold no connection and so never participate in that guard.
 - The browser OAuth handshake is protected by a **sealed, expiring, single-use `state`** bound to
   the initiating workspace and user (set as an `HttpOnly` cookie, echoed back and verified on the
   callback) — the callback is the one cross-site entry point and must not act on a forged request.
@@ -75,8 +83,10 @@ the provider on the user's behalf:
 > read/write to **all** of the connecting user's repositories — there is no per-repo or read-only
 > grant with an OAuth App. The token is encrypted at rest and revoked on disconnect, but a
 > highly-privileged credential still exists while connected. Set `GITHUB_OAUTH_SCOPES=public_repo`
-> to limit it to public repositories. The narrower, per-repo, read-only path is a **GitHub App**,
-> which is the likely direction before clone/build lands — see [ROADMAP.md](../../ROADMAP.md).
+> to limit it to public repositories. For an open-source app, the **public-repo path** avoids the
+> credential entirely (connect by URL, read anonymously). The narrower, per-repo, read-only path
+> for private repos is a **GitHub App**, which is the likely direction before clone/build lands —
+> see [ROADMAP.md](../../ROADMAP.md).
 
 ### Audit, approvals, recovery
 

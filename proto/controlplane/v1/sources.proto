@@ -4,13 +4,16 @@ package controlplane.v1;
 
 // A Source links a project to a Git repository and branch it deploys from. This slice
 // stores and displays the connection only — building/cloning from it is a later slice
-// (see docs/architecture/deployment-engine.md). The OAuth access token used to reach
-// the repo lives on the workspace's Connection, is sealed at rest, and is NEVER
-// returned by any RPC. See docs/architecture/security.md.
+// (see docs/architecture/deployment-engine.md). A source is reached one of three ways,
+// recorded in `access`: "oauth" (via the workspace's OAuth Connection), "public" (a
+// public repo, no connection or credential at all), or "app" (the GitHub App, a later
+// slice). For a public source connection_id and github_login are empty. Any access token
+// used to reach a private repo lives on the workspace's Connection, is sealed at rest,
+// and is NEVER returned by any RPC. See docs/architecture/security.md.
 message Source {
   string id = 1;
   string project_id = 2;
-  string connection_id = 3;
+  string connection_id = 3; // empty for a public source
   string provider = 4; // "github"
   string owner = 5;
   string repo = 6;
@@ -19,9 +22,10 @@ message Source {
   string default_branch = 9;
   bool is_private = 10;
   string html_url = 11;
-  string github_login = 12; // the connected account this source resolves through
+  string github_login = 12; // the connected account this source resolves through; empty when public
   string created_at = 13; // RFC 3339
   string updated_at = 14; // RFC 3339
+  string access = 15; // "oauth" | "public" | "app" — how the source is reached
 }
 
 // A Connection is a workspace's link to a Git provider account (one per workspace).
@@ -92,6 +96,18 @@ message ConnectRepositoryResponse {
   Source source = 1;
 }
 
+message ConnectPublicRepositoryRequest {
+  string project_id = 1;
+  // A public repository URL ("https://github.com/owner/repo", with or without ".git")
+  // or a bare "owner/repo". The server reads it unauthenticated, so it must be public.
+  string repo_url = 2;
+  string branch = 3; // optional; empty selects the repository's default branch
+}
+
+message ConnectPublicRepositoryResponse {
+  Source source = 1;
+}
+
 message GetProjectSourceRequest {
   string project_id = 1;
 }
@@ -131,6 +147,8 @@ service SourceService {
   rpc ListRepositories(ListRepositoriesRequest) returns (ListRepositoriesResponse);
   rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse);
   rpc ConnectRepository(ConnectRepositoryRequest) returns (ConnectRepositoryResponse);
+  // ConnectPublicRepository connects a public repo by URL with no provider connection.
+  rpc ConnectPublicRepository(ConnectPublicRepositoryRequest) returns (ConnectPublicRepositoryResponse);
   rpc GetProjectSource(GetProjectSourceRequest) returns (GetProjectSourceResponse);
   rpc ListSourcesByWorkspace(ListSourcesByWorkspaceRequest) returns (ListSourcesByWorkspaceResponse);
   rpc DisconnectRepository(DisconnectRepositoryRequest) returns (DisconnectRepositoryResponse);
