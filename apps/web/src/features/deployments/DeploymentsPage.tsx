@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { AlertTriangle, CheckCircle2, Rocket, Terminal } from "lucide-react";
 
@@ -21,7 +20,6 @@ import { deployments, logLines } from "@/lib/mockDashboard";
 import { statusTone } from "@/lib/status";
 import { useDeploymentsByProject, useDeploymentsByWorkspace, useProjects } from "@/lib/queries";
 import { useWorkspaceStore } from "@/store";
-import { NewDeploymentDialog } from "./NewDeploymentDialog";
 
 export function DeploymentsPage() {
   const demo = useDemoData();
@@ -34,7 +32,6 @@ export function DeploymentsPage() {
   const byProject = useDeploymentsByProject(projectId);
   const deps = projectId ? byProject : byWorkspace;
   const projects = useProjects(workspaceId);
-  const [open, setOpen] = useState(false);
 
   const error = errorMessage(deps.error);
   const loading = deps.isLoading;
@@ -47,14 +44,16 @@ export function DeploymentsPage() {
         title="Deployments"
         description="A timeline for every release, with build and runtime logs and rollback context."
         actions={
-          <Button size="sm" disabled={!workspaceId} onClick={() => setOpen(true)}>
+          <Button
+            size="sm"
+            disabled={!workspaceId}
+            onClick={() => navigate({ to: "/deployments/new", search: projectId ? { project: projectId } : {} })}
+          >
             <Rocket className="h-4 w-4" aria-hidden="true" />
             New deployment
           </Button>
         }
       />
-
-      <NewDeploymentDialog workspaceId={workspaceId} open={open} onOpenChange={setOpen} />
 
       {loading && <Skeleton className="h-48 w-full" />}
 
