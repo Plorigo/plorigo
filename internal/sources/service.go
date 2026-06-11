@@ -336,6 +336,7 @@ func (s *service) ConnectRepository(ctx context.Context, in ConnectRepoInput) (S
 			DefaultBranch: info.DefaultBranch,
 			IsPrivate:     info.Private,
 			HTMLURL:       info.HTMLURL,
+			Access:        accessOAuth,
 		})
 		if txErr != nil {
 			return txErr
@@ -349,6 +350,121 @@ func (s *service) ConnectRepository(ctx context.Context, in ConnectRepoInput) (S
 	saved.GitHubLogin = conn.GitHubLogin
 	s.log.Info("repository connected", "project_id", in.ProjectID, "repo", info.FullName, "branch", branch, "actor", caller.UserID)
 	return saved, nil
+}
+
+// ConnectPublicRepository connects a public repository (by URL) to a project with no
+// provider connection and no stored credential. The repo is read UNAUTHENTICATED, so a
+// private or missing repository is invisible and surfaces as NotFound. Authorization and
+// auditing mirror ConnectRepository; only the credential-less provider reads differ.
+func (s *service) ConnectPublicRepository(ctx context.Context, in ConnectPublicRepoInput) (Source, error) {
+	if _, err := id.Parse(in.ProjectID); err != nil {
+		return Source{}, problem.InvalidInput("a valid project_id is required")
+	}
+	owner, repo, err := parsePublicRepo(in.RepoURL)
+	if err != nil {
+		return Source{}, err
+	}
+	branch := strings.TrimSpace(in.Branch)
+
+	workspaceID, ok, err := s.store.WorkspaceIDForProject(ctx, in.ProjectID)
+	if err != nil {
+		return Source{}, problem.Internalf(err, "connect public repository")
+	}
+	if !ok {
+		return Source{}, problem.NotFound("project %s not found", in.ProjectID)
+	}
+
+	caller := principal.FromContext(ctx)
+	if err := s.authorizer.Authorize(ctx, caller, authz.ActionSourceConnect, authz.Resource{Type: "source", WorkspaceID: workspaceID}); err != nil {
+		return Source{}, err
+	}
+
+	// Empty token = anonymous request. Capture authoritative metadata (don't trust the
+	// client's owner/repo casing) and confirm the repo is reachable without credentials.
+	info, err := s.gh.GetRepository(ctx, "", owner, repo)
+	if err != nil {
+		return Source{}, mapGitHubErr(err)
+	}
+	if info.Private {
+		// Defensive: an anonymous read of a private repo returns NotFound above, but if a
+		// provider ever reported one as visible-but-private, refuse it on the public path.
+		return Source{}, problem.InvalidInput("%s is private; connect GitHub to deploy a private repository", info.FullName)
+	}
+	// An empty branch defaults to the repo's default (known to exist); otherwise verify
+	// the chosen branch directly, avoiding the capped branch-list page.
+	if branch == "" {
+		branch = info.DefaultBranch
+	} else if err := s.gh.GetBranch(ctx, "", info.Owner, info.Name, branch); err != nil {
+		if errors.Is(err, github.ErrNotFound) {
+			return Source{}, problem.InvalidInput("branch %q was not found in %s", branch, info.FullName)
+		}
+		return Source{}, mapGitHubErr(err)
+	}
+
+	var saved Source
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		var txErr error
+		saved, txErr = s.store.UpsertProjectSource(ctx, tx, ProjectSourceWrite{
+			ProjectID:     in.ProjectID,
+			ConnectionID:  "", // public: no connection, stored as NULL
+			Provider:      provider,
+			Owner:         info.Owner,
+			Repo:          info.Name,
+			FullName:      info.FullName,
+			Branch:        branch,
+			DefaultBranch: info.DefaultBranch,
+			IsPrivate:     false,
+			HTMLURL:       info.HTMLURL,
+			Access:        accessPublic,
+		})
+		if txErr != nil {
+			return txErr
+		}
+		return s.audit.Record(ctx, tx, "source.connect", "project_source", saved.ID, workspaceID, caller.UserID)
+	})
+	if err != nil {
+		return Source{}, mapErr(err, "connect public repository")
+	}
+	saved.WorkspaceID = workspaceID
+	s.log.Info("public repository connected", "project_id", in.ProjectID, "repo", info.FullName, "branch", branch, "actor", caller.UserID)
+	return saved, nil
+}
+
+// parsePublicRepo extracts owner and repo from a public GitHub reference: a full URL
+// ("https://github.com/owner/repo", optionally ".git" or with extra path), the SSH form
+// ("git@github.com:owner/repo.git"), or a bare "owner/repo". It rejects anything that
+// does not resolve to owner/repo on github.com.
+func parsePublicRepo(raw string) (owner, repo string, err error) {
+	s := strings.TrimSpace(raw)
+	bad := func() (string, string, error) {
+		return "", "", problem.InvalidInput("enter a public GitHub repository URL like https://github.com/owner/repo")
+	}
+	if s == "" {
+		return bad()
+	}
+	if rest, ok := strings.CutPrefix(s, "git@github.com:"); ok {
+		s = rest
+	} else {
+		s = strings.TrimPrefix(s, "https://")
+		s = strings.TrimPrefix(s, "http://")
+		s = strings.TrimPrefix(s, "www.")
+		if rest, ok := strings.CutPrefix(s, "github.com/"); ok {
+			s = rest
+		} else if first, _, found := strings.Cut(s, "/"); found && strings.Contains(first, ".") {
+			// A host segment is present but it is not github.com.
+			return bad()
+		}
+	}
+	parts := strings.Split(strings.TrimPrefix(s, "/"), "/")
+	if len(parts) < 2 {
+		return bad()
+	}
+	owner = parts[0]
+	repo = strings.TrimSuffix(parts[1], ".git")
+	if owner == "" || repo == "" {
+		return bad()
+	}
+	return owner, repo, nil
 }
 
 func (s *service) GetProjectSource(ctx context.Context, projectID string) (Source, error) {

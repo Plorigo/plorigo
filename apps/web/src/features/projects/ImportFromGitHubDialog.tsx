@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "re
 import { ConnectError } from "@connectrpc/connect";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { GitFork, Lock } from "lucide-react";
+import { GitFork, Globe, Lock } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button, Input, Select } from "@/components/ui";
@@ -14,14 +14,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/cn";
 import { environmentClient, projectClient, sourceClient } from "@/lib/clients";
 import { useBranches, useGitHubConnection, useRepositories } from "@/lib/queries";
 
 const ENV_TYPES = ["production", "staging", "preview", "custom"] as const;
 
-// ImportFromGitHubDialog connects a project to a GitHub repository + branch. With no
-// projectId it imports a new project (creates the project, connects the repo, and adds a
-// first environment); with a projectId it connects the repo to that existing project.
+type Method = "oauth" | "public";
+
+// ImportFromGitHubDialog connects a project to a Git repository + branch. The source can
+// come from the workspace's connected GitHub account (OAuth) or from a public repository
+// URL (no connection or credential). With no projectId it imports a new project (creates
+// the project, connects the repo, and adds a first environment); with a projectId it
+// connects the repo to that existing project.
 export function ImportFromGitHubDialog({
   workspaceId,
   open,
@@ -39,15 +44,22 @@ export function ImportFromGitHubDialog({
   const connected = connection.data?.connected ?? false;
   const configured = connection.data?.configured ?? false;
 
-  const repos = useRepositories(workspaceId, open && connected);
+  const [method, setMethod] = useState<Method>("oauth");
+
+  // OAuth picker state.
+  const repos = useRepositories(workspaceId, open && method === "oauth" && connected);
   const [filter, setFilter] = useState("");
   const [repoFullName, setRepoFullName] = useState("");
   const selectedRepo = useMemo(
     () => repos.data?.find((r) => r.fullName === repoFullName),
     [repos.data, repoFullName],
   );
-
   const branches = useBranches(workspaceId, selectedRepo?.owner ?? "", selectedRepo?.name ?? "");
+
+  // Public-URL state.
+  const [repoUrl, setRepoUrl] = useState("");
+
+  // Shared.
   const [branch, setBranch] = useState("");
   const [name, setName] = useState("");
   const [envName, setEnvName] = useState("Production");
@@ -58,8 +70,10 @@ export function ImportFromGitHubDialog({
   const importMode = !projectId;
 
   function reset() {
+    setMethod(configured ? "oauth" : "public");
     setFilter("");
     setRepoFullName("");
+    setRepoUrl("");
     setBranch("");
     setName("");
     setEnvName("Production");
@@ -68,12 +82,25 @@ export function ImportFromGitHubDialog({
     setError("");
   }
 
-  // When a repo is picked, default the branch to its default and prefill the name.
+  // When OAuth isn't configured, default to the public URL method (the working path).
   useEffect(() => {
-    if (!selectedRepo) return;
+    if (!connection.isLoading && !configured) setMethod("public");
+  }, [connection.isLoading, configured]);
+
+  // OAuth: when a repo is picked, default the branch to its default and prefill the name.
+  useEffect(() => {
+    if (method !== "oauth" || !selectedRepo) return;
     setBranch(selectedRepo.defaultBranch || "");
     if (importMode) setName((prev) => prev || selectedRepo.name);
-  }, [selectedRepo, importMode]);
+  }, [method, selectedRepo, importMode]);
+
+  // Public: clearing the branch falls back to the repo's default on the server. Prefill
+  // the project name from the URL's repo segment (best-effort; the server is authoritative).
+  useEffect(() => {
+    if (method !== "public" || !importMode) return;
+    const suggested = repoNameFromUrl(repoUrl);
+    if (suggested) setName((prev) => prev || suggested);
+  }, [method, importMode, repoUrl]);
 
   const filteredRepos = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -86,19 +113,49 @@ export function ImportFromGitHubDialog({
     window.location.assign(`/api/github/connect?workspace_id=${encodeURIComponent(workspaceId)}`);
   }
 
+  // A friendly label for toasts: "owner/repo" for OAuth, the parsed pair for a public URL.
+  const displayName =
+    method === "public" ? ownerRepoFromUrl(repoUrl) || repoUrl.trim() : (selectedRepo?.fullName ?? "");
+
+  // Run the right connect RPC for the chosen method.
+  async function connectStep(targetProjectId: string) {
+    if (method === "public") {
+      await sourceClient.connectPublicRepository({
+        projectId: targetProjectId,
+        repoUrl: repoUrl.trim(),
+        branch: branch.trim(),
+      });
+    } else {
+      if (!selectedRepo) throw new Error("select a repository");
+      await sourceClient.connectRepository({
+        projectId: targetProjectId,
+        owner: selectedRepo.owner,
+        repo: selectedRepo.name,
+        branch,
+      });
+    }
+  }
+
+  async function invalidateSource(targetProjectId: string) {
+    await queryClient.invalidateQueries({ queryKey: ["projectSource", targetProjectId] });
+    await queryClient.invalidateQueries({ queryKey: ["sources", workspaceId] });
+  }
+
+  const canConnect =
+    method === "public" ? repoUrl.trim().length > 0 : Boolean(selectedRepo && branch);
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!selectedRepo || !branch) return;
+    if (!canConnect) return;
     setBusy(true);
     setError("");
 
-    // Connect-to-existing-project: a single connectRepository call.
+    // Connect-to-existing-project: a single connect call.
     if (!importMode) {
       try {
-        await sourceClient.connectRepository({ projectId, owner: selectedRepo.owner, repo: selectedRepo.name, branch });
-        await queryClient.invalidateQueries({ queryKey: ["projectSource", projectId] });
-        await queryClient.invalidateQueries({ queryKey: ["sources", workspaceId] });
-        toast.success(`Connected ${selectedRepo.fullName}`);
+        await connectStep(projectId);
+        await invalidateSource(projectId);
+        toast.success(`Connected ${displayName}`);
         onOpenChange(false);
         reset();
       } catch (err) {
@@ -129,9 +186,8 @@ export function ImportFromGitHubDialog({
     }
 
     try {
-      await sourceClient.connectRepository({ projectId: newProjectId, owner: selectedRepo.owner, repo: selectedRepo.name, branch });
-      await queryClient.invalidateQueries({ queryKey: ["projectSource", newProjectId] });
-      await queryClient.invalidateQueries({ queryKey: ["sources", workspaceId] });
+      await connectStep(newProjectId);
+      await invalidateSource(newProjectId);
     } catch (err) {
       const detail = err instanceof ConnectError ? err.message : "unknown error";
       toast.error(`Project created, but connecting the repo failed: ${detail}. Connect it from the project page.`);
@@ -153,11 +209,14 @@ export function ImportFromGitHubDialog({
       return;
     }
 
-    toast.success(`Imported ${selectedRepo.fullName}`);
+    toast.success(`Imported ${displayName || projectName}`);
     onOpenChange(false);
     reset();
     void navigate({ to: "/projects/$projectId", params: { projectId: newProjectId } });
   }
+
+  const submitDisabled = busy || !canConnect || (importMode && (!name.trim() || !workspaceId));
+  const submitLabel = busy ? "Connecting..." : importMode ? "Import project" : "Connect repository";
 
   return (
     <Dialog
@@ -177,115 +236,210 @@ export function ImportFromGitHubDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {connection.isLoading ? (
-          <p className="text-sm text-muted-foreground">Checking GitHub connection…</p>
-        ) : !configured ? (
-          <div className="rounded-md border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
-            GitHub OAuth isn't configured on this server. Set <code>GITHUB_OAUTH_CLIENT_ID</code> and{" "}
-            <code>GITHUB_OAUTH_CLIENT_SECRET</code> to enable importing from GitHub.
-          </div>
-        ) : !connected ? (
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground">
-              Connect your GitHub account to choose a repository. You'll be redirected to GitHub to authorize, then
-              back here.
-            </p>
-            <Button type="button" onClick={startConnect} disabled={!workspaceId}>
-              <GitFork className="h-4 w-4" aria-hidden="true" />
-              Connect GitHub
-            </Button>
-          </div>
+        <div className="inline-flex rounded-md border border-border bg-muted/30 p-0.5">
+          {(["oauth", "public"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => {
+                setMethod(m);
+                setError("");
+              }}
+              className={cn(
+                "rounded px-3 py-1 text-sm transition-colors",
+                method === m
+                  ? "bg-background font-medium text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {m === "oauth" ? "GitHub account" : "Public URL"}
+            </button>
+          ))}
+        </div>
+
+        {method === "oauth" ? (
+          connection.isLoading ? (
+            <p className="text-sm text-muted-foreground">Checking GitHub connection…</p>
+          ) : !configured ? (
+            <div className="rounded-md border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+              GitHub OAuth isn't configured on this server. Set <code>GITHUB_OAUTH_CLIENT_ID</code> and{" "}
+              <code>GITHUB_OAUTH_CLIENT_SECRET</code> to enable it, or connect a public repository by URL above.
+            </div>
+          ) : !connected ? (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Connect your GitHub account to choose a repository. You'll be redirected to GitHub to authorize, then
+                back here.
+              </p>
+              <Button type="button" onClick={startConnect} disabled={!workspaceId}>
+                <GitFork className="h-4 w-4" aria-hidden="true" />
+                Connect GitHub
+              </Button>
+            </div>
+          ) : (
+            <form onSubmit={onSubmit} className="space-y-4">
+              <Field label="Repository">
+                <div className="space-y-2">
+                  <Input
+                    value={filter}
+                    onChange={(e) => setFilter(e.target.value)}
+                    placeholder="Filter repositories…"
+                    autoFocus
+                  />
+                  <Select
+                    value={repoFullName}
+                    onChange={(e) => setRepoFullName(e.target.value)}
+                    aria-label="Repository"
+                    required
+                  >
+                    <option value="" disabled>
+                      {repos.isLoading ? "Loading repositories…" : "Select a repository"}
+                    </option>
+                    {filteredRepos.map((r) => (
+                      <option key={r.fullName} value={r.fullName}>
+                        {r.fullName}
+                        {r.isPrivate ? " (private)" : ""}
+                      </option>
+                    ))}
+                  </Select>
+                  {(repos.data?.length ?? 0) >= 100 && (
+                    <p className="text-xs text-muted-foreground">
+                      Showing the 100 most recently updated repositories. Use the filter to find others.
+                    </p>
+                  )}
+                </div>
+              </Field>
+
+              {selectedRepo && (
+                <Field label="Branch">
+                  <Select value={branch} onChange={(e) => setBranch(e.target.value)} aria-label="Branch" required>
+                    {branches.isLoading && <option value="">Loading branches…</option>}
+                    {(branches.data ?? []).map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              )}
+
+              {importMode && selectedRepo && (
+                <ImportFields
+                  name={name}
+                  setName={setName}
+                  envName={envName}
+                  setEnvName={setEnvName}
+                  envType={envType}
+                  setEnvType={setEnvType}
+                />
+              )}
+
+              {selectedRepo?.isPrivate && (
+                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Lock className="h-3 w-3" aria-hidden="true" />
+                  Private repository — Plorigo will access it through your GitHub connection.
+                </p>
+              )}
+
+              {error && <ErrorBox>{error}</ErrorBox>}
+
+              <DialogFooter>
+                <Button type="submit" disabled={submitDisabled}>
+                  {submitLabel}
+                </Button>
+              </DialogFooter>
+            </form>
+          )
         ) : (
           <form onSubmit={onSubmit} className="space-y-4">
-            <Field label="Repository">
-              <div className="space-y-2">
-                <Input
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  placeholder="Filter repositories…"
-                  autoFocus
-                />
-                <Select
-                  value={repoFullName}
-                  onChange={(e) => setRepoFullName(e.target.value)}
-                  aria-label="Repository"
-                  required
-                >
-                  <option value="" disabled>
-                    {repos.isLoading ? "Loading repositories…" : "Select a repository"}
-                  </option>
-                  {filteredRepos.map((r) => (
-                    <option key={r.fullName} value={r.fullName}>
-                      {r.fullName}
-                      {r.isPrivate ? " (private)" : ""}
-                    </option>
-                  ))}
-                </Select>
-                {(repos.data?.length ?? 0) >= 100 && (
-                  <p className="text-xs text-muted-foreground">
-                    Showing the 100 most recently updated repositories. Use the filter to find others.
-                  </p>
-                )}
-              </div>
+            <Field label="Public repository URL">
+              <Input
+                value={repoUrl}
+                onChange={(e) => setRepoUrl(e.target.value)}
+                placeholder="https://github.com/owner/repo"
+                autoFocus
+                inputMode="url"
+                autoCapitalize="none"
+                spellCheck={false}
+                required
+              />
             </Field>
 
-            {selectedRepo && (
-              <Field label="Branch">
-                <Select value={branch} onChange={(e) => setBranch(e.target.value)} aria-label="Branch" required>
-                  {branches.isLoading && <option value="">Loading branches…</option>}
-                  {(branches.data ?? []).map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
+            <Field label="Branch (optional)">
+              <Input
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+                placeholder="default branch"
+                autoCapitalize="none"
+                spellCheck={false}
+              />
+            </Field>
+
+            {importMode && repoUrl.trim() && (
+              <ImportFields
+                name={name}
+                setName={setName}
+                envName={envName}
+                setEnvName={setEnvName}
+                envType={envType}
+                setEnvType={setEnvType}
+              />
             )}
 
-            {importMode && selectedRepo && (
-              <>
-                <Field label="Project name">
-                  <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-app" required />
-                </Field>
-                <div className="grid grid-cols-[minmax(0,1fr)_140px] gap-3">
-                  <Field label="First environment">
-                    <Input value={envName} onChange={(e) => setEnvName(e.target.value)} required />
-                  </Field>
-                  <Field label="Type">
-                    <Select value={envType} onChange={(e) => setEnvType(e.target.value)}>
-                      {ENV_TYPES.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </Select>
-                  </Field>
-                </div>
-              </>
-            )}
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Globe className="h-3 w-3" aria-hidden="true" />
+              The repository must be public — it's read without any credentials.
+            </p>
 
-            {selectedRepo?.isPrivate && (
-              <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <Lock className="h-3 w-3" aria-hidden="true" />
-                Private repository — Plorigo will access it through your GitHub connection.
-              </p>
-            )}
-
-            {error && (
-              <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {error}
-              </p>
-            )}
+            {error && <ErrorBox>{error}</ErrorBox>}
 
             <DialogFooter>
-              <Button type="submit" disabled={busy || !selectedRepo || !branch || (importMode && !name.trim())}>
-                {busy ? "Connecting..." : importMode ? "Import project" : "Connect repository"}
+              <Button type="submit" disabled={submitDisabled}>
+                {submitLabel}
               </Button>
             </DialogFooter>
           </form>
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function ImportFields({
+  name,
+  setName,
+  envName,
+  setEnvName,
+  envType,
+  setEnvType,
+}: {
+  name: string;
+  setName: (v: string) => void;
+  envName: string;
+  setEnvName: (v: string) => void;
+  envType: string;
+  setEnvType: (v: string) => void;
+}) {
+  return (
+    <>
+      <Field label="Project name">
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my-app" required />
+      </Field>
+      <div className="grid grid-cols-[minmax(0,1fr)_140px] gap-3">
+        <Field label="First environment">
+          <Input value={envName} onChange={(e) => setEnvName(e.target.value)} required />
+        </Field>
+        <Field label="Type">
+          <Select value={envType} onChange={(e) => setEnvType(e.target.value)}>
+            {ENV_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </div>
+    </>
   );
 }
 
@@ -296,4 +450,32 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       {children}
     </label>
   );
+}
+
+function ErrorBox({ children }: { children: ReactNode }) {
+  return (
+    <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+      {children}
+    </p>
+  );
+}
+
+// ownerRepoFromUrl extracts "owner/repo" from a public GitHub reference for display; it
+// mirrors the server's parse loosely and returns "" when the input isn't yet a repo.
+function ownerRepoFromUrl(raw: string): string {
+  let s = raw.trim();
+  if (!s) return "";
+  if (s.startsWith("git@github.com:")) {
+    s = s.slice("git@github.com:".length);
+  } else {
+    s = s.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/^github\.com\//, "");
+  }
+  const parts = s.replace(/^\/+/, "").split("/").filter(Boolean);
+  if (parts.length < 2) return "";
+  return `${parts[0]}/${parts[1].replace(/\.git$/, "")}`;
+}
+
+function repoNameFromUrl(raw: string): string {
+  const pair = ownerRepoFromUrl(raw);
+  return pair ? pair.split("/")[1] : "";
 }

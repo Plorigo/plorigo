@@ -76,7 +76,7 @@ func (f *fakeStore) UpsertProjectSource(_ context.Context, _ database.Tx, w Proj
 	f.upsertedSource = &w
 	return Source{ID: testSourceID, ProjectID: w.ProjectID, ConnectionID: w.ConnectionID, Provider: w.Provider,
 		Owner: w.Owner, Repo: w.Repo, FullName: w.FullName, Branch: w.Branch, DefaultBranch: w.DefaultBranch,
-		IsPrivate: w.IsPrivate, HTMLURL: w.HTMLURL}, nil
+		IsPrivate: w.IsPrivate, HTMLURL: w.HTMLURL, Access: w.Access}, nil
 }
 func (f *fakeStore) GetProjectSource(_ context.Context, _ string) (Source, bool, error) {
 	return f.src, f.srcOK, nil
@@ -139,6 +139,10 @@ type fakeGitHub struct {
 	revokeErr       error
 	authorizeState  string
 	listReposCalled bool
+	getRepoCalled   bool
+	getRepoToken    string
+	getBranchCalled bool
+	getBranchToken  string
 	revokedTokens   []string
 }
 
@@ -152,7 +156,9 @@ func (f *fakeGitHub) ExchangeCode(_ context.Context, _, _, _, _ string) (github.
 func (f *fakeGitHub) GetAuthenticatedUser(_ context.Context, _ string) (github.User, error) {
 	return f.user, f.userErr
 }
-func (f *fakeGitHub) GetRepository(_ context.Context, _, _, _ string) (github.RepoInfo, error) {
+func (f *fakeGitHub) GetRepository(_ context.Context, token, _, _ string) (github.RepoInfo, error) {
+	f.getRepoCalled = true
+	f.getRepoToken = token
 	return f.repo, f.repoErr
 }
 func (f *fakeGitHub) ListUserRepos(_ context.Context, _ string, _ github.ListReposOptions) ([]github.RepoInfo, error) {
@@ -162,7 +168,11 @@ func (f *fakeGitHub) ListUserRepos(_ context.Context, _ string, _ github.ListRep
 func (f *fakeGitHub) ListBranches(_ context.Context, _, _, _ string) ([]string, error) {
 	return f.branches, f.branchErr
 }
-func (f *fakeGitHub) GetBranch(_ context.Context, _, _, _, _ string) error { return f.getBranchErr }
+func (f *fakeGitHub) GetBranch(_ context.Context, token, _, _, _ string) error {
+	f.getBranchCalled = true
+	f.getBranchToken = token
+	return f.getBranchErr
+}
 func (f *fakeGitHub) RevokeToken(_ context.Context, _, _, token string) error {
 	f.revokedTokens = append(f.revokedTokens, token)
 	return f.revokeErr
@@ -515,6 +525,164 @@ func TestConnectRepository_RevokedTokenMapsToInvalidInput(t *testing.T) {
 	}
 }
 
+// --- connect public repository ---
+
+func TestParsePublicRepo(t *testing.T) {
+	cases := []struct {
+		in, owner, repo string
+		wantErr         bool
+	}{
+		{in: "https://github.com/octocat/Hello-World", owner: "octocat", repo: "Hello-World"},
+		{in: "https://github.com/octocat/Hello-World.git", owner: "octocat", repo: "Hello-World"},
+		{in: "http://github.com/octocat/Hello-World/", owner: "octocat", repo: "Hello-World"},
+		{in: "https://www.github.com/octocat/Hello-World", owner: "octocat", repo: "Hello-World"},
+		{in: "github.com/octocat/Hello-World", owner: "octocat", repo: "Hello-World"},
+		{in: "octocat/Hello-World", owner: "octocat", repo: "Hello-World"},
+		{in: "git@github.com:octocat/Hello-World.git", owner: "octocat", repo: "Hello-World"},
+		{in: "https://github.com/octocat/Hello-World/tree/main", owner: "octocat", repo: "Hello-World"},
+		{in: "  https://github.com/octocat/Hello-World  ", owner: "octocat", repo: "Hello-World"},
+		{in: "", wantErr: true},
+		{in: "octocat", wantErr: true},
+		{in: "https://gitlab.com/octocat/Hello-World", wantErr: true},
+		{in: "https://example.com/a/b", wantErr: true},
+	}
+	for _, c := range cases {
+		owner, repo, err := parsePublicRepo(c.in)
+		if c.wantErr {
+			if err == nil {
+				t.Errorf("parsePublicRepo(%q) = (%q,%q), want error", c.in, owner, repo)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parsePublicRepo(%q) error: %v", c.in, err)
+			continue
+		}
+		if owner != c.owner || repo != c.repo {
+			t.Errorf("parsePublicRepo(%q) = (%q,%q), want (%q,%q)", c.in, owner, repo, c.owner, c.repo)
+		}
+	}
+}
+
+func TestConnectPublicRepository_Success(t *testing.T) {
+	store := newFakeStore()
+	store.connOK = false // a public connect needs no provider connection at all
+	store.tokenOK = false
+	gh := &fakeGitHub{repo: github.RepoInfo{Owner: "octocat", Name: "Hello-World", FullName: "octocat/Hello-World", DefaultBranch: "main", Private: false, HTMLURL: "https://github.com/octocat/Hello-World"}}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
+
+	// Mixed-case URL with no branch: metadata comes from GitHub, branch defaults.
+	src, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "https://github.com/Octocat/hello-world"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gh.getRepoToken != "" {
+		t.Errorf("a public read must be unauthenticated, token=%q", gh.getRepoToken)
+	}
+	if store.upsertedSource == nil {
+		t.Fatal("source was not upserted")
+	}
+	w := store.upsertedSource
+	if w.Access != accessPublic || w.ConnectionID != "" {
+		t.Errorf("want public with no connection; got access=%q connection=%q", w.Access, w.ConnectionID)
+	}
+	if w.Branch != "main" {
+		t.Errorf("an empty branch should default to the repo default; got %q", w.Branch)
+	}
+	if w.FullName != "octocat/Hello-World" || w.Repo != "Hello-World" || w.IsPrivate {
+		t.Errorf("stored metadata not taken from GitHub: %+v", w)
+	}
+	if src.WorkspaceID != testWorkspaceID || src.GitHubLogin != "" || src.Access != accessPublic {
+		t.Errorf("returned source wrong: %+v", src)
+	}
+	if !rec.called || rec.action != "source.connect" {
+		t.Errorf("audit not recorded: called=%v action=%q", rec.called, rec.action)
+	}
+}
+
+func TestConnectPublicRepository_ValidatesExplicitBranch(t *testing.T) {
+	store := newFakeStore()
+	gh := &fakeGitHub{repo: github.RepoInfo{Owner: "o", Name: "r", FullName: "o/r", DefaultBranch: "main"}}
+	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
+	if _, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "o/r", Branch: "dev"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !gh.getBranchCalled || gh.getBranchToken != "" {
+		t.Errorf("an explicit branch must be verified unauthenticated: called=%v token=%q", gh.getBranchCalled, gh.getBranchToken)
+	}
+	if store.upsertedSource == nil || store.upsertedSource.Branch != "dev" {
+		t.Errorf("explicit branch not stored: %+v", store.upsertedSource)
+	}
+}
+
+func TestConnectPublicRepository_PrivateRejected(t *testing.T) {
+	store := newFakeStore()
+	gh := &fakeGitHub{repo: github.RepoInfo{Owner: "o", Name: "r", FullName: "o/r", Private: true}}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
+	_, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "o/r"})
+	if !isKind(err, problem.KindInvalidInput) {
+		t.Fatalf("got %v, want InvalidInput", err)
+	}
+	if store.upsertedSource != nil || rec.called {
+		t.Error("a private repo must not upsert or audit on the public path")
+	}
+}
+
+func TestConnectPublicRepository_NotFound(t *testing.T) {
+	store := newFakeStore()
+	gh := &fakeGitHub{repoErr: github.ErrNotFound} // private or missing is invisible to an anonymous read
+	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "o/r"})
+	if !isKind(err, problem.KindNotFound) {
+		t.Fatalf("got %v, want NotFound", err)
+	}
+	if store.upsertedSource != nil {
+		t.Error("a missing repo must not upsert")
+	}
+}
+
+func TestConnectPublicRepository_BranchNotFound(t *testing.T) {
+	store := newFakeStore()
+	gh := &fakeGitHub{repo: github.RepoInfo{Owner: "o", Name: "r", FullName: "o/r", DefaultBranch: "main"}, getBranchErr: github.ErrNotFound}
+	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "o/r", Branch: "nope"})
+	if !isKind(err, problem.KindInvalidInput) {
+		t.Fatalf("got %v, want InvalidInput", err)
+	}
+	if store.upsertedSource != nil {
+		t.Error("a bad branch must not upsert")
+	}
+}
+
+func TestConnectPublicRepository_InvalidURL(t *testing.T) {
+	store := newFakeStore()
+	gh := &fakeGitHub{}
+	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "not a url"})
+	if !isKind(err, problem.KindInvalidInput) {
+		t.Fatalf("got %v, want InvalidInput", err)
+	}
+	if gh.getRepoCalled {
+		t.Error("an unparseable URL must not reach GitHub")
+	}
+}
+
+func TestConnectPublicRepository_DeniedDoesNotCallGitHub(t *testing.T) {
+	store := newFakeStore()
+	gh := &fakeGitHub{}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
+	_, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "o/r"})
+	if !isKind(err, problem.KindPermissionDenied) {
+		t.Fatalf("got %v, want PermissionDenied", err)
+	}
+	if gh.getRepoCalled || store.upsertedSource != nil || rec.called {
+		t.Error("a denied connect must not reach GitHub, upsert, or audit")
+	}
+}
+
 // --- project source reads / disconnect ---
 
 func TestGetProjectSource_NotFound(t *testing.T) {
@@ -584,5 +752,8 @@ func TestInvalidIDsRejected(t *testing.T) {
 	}
 	if _, err := svc.ConnectRepository(authedCtx(), ConnectRepoInput{ProjectID: "bad", Owner: "o", Repo: "r", Branch: "m"}); !isKind(err, problem.KindInvalidInput) {
 		t.Errorf("ConnectRepository bad id: got %v, want InvalidInput", err)
+	}
+	if _, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: "bad", RepoURL: "o/r"}); !isKind(err, problem.KindInvalidInput) {
+		t.Errorf("ConnectPublicRepository bad id: got %v, want InvalidInput", err)
 	}
 }

@@ -69,6 +69,18 @@ func (h *handler) ConnectRepository(ctx context.Context, req *connect.Request[co
 	return connect.NewResponse(&controlplanev1.ConnectRepositoryResponse{Source: toProtoSource(src)}), nil
 }
 
+func (h *handler) ConnectPublicRepository(ctx context.Context, req *connect.Request[controlplanev1.ConnectPublicRepositoryRequest]) (*connect.Response[controlplanev1.ConnectPublicRepositoryResponse], error) {
+	src, err := h.svc.ConnectPublicRepository(ctx, ConnectPublicRepoInput{
+		ProjectID: req.Msg.GetProjectId(),
+		RepoURL:   req.Msg.GetRepoUrl(),
+		Branch:    req.Msg.GetBranch(),
+	})
+	if err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&controlplanev1.ConnectPublicRepositoryResponse{Source: toProtoSource(src)}), nil
+}
+
 func (h *handler) GetProjectSource(ctx context.Context, req *connect.Request[controlplanev1.GetProjectSourceRequest]) (*connect.Response[controlplanev1.GetProjectSourceResponse], error) {
 	src, err := h.svc.GetProjectSource(ctx, req.Msg.GetProjectId())
 	if err != nil {
@@ -117,6 +129,7 @@ func toProtoSource(s Source) *controlplanev1.Source {
 		IsPrivate:     s.IsPrivate,
 		HtmlUrl:       s.HTMLURL,
 		GithubLogin:   s.GitHubLogin,
+		Access:        s.Access,
 		CreatedAt:     s.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:     s.UpdatedAt.UTC().Format(time.RFC3339),
 	}

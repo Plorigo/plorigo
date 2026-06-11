@@ -123,7 +123,7 @@ type Project struct {
 type ProjectSource struct {
 	ID            string
 	ProjectID     string
-	ConnectionID  string
+	ConnectionID  *string
 	Provider      string
 	Owner         string
 	Repo          string
@@ -134,6 +134,7 @@ type ProjectSource struct {
 	HtmlUrl       string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	Access        string
 }
 
 type Secret struct {

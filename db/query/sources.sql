@@ -43,11 +43,12 @@ SELECT count(*) FROM project_sources WHERE connection_id = $1;
 
 -- name: UpsertProjectSource :one
 -- Create-or-update by project_id (one source per project). The conflict is the success
--- path (reconnecting a project to a different repo or branch).
+-- path (reconnecting a project to a different repo or branch). connection_id is NULL for
+-- a public source; `access` records how the source is reached ('oauth'|'public'|'app').
 INSERT INTO project_sources (
-    project_id, connection_id, provider, owner, repo, full_name, branch, default_branch, is_private, html_url
+    project_id, connection_id, provider, owner, repo, full_name, branch, default_branch, is_private, html_url, access
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (project_id)
 DO UPDATE SET
     connection_id = EXCLUDED.connection_id,
@@ -59,29 +60,32 @@ DO UPDATE SET
     default_branch = EXCLUDED.default_branch,
     is_private = EXCLUDED.is_private,
     html_url = EXCLUDED.html_url,
+    access = EXCLUDED.access,
     updated_at = now()
-RETURNING id, project_id, connection_id, provider, owner, repo, full_name, branch, default_branch, is_private, html_url, created_at, updated_at;
+RETURNING id, project_id, connection_id, provider, owner, repo, full_name, branch, default_branch, is_private, html_url, access, created_at, updated_at;
 
 -- name: GetProjectSource :one
--- Joins the connection for the account login (display). Workspace resolution for
--- authorization uses the shared GetProjectWorkspaceID.
+-- LEFT JOIN the connection for the account login (display): a public source has no
+-- connection, so github_login is NULL there. Workspace resolution for authorization uses
+-- the shared GetProjectWorkspaceID.
 SELECT
     ps.id, ps.project_id, ps.connection_id, ps.provider, ps.owner, ps.repo, ps.full_name,
-    ps.branch, ps.default_branch, ps.is_private, ps.html_url, ps.created_at, ps.updated_at,
+    ps.branch, ps.default_branch, ps.is_private, ps.html_url, ps.access, ps.created_at, ps.updated_at,
     sc.github_login
 FROM project_sources ps
-JOIN source_connections sc ON sc.id = ps.connection_id
+LEFT JOIN source_connections sc ON sc.id = ps.connection_id
 WHERE ps.project_id = $1;
 
 -- name: ListProjectSourcesByWorkspace :many
 -- Batch read for the projects grid (avoids an N+1 over GetProjectSource). Joins the
--- parent project to scope by workspace and the connection for the account login.
+-- parent project to scope by workspace and LEFT JOINs the connection for the account
+-- login (NULL for a public source, which has no connection).
 SELECT
     ps.id, ps.project_id, ps.connection_id, ps.provider, ps.owner, ps.repo, ps.full_name,
-    ps.branch, ps.default_branch, ps.is_private, ps.html_url, ps.created_at, ps.updated_at,
+    ps.branch, ps.default_branch, ps.is_private, ps.html_url, ps.access, ps.created_at, ps.updated_at,
     sc.github_login
 FROM project_sources ps
-JOIN source_connections sc ON sc.id = ps.connection_id
+LEFT JOIN source_connections sc ON sc.id = ps.connection_id
 JOIN projects p ON p.id = ps.project_id
 WHERE p.workspace_id = $1
 ORDER BY ps.updated_at DESC;

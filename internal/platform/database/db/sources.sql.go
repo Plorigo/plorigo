@@ -15,7 +15,7 @@ SELECT count(*) FROM project_sources WHERE connection_id = $1
 `
 
 // Guards DisconnectGitHub: a connection still in use by projects must not be removed.
-func (q *Queries) CountProjectSourcesByConnection(ctx context.Context, connectionID string) (int64, error) {
+func (q *Queries) CountProjectSourcesByConnection(ctx context.Context, connectionID *string) (int64, error) {
 	row := q.db.QueryRow(ctx, countProjectSourcesByConnection, connectionID)
 	var count int64
 	err := row.Scan(&count)
@@ -79,17 +79,17 @@ func (q *Queries) GetConnectionTokenByWorkspace(ctx context.Context, arg GetConn
 const getProjectSource = `-- name: GetProjectSource :one
 SELECT
     ps.id, ps.project_id, ps.connection_id, ps.provider, ps.owner, ps.repo, ps.full_name,
-    ps.branch, ps.default_branch, ps.is_private, ps.html_url, ps.created_at, ps.updated_at,
+    ps.branch, ps.default_branch, ps.is_private, ps.html_url, ps.access, ps.created_at, ps.updated_at,
     sc.github_login
 FROM project_sources ps
-JOIN source_connections sc ON sc.id = ps.connection_id
+LEFT JOIN source_connections sc ON sc.id = ps.connection_id
 WHERE ps.project_id = $1
 `
 
 type GetProjectSourceRow struct {
 	ID            string
 	ProjectID     string
-	ConnectionID  string
+	ConnectionID  *string
 	Provider      string
 	Owner         string
 	Repo          string
@@ -98,13 +98,15 @@ type GetProjectSourceRow struct {
 	DefaultBranch string
 	IsPrivate     bool
 	HtmlUrl       string
+	Access        string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
-	GithubLogin   string
+	GithubLogin   *string
 }
 
-// Joins the connection for the account login (display). Workspace resolution for
-// authorization uses the shared GetProjectWorkspaceID.
+// LEFT JOIN the connection for the account login (display): a public source has no
+// connection, so github_login is NULL there. Workspace resolution for authorization uses
+// the shared GetProjectWorkspaceID.
 func (q *Queries) GetProjectSource(ctx context.Context, projectID string) (GetProjectSourceRow, error) {
 	row := q.db.QueryRow(ctx, getProjectSource, projectID)
 	var i GetProjectSourceRow
@@ -120,6 +122,7 @@ func (q *Queries) GetProjectSource(ctx context.Context, projectID string) (GetPr
 		&i.DefaultBranch,
 		&i.IsPrivate,
 		&i.HtmlUrl,
+		&i.Access,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.GithubLogin,
@@ -171,10 +174,10 @@ func (q *Queries) GetSourceConnectionByWorkspace(ctx context.Context, arg GetSou
 const listProjectSourcesByWorkspace = `-- name: ListProjectSourcesByWorkspace :many
 SELECT
     ps.id, ps.project_id, ps.connection_id, ps.provider, ps.owner, ps.repo, ps.full_name,
-    ps.branch, ps.default_branch, ps.is_private, ps.html_url, ps.created_at, ps.updated_at,
+    ps.branch, ps.default_branch, ps.is_private, ps.html_url, ps.access, ps.created_at, ps.updated_at,
     sc.github_login
 FROM project_sources ps
-JOIN source_connections sc ON sc.id = ps.connection_id
+LEFT JOIN source_connections sc ON sc.id = ps.connection_id
 JOIN projects p ON p.id = ps.project_id
 WHERE p.workspace_id = $1
 ORDER BY ps.updated_at DESC
@@ -183,7 +186,7 @@ ORDER BY ps.updated_at DESC
 type ListProjectSourcesByWorkspaceRow struct {
 	ID            string
 	ProjectID     string
-	ConnectionID  string
+	ConnectionID  *string
 	Provider      string
 	Owner         string
 	Repo          string
@@ -192,13 +195,15 @@ type ListProjectSourcesByWorkspaceRow struct {
 	DefaultBranch string
 	IsPrivate     bool
 	HtmlUrl       string
+	Access        string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
-	GithubLogin   string
+	GithubLogin   *string
 }
 
 // Batch read for the projects grid (avoids an N+1 over GetProjectSource). Joins the
-// parent project to scope by workspace and the connection for the account login.
+// parent project to scope by workspace and LEFT JOINs the connection for the account
+// login (NULL for a public source, which has no connection).
 func (q *Queries) ListProjectSourcesByWorkspace(ctx context.Context, workspaceID string) ([]ListProjectSourcesByWorkspaceRow, error) {
 	rows, err := q.db.Query(ctx, listProjectSourcesByWorkspace, workspaceID)
 	if err != nil {
@@ -220,6 +225,7 @@ func (q *Queries) ListProjectSourcesByWorkspace(ctx context.Context, workspaceID
 			&i.DefaultBranch,
 			&i.IsPrivate,
 			&i.HtmlUrl,
+			&i.Access,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.GithubLogin,
@@ -236,9 +242,9 @@ func (q *Queries) ListProjectSourcesByWorkspace(ctx context.Context, workspaceID
 
 const upsertProjectSource = `-- name: UpsertProjectSource :one
 INSERT INTO project_sources (
-    project_id, connection_id, provider, owner, repo, full_name, branch, default_branch, is_private, html_url
+    project_id, connection_id, provider, owner, repo, full_name, branch, default_branch, is_private, html_url, access
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 ON CONFLICT (project_id)
 DO UPDATE SET
     connection_id = EXCLUDED.connection_id,
@@ -250,13 +256,14 @@ DO UPDATE SET
     default_branch = EXCLUDED.default_branch,
     is_private = EXCLUDED.is_private,
     html_url = EXCLUDED.html_url,
+    access = EXCLUDED.access,
     updated_at = now()
-RETURNING id, project_id, connection_id, provider, owner, repo, full_name, branch, default_branch, is_private, html_url, created_at, updated_at
+RETURNING id, project_id, connection_id, provider, owner, repo, full_name, branch, default_branch, is_private, html_url, access, created_at, updated_at
 `
 
 type UpsertProjectSourceParams struct {
 	ProjectID     string
-	ConnectionID  string
+	ConnectionID  *string
 	Provider      string
 	Owner         string
 	Repo          string
@@ -265,11 +272,30 @@ type UpsertProjectSourceParams struct {
 	DefaultBranch string
 	IsPrivate     bool
 	HtmlUrl       string
+	Access        string
+}
+
+type UpsertProjectSourceRow struct {
+	ID            string
+	ProjectID     string
+	ConnectionID  *string
+	Provider      string
+	Owner         string
+	Repo          string
+	FullName      string
+	Branch        string
+	DefaultBranch string
+	IsPrivate     bool
+	HtmlUrl       string
+	Access        string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 // Create-or-update by project_id (one source per project). The conflict is the success
-// path (reconnecting a project to a different repo or branch).
-func (q *Queries) UpsertProjectSource(ctx context.Context, arg UpsertProjectSourceParams) (ProjectSource, error) {
+// path (reconnecting a project to a different repo or branch). connection_id is NULL for
+// a public source; `access` records how the source is reached ('oauth'|'public'|'app').
+func (q *Queries) UpsertProjectSource(ctx context.Context, arg UpsertProjectSourceParams) (UpsertProjectSourceRow, error) {
 	row := q.db.QueryRow(ctx, upsertProjectSource,
 		arg.ProjectID,
 		arg.ConnectionID,
@@ -281,8 +307,9 @@ func (q *Queries) UpsertProjectSource(ctx context.Context, arg UpsertProjectSour
 		arg.DefaultBranch,
 		arg.IsPrivate,
 		arg.HtmlUrl,
+		arg.Access,
 	)
-	var i ProjectSource
+	var i UpsertProjectSourceRow
 	err := row.Scan(
 		&i.ID,
 		&i.ProjectID,
@@ -295,6 +322,7 @@ func (q *Queries) UpsertProjectSource(ctx context.Context, arg UpsertProjectSour
 		&i.DefaultBranch,
 		&i.IsPrivate,
 		&i.HtmlUrl,
+		&i.Access,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
