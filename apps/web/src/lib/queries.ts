@@ -13,6 +13,7 @@ import {
   sourceClient,
   workspaceClient,
 } from "./clients";
+import { isPrototypeId } from "./mockDashboard";
 
 // Centralized TanStack Query hooks so every feature page reads workspace-scoped
 // data the same way (and shares the cache by query key). Server state lives here;
@@ -71,7 +72,9 @@ export function useEnvironments(projectId: string) {
     queryKey: ["environments", projectId],
     queryFn: async () =>
       (await environmentClient.listEnvironmentsByProject({ projectId })).environments,
-    enabled: projectId.length > 0,
+    // Skip the live API for demo (prototype-*) ids — they aren't UUIDs, so the backend
+    // would reject them; demo pages fall back to fixtures instead.
+    enabled: projectId.length > 0 && !isPrototypeId(projectId),
   });
 }
 
@@ -132,7 +135,9 @@ export function useProjectSource(projectId: string) {
         throw err;
       }
     },
-    enabled: projectId.length > 0,
+    // Skip the live API for demo (prototype-*) ids — they aren't UUIDs, so the backend
+    // would reject them; demo pages fall back to fixtures instead.
+    enabled: projectId.length > 0 && !isPrototypeId(projectId),
   });
 }
 
@@ -167,7 +172,9 @@ export function useDeploymentsByProject(projectId: string) {
     queryKey: ["deployments", "project", projectId],
     queryFn: async () =>
       (await deploymentClient.listDeploymentsByProject({ projectId })).deployments,
-    enabled: projectId.length > 0,
+    // Skip the live API for demo (prototype-*) ids — they aren't UUIDs, so the backend
+    // would reject them; demo pages fall back to fixtures instead.
+    enabled: projectId.length > 0 && !isPrototypeId(projectId),
     refetchInterval: 5000,
   });
 }
