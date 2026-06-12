@@ -5,7 +5,7 @@
 # in the build context (they are git-ignored generated code).
 
 # --- Stage 1: build the dashboard ---
-FROM node:24-alpine AS web
+FROM node:26-alpine AS web
 RUN corepack enable
 WORKDIR /app
 COPY pnpm-workspace.yaml ./
