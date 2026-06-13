@@ -6,6 +6,7 @@ import { ActivityPage } from "./features/activity/ActivityPage";
 import { BackupsPage } from "./features/backups/BackupsPage";
 import { DeploymentDetailPage } from "./features/deployments/DeploymentDetailPage";
 import { DeploymentsPage } from "./features/deployments/DeploymentsPage";
+import { NewDeploymentPage } from "./features/deployments/new/NewDeploymentPage";
 import { OverviewPage } from "./features/overview/OverviewPage";
 import { ProjectDetailPage } from "./features/projects/ProjectDetailPage";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
@@ -51,6 +52,15 @@ const projectDetailRoute = createRoute({
 const serversRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/servers", component: ServersPage });
 const resourcesRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/resources", component: ResourcesPage });
 const deploymentsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/deployments", component: DeploymentsPage });
+// Static "/deployments/new" must be registered before the dynamic "/deployments/$deploymentId"
+// so it's never parsed as a deployment id (mirrors projectsNewRoute vs projectDetailRoute).
+const deploymentsNewRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/deployments/new",
+  component: NewDeploymentPage,
+  validateSearch: (s: Record<string, unknown>): { project?: string } =>
+    typeof s.project === "string" && s.project ? { project: s.project } : {},
+});
 const deploymentDetailRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/deployments/$deploymentId",
@@ -77,6 +87,7 @@ export const routeTree = rootRoute.addChildren([
     serversRoute,
     resourcesRoute,
     deploymentsRoute,
+    deploymentsNewRoute,
     deploymentDetailRoute,
     backupsRoute,
     securityRoute,
