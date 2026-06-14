@@ -377,11 +377,15 @@ func (s *service) ReportDeployment(ctx context.Context, in ReportInput) error {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			if txErr := s.store.AppendEvent(ctx, tx, NewEvent{DeploymentID: in.DeploymentID, Kind: KindLog, Message: line}); txErr != nil {
+			if txErr := s.store.AppendEvent(ctx, tx, NewEvent{DeploymentID: in.DeploymentID, Kind: KindLog, Message: line, Stream: in.LogStream}); txErr != nil {
 				return txErr
 			}
 		}
-		if in.Status == StatusRunning {
+		// Supersede the previous release only on the agent's real "now running" report,
+		// which carries the bound host port. The runtime-log tail loop re-reports
+		// status='running' (host port 0) just to attach new log lines — that must not
+		// re-run the supersede on every tick.
+		if in.Status == StatusRunning && in.HostPort > 0 {
 			return s.store.SupersedePreviousRunning(ctx, tx, dep.EnvironmentID, serverID, in.DeploymentID)
 		}
 		return nil

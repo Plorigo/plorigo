@@ -132,6 +132,7 @@ func (h *gatewayHandler) ReportDeployment(ctx context.Context, req *connect.Requ
 		HostPort:      req.Msg.GetHostPort(),
 		ContainerID:   req.Msg.GetContainerId(),
 		LogLines:      req.Msg.GetLogLines(),
+		LogStream:     req.Msg.GetLogStream(),
 		Message:       req.Msg.GetMessage(),
 		CommitSha:     req.Msg.GetCommitSha(),
 		BuiltImageRef: req.Msg.GetBuiltImageRef(),
@@ -180,6 +181,7 @@ func eventToProto(e Event) *controlplanev1.DeploymentEvent {
 		Kind:         e.Kind,
 		Status:       e.Status,
 		Message:      e.Message,
+		Stream:       e.Stream,
 		CreatedAt:    e.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }

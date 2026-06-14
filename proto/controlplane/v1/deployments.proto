@@ -32,7 +32,7 @@ message Deployment {
 }
 
 // A DeploymentEvent is one entry in a deployment's timeline: either a status
-// transition (kind="status") or a runtime log line (kind="log"). seq is monotonic
+// transition (kind="status") or a log line (kind="log"). seq is monotonic
 // per deployment so the dashboard can fetch incrementally.
 message DeploymentEvent {
   string id = 1;
@@ -42,6 +42,10 @@ message DeploymentEvent {
   string status = 5; // set when kind="status"
   string message = 6;
   string created_at = 7; // RFC 3339
+  // For kind="log", which stream the line came from: "build" (clone/build/pull/start
+  // output) or "runtime" (the container's stdout/stderr). Empty for status events and
+  // for legacy rows recorded before streams were distinguished.
+  string stream = 8;
 }
 
 message CreateDeploymentRequest {

@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -245,6 +246,38 @@ func (f *fakeDeployClient) ReportDeployment(_ context.Context, req *connect.Requ
 	return connect.NewResponse(&agentv1.ReportDeploymentResponse{}), nil
 }
 
+// syncDeployClient is a mutex-guarded DeployServiceClient for the runtimeLogLoop test,
+// which reports concurrently with the test goroutine. It signals each report on `got` so
+// the test can wait for one, then cancel.
+type syncDeployClient struct {
+	mu      sync.Mutex
+	reports []*agentv1.ReportDeploymentRequest
+	got     chan struct{}
+}
+
+func (c *syncDeployClient) PollDeployment(_ context.Context, _ *connect.Request[agentv1.PollDeploymentRequest]) (*connect.Response[agentv1.PollDeploymentResponse], error) {
+	return connect.NewResponse(&agentv1.PollDeploymentResponse{}), nil
+}
+
+func (c *syncDeployClient) ReportDeployment(_ context.Context, req *connect.Request[agentv1.ReportDeploymentRequest]) (*connect.Response[agentv1.ReportDeploymentResponse], error) {
+	c.mu.Lock()
+	c.reports = append(c.reports, req.Msg)
+	c.mu.Unlock()
+	select {
+	case c.got <- struct{}{}:
+	default:
+	}
+	return connect.NewResponse(&agentv1.ReportDeploymentResponse{}), nil
+}
+
+func (c *syncDeployClient) snapshot() []*agentv1.ReportDeploymentRequest {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]*agentv1.ReportDeploymentRequest, len(c.reports))
+	copy(out, c.reports)
+	return out
+}
+
 type fakeRuntime struct {
 	ops         []string
 	containerID string
@@ -263,6 +296,11 @@ type fakeRuntime struct {
 	ranPort      int32  // the container port run() was asked to publish
 	detectedPort int32  // the port detectPort() returns (0 -> default 8080)
 	detectErr    error
+
+	// Runtime-log tail loop fakes (used only by the runtimeLogLoop test, single-goroutine).
+	managed     []managedContainer
+	logsSinceFn func(id, since string) (lines []string, next string)
+	sinceSeen   []string // the `since` cursors logsSince() was called with, in order
 }
 
 func (f *fakeRuntime) pull(_ context.Context, _ string, emit func(string)) error {
@@ -327,6 +365,19 @@ func (f *fakeRuntime) recentLogs(_ context.Context, _ string, _ int) []string {
 	return []string{"ready"}
 }
 
+func (f *fakeRuntime) listManagedRunning(_ context.Context) ([]managedContainer, error) {
+	return f.managed, nil
+}
+
+func (f *fakeRuntime) logsSince(_ context.Context, id, since string, _ int) ([]string, string, error) {
+	f.sinceSeen = append(f.sinceSeen, since)
+	if f.logsSinceFn != nil {
+		lines, next := f.logsSinceFn(id, since)
+		return lines, next, nil
+	}
+	return nil, since, nil
+}
+
 func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *testing.T) {
 	oldHealthCheck := runHealthCheck
 	defer func() { runHealthCheck = oldHealthCheck }()
@@ -357,8 +408,19 @@ func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *test
 	if len(runtime.removed) != 0 {
 		t.Fatalf("removed failed containers = %v, want none on success", runtime.removed)
 	}
-	if got := deploy.reports[len(deploy.reports)-1].GetStatus(); got != statusRunning {
-		t.Fatalf("last report status = %q, want %q", got, statusRunning)
+	last := deploy.reports[len(deploy.reports)-1]
+	if last.GetStatus() != statusRunning {
+		t.Fatalf("last report status = %q, want %q", last.GetStatus(), statusRunning)
+	}
+	// The running report carries the container's own logs, tagged as the runtime stream.
+	if last.GetLogStream() != streamRuntime {
+		t.Fatalf("running report log stream = %q, want %q", last.GetLogStream(), streamRuntime)
+	}
+	// The build/pull/start transitions on the way there are tagged as the build stream.
+	for _, r := range deploy.reports[:len(deploy.reports)-1] {
+		if r.GetLogStream() != streamBuild {
+			t.Fatalf("pre-running report (%s) log stream = %q, want %q", r.GetStatus(), r.GetLogStream(), streamBuild)
+		}
 	}
 }
 
@@ -434,6 +496,10 @@ func TestExecuteDeployment_GitBuildFailureReportsFailedBeforeRun(t *testing.T) {
 	last := deploy.reports[len(deploy.reports)-1]
 	if last.GetStatus() != statusFailed || !strings.Contains(last.GetMessage(), "build failed") {
 		t.Fatalf("last report = status %q message %q, want a build-failed report", last.GetStatus(), last.GetMessage())
+	}
+	// A build-phase failure carries the build output, tagged as the build stream.
+	if last.GetLogStream() != streamBuild {
+		t.Fatalf("build-failed report log stream = %q, want %q", last.GetLogStream(), streamBuild)
 	}
 }
 
@@ -576,5 +642,82 @@ func TestExecuteDeployment_RetirePreviousFailureKeepsHealthyReplacement(t *testi
 	last := deploy.reports[len(deploy.reports)-1]
 	if last.GetStatus() != statusRunning || !strings.Contains(last.GetMessage(), "could not remove previous container") {
 		t.Fatalf("last report = status %q message %q, want running with cleanup warning", last.GetStatus(), last.GetMessage())
+	}
+}
+
+func TestRuntimeLogLoop_TailsRunningContainersForward(t *testing.T) {
+	// One running managed container. Its first tail returns a line and advances the cursor;
+	// every later tail returns nothing new.
+	calls := 0
+	rt := &fakeRuntime{managed: []managedContainer{{ID: "c1", DeploymentID: "dep-1"}}}
+	rt.logsSinceFn = func(_, since string) ([]string, string) {
+		calls++
+		if calls == 1 {
+			return []string{"serving on :8080"}, "cursor-1"
+		}
+		return nil, since
+	}
+	deploy := &syncDeployClient{got: make(chan struct{}, 8)}
+	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runtimeLogLoop(ctx, io.Discard, deploy, ident, rt, time.Millisecond) }()
+
+	select {
+	case <-deploy.got:
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("no runtime-log report observed within the timeout")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("runtimeLogLoop returned error: %v", err)
+	}
+
+	reports := deploy.snapshot()
+	// Exactly one report: only the line-producing tail reports; empty ticks send nothing.
+	if len(reports) != 1 {
+		t.Fatalf("reports = %d, want exactly 1 (empty ticks must not report)", len(reports))
+	}
+	r := reports[0]
+	if r.GetDeploymentId() != "dep-1" || r.GetStatus() != statusRunning || r.GetLogStream() != streamRuntime {
+		t.Fatalf("report = {dep %q, status %q, stream %q}, want dep-1/running/runtime", r.GetDeploymentId(), r.GetStatus(), r.GetLogStream())
+	}
+	if r.GetHostPort() != 0 || r.GetContainerId() != "" || r.GetMessage() != "" {
+		t.Fatalf("a runtime-log tick must carry no host port/container id/message; got %+v", r)
+	}
+	if !reflect.DeepEqual(r.GetLogLines(), []string{"serving on :8080"}) {
+		t.Fatalf("log lines = %v, want the tailed line", r.GetLogLines())
+	}
+	// The loop seeds a forward cursor on first sight and only ever tails from it — never
+	// from "" (which would replay the container's whole history / re-emit on restart).
+	if len(rt.sinceSeen) == 0 {
+		t.Fatal("logsSince was never called")
+	}
+	for i, s := range rt.sinceSeen {
+		if s == "" {
+			t.Fatalf("logsSince call %d used an empty cursor; the loop must tail forward, not from start", i)
+		}
+	}
+}
+
+func TestRuntimeLogLoop_NoRuntimeStaysAliveUntilCancelled(t *testing.T) {
+	// With no Docker (nil runtime) the loop must block until ctx ends, NOT return early —
+	// otherwise Run() would treat it as a fatal loop exit and cancel the heartbeat/deploy
+	// loops, taking the agent down on a server without Docker.
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runtimeLogLoop(ctx, io.Discard, &syncDeployClient{got: make(chan struct{}, 1)}, &identity{}, nil, time.Millisecond)
+	}()
+	select {
+	case <-done:
+		t.Fatal("loop returned before cancellation with a nil runtime")
+	case <-time.After(50 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("runtimeLogLoop returned error: %v", err)
 	}
 }

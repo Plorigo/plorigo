@@ -65,13 +65,15 @@ WHERE id = (
 )
 RETURNING *;
 
--- UpdateDeploymentStatus records a status transition. host_port, container_id, commit_sha
--- and built_image_ref are only known later in the flow, so a zero/empty value never
--- clobbers a set one.
+-- UpdateDeploymentStatus records a status transition. host_port, container_id, commit_sha,
+-- built_image_ref, and message are only known at certain points in the flow, so a
+-- zero/empty value never clobbers a set one. (The runtime-log tail loop re-reports
+-- status='running' with an empty message to attach new log lines; a blank message must
+-- not wipe the deployment's status line.)
 -- name: UpdateDeploymentStatus :one
 UPDATE deployments
 SET status = sqlc.arg(status),
-    message = sqlc.arg(message),
+    message = CASE WHEN sqlc.arg(message)::text <> '' THEN sqlc.arg(message)::text ELSE message END,
     host_port = CASE WHEN sqlc.arg(host_port)::integer > 0 THEN sqlc.arg(host_port)::integer ELSE host_port END,
     container_id = CASE WHEN sqlc.arg(container_id)::text <> '' THEN sqlc.arg(container_id)::text ELSE container_id END,
     commit_sha = CASE WHEN sqlc.arg(commit_sha)::text <> '' THEN sqlc.arg(commit_sha)::text ELSE commit_sha END,
@@ -88,8 +90,8 @@ SET status = 'superseded', updated_at = now()
 WHERE environment_id = $1 AND server_id = $2 AND status = 'running' AND id <> $3;
 
 -- name: AppendDeploymentEvent :one
-INSERT INTO deployment_events (deployment_id, kind, status, message)
-VALUES ($1, $2, $3, $4)
+INSERT INTO deployment_events (deployment_id, kind, status, message, stream)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING *;
 
 -- name: ListDeploymentEvents :many

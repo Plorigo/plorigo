@@ -10,9 +10,9 @@ import (
 )
 
 const appendDeploymentEvent = `-- name: AppendDeploymentEvent :one
-INSERT INTO deployment_events (deployment_id, kind, status, message)
-VALUES ($1, $2, $3, $4)
-RETURNING id, deployment_id, seq, kind, status, message, created_at
+INSERT INTO deployment_events (deployment_id, kind, status, message, stream)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, deployment_id, seq, kind, status, message, created_at, stream
 `
 
 type AppendDeploymentEventParams struct {
@@ -20,6 +20,7 @@ type AppendDeploymentEventParams struct {
 	Kind         string
 	Status       string
 	Message      string
+	Stream       string
 }
 
 func (q *Queries) AppendDeploymentEvent(ctx context.Context, arg AppendDeploymentEventParams) (DeploymentEvent, error) {
@@ -28,6 +29,7 @@ func (q *Queries) AppendDeploymentEvent(ctx context.Context, arg AppendDeploymen
 		arg.Kind,
 		arg.Status,
 		arg.Message,
+		arg.Stream,
 	)
 	var i DeploymentEvent
 	err := row.Scan(
@@ -38,6 +40,7 @@ func (q *Queries) AppendDeploymentEvent(ctx context.Context, arg AppendDeploymen
 		&i.Status,
 		&i.Message,
 		&i.CreatedAt,
+		&i.Stream,
 	)
 	return i, err
 }
@@ -299,7 +302,7 @@ func (q *Queries) GetProjectSourceForDeploy(ctx context.Context, projectID strin
 }
 
 const listDeploymentEvents = `-- name: ListDeploymentEvents :many
-SELECT id, deployment_id, seq, kind, status, message, created_at FROM deployment_events
+SELECT id, deployment_id, seq, kind, status, message, created_at, stream FROM deployment_events
 WHERE deployment_id = $1 AND seq > $2
 ORDER BY seq
 `
@@ -326,6 +329,7 @@ func (q *Queries) ListDeploymentEvents(ctx context.Context, arg ListDeploymentEv
 			&i.Status,
 			&i.Message,
 			&i.CreatedAt,
+			&i.Stream,
 		); err != nil {
 			return nil, err
 		}
@@ -491,7 +495,7 @@ func (q *Queries) SupersedePreviousRunning(ctx context.Context, arg SupersedePre
 const updateDeploymentStatus = `-- name: UpdateDeploymentStatus :one
 UPDATE deployments
 SET status = $1,
-    message = $2,
+    message = CASE WHEN $2::text <> '' THEN $2::text ELSE message END,
     host_port = CASE WHEN $3::integer > 0 THEN $3::integer ELSE host_port END,
     container_id = CASE WHEN $4::text <> '' THEN $4::text ELSE container_id END,
     commit_sha = CASE WHEN $5::text <> '' THEN $5::text ELSE commit_sha END,
@@ -511,9 +515,11 @@ type UpdateDeploymentStatusParams struct {
 	ID            string
 }
 
-// UpdateDeploymentStatus records a status transition. host_port, container_id, commit_sha
-// and built_image_ref are only known later in the flow, so a zero/empty value never
-// clobbers a set one.
+// UpdateDeploymentStatus records a status transition. host_port, container_id, commit_sha,
+// built_image_ref, and message are only known at certain points in the flow, so a
+// zero/empty value never clobbers a set one. (The runtime-log tail loop re-reports
+// status='running' with an empty message to attach new log lines; a blank message must
+// not wipe the deployment's status line.)
 func (q *Queries) UpdateDeploymentStatus(ctx context.Context, arg UpdateDeploymentStatusParams) (Deployment, error) {
 	row := q.db.QueryRow(ctx, updateDeploymentStatus,
 		arg.Status,

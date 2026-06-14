@@ -96,12 +96,14 @@ type StatusUpdate struct {
 	BuiltImageRef string
 }
 
-// NewEvent is one timeline entry to append.
+// NewEvent is one timeline entry to append. Stream is set for KindLog events
+// (StreamBuild or StreamRuntime) and left empty for status events.
 type NewEvent struct {
 	DeploymentID string
 	Kind         string
 	Status       string
 	Message      string
+	Stream       string
 }
 
 // TxRunner runs fn inside one transaction. Implemented by *database.DB; declared here
