@@ -31,6 +31,9 @@ ALTER TABLE deployments ADD CONSTRAINT deployments_status_check
     CHECK (status IN ('queued', 'assigned', 'cloning', 'building', 'pulling', 'starting', 'running', 'failed', 'superseded'));
 
 -- +goose Down
+-- 'cloning'/'building' aren't in the pre-build status vocabulary, so a deployment mid-build
+-- would violate the restored CHECK. Fail those rows before narrowing the constraint.
+UPDATE deployments SET status = 'failed' WHERE status IN ('cloning', 'building');
 ALTER TABLE deployments DROP CONSTRAINT deployments_status_check;
 ALTER TABLE deployments ADD CONSTRAINT deployments_status_check
     CHECK (status IN ('queued', 'assigned', 'pulling', 'starting', 'running', 'failed', 'superseded'));
