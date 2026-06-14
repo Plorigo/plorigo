@@ -334,6 +334,65 @@ func TestReportDeployment_RunningUpdatesAndSupersedes(t *testing.T) {
 	}
 }
 
+func TestReportDeployment_StampsStreamOnLogEventsOnly(t *testing.T) {
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		getDep: Deployment{ID: testDeployID, ServerID: testServerID, EnvironmentID: testEnvID},
+		getOK:  true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	// A runtime-log tick: status running, two log lines (one blank, skipped), runtime stream.
+	err := svc.ReportDeployment(context.Background(), ReportInput{
+		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID,
+		Status: StatusRunning, LogLines: []string{"serving on :8080", "  ", "GET / 200"},
+		LogStream: StreamRuntime,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var statusStreams, logStreams []string
+	for _, e := range store.events {
+		switch e.Kind {
+		case KindStatus:
+			statusStreams = append(statusStreams, e.Stream)
+		case KindLog:
+			logStreams = append(logStreams, e.Stream)
+		}
+	}
+	// The status event is stream-less; each (non-blank) log line carries the report's stream.
+	if len(statusStreams) != 1 || statusStreams[0] != "" {
+		t.Errorf("status event streams = %v, want one empty stream", statusStreams)
+	}
+	if len(logStreams) != 2 || logStreams[0] != StreamRuntime || logStreams[1] != StreamRuntime {
+		t.Errorf("log event streams = %v, want two %q", logStreams, StreamRuntime)
+	}
+}
+
+func TestReportDeployment_RuntimeLogTickDoesNotSupersede(t *testing.T) {
+	// The tail loop re-reports status=running with host port 0 just to attach log lines.
+	// That must not re-run the supersede (which belongs to the real "now running" report).
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		getDep: Deployment{ID: testDeployID, ServerID: testServerID, EnvironmentID: testEnvID},
+		getOK:  true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	err := svc.ReportDeployment(context.Background(), ReportInput{
+		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID,
+		Status: StatusRunning, HostPort: 0, LogLines: []string{"tick"}, LogStream: StreamRuntime,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.superseded {
+		t.Error("a runtime-log tick (host port 0) must not supersede the previous deployment")
+	}
+	// It still records the status update and the log line.
+	if len(store.statusUpdates) != 1 {
+		t.Errorf("status updates = %d, want 1", len(store.statusUpdates))
+	}
+}
+
 func TestReportDeployment_InvalidStatus(t *testing.T) {
 	svc := newSvc(&fakeStore{}, fakeAuthz{}, &fakeRecorder{})
 	err := svc.ReportDeployment(context.Background(), ReportInput{AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID, Status: StatusQueued})

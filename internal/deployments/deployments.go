@@ -148,6 +148,7 @@ type ReportInput struct {
 	HostPort      int32
 	ContainerID   string
 	LogLines      []string
+	LogStream     string // which stream LogLines belong to: StreamBuild or StreamRuntime
 	Message       string
 	CommitSha     string // the exact commit built (git deployments)
 	BuiltImageRef string // the local image tag the agent built (git deployments)
