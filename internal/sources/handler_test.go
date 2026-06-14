@@ -12,17 +12,12 @@ import (
 )
 
 // fakeService records inputs and returns canned values. The token never appears on this
-// surface: no method accepts or returns one (OAuth happens via the HTTP handlers), and
-// the domain read types carry no token field.
+// surface: no method accepts or returns one (OAuth happens via the HTTP handlers).
 type fakeService struct {
 	status      ConnectionStatus
 	repos       []Repository
 	branches    []string
-	source      Source
-	list        []Source
 	err         error
-	gotProject  string
-	gotRepoURL  string
 	gotDisconnW string
 }
 
@@ -44,25 +39,6 @@ func (f *fakeService) ListRepositories(context.Context, ListReposInput) ([]Repos
 }
 func (f *fakeService) ListBranches(context.Context, string, string, string) ([]string, error) {
 	return f.branches, f.err
-}
-func (f *fakeService) ConnectRepository(_ context.Context, in ConnectRepoInput) (Source, error) {
-	f.gotProject = in.ProjectID
-	return f.source, f.err
-}
-func (f *fakeService) ConnectPublicRepository(_ context.Context, in ConnectPublicRepoInput) (Source, error) {
-	f.gotProject = in.ProjectID
-	f.gotRepoURL = in.RepoURL
-	return f.source, f.err
-}
-func (f *fakeService) GetProjectSource(context.Context, string) (Source, error) {
-	return f.source, f.err
-}
-func (f *fakeService) ListByWorkspace(context.Context, string) ([]Source, error) {
-	return f.list, f.err
-}
-func (f *fakeService) DisconnectRepository(_ context.Context, projectID string) error {
-	f.gotProject = projectID
-	return f.err
 }
 
 func TestHandler_GetConnection(t *testing.T) {
@@ -112,72 +88,6 @@ func TestHandler_ListBranches(t *testing.T) {
 	}
 }
 
-func TestHandler_ConnectRepository(t *testing.T) {
-	svc := &fakeService{source: Source{ID: "s1", ProjectID: "p1", FullName: "o/r", Branch: "main", CreatedAt: time.Now(), UpdatedAt: time.Now()}}
-	h := &handler{svc: svc}
-	resp, err := h.ConnectRepository(context.Background(), connect.NewRequest(&controlplanev1.ConnectRepositoryRequest{ProjectId: "p1", Owner: "o", Repo: "r", Branch: "main"}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.Msg.GetSource().GetFullName() != "o/r" {
-		t.Errorf("full_name = %q", resp.Msg.GetSource().GetFullName())
-	}
-	if svc.gotProject != "p1" {
-		t.Errorf("project = %q, want p1", svc.gotProject)
-	}
-}
-
-func TestHandler_ConnectPublicRepository(t *testing.T) {
-	svc := &fakeService{source: Source{ID: "s1", ProjectID: "p1", FullName: "octocat/Hello-World", Branch: "main", Access: accessPublic, CreatedAt: time.Now(), UpdatedAt: time.Now()}}
-	h := &handler{svc: svc}
-	resp, err := h.ConnectPublicRepository(context.Background(), connect.NewRequest(&controlplanev1.ConnectPublicRepositoryRequest{ProjectId: "p1", RepoUrl: "https://github.com/octocat/Hello-World", Branch: "main"}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if svc.gotProject != "p1" || svc.gotRepoURL != "https://github.com/octocat/Hello-World" {
-		t.Errorf("inputs not forwarded: project=%q url=%q", svc.gotProject, svc.gotRepoURL)
-	}
-	if got := resp.Msg.GetSource().GetAccess(); got != "public" {
-		t.Errorf("access = %q, want public", got)
-	}
-	if resp.Msg.GetSource().GetFullName() != "octocat/Hello-World" {
-		t.Errorf("full_name = %q", resp.Msg.GetSource().GetFullName())
-	}
-}
-
-func TestHandler_GetProjectSource(t *testing.T) {
-	h := &handler{svc: &fakeService{source: Source{ID: "s1", FullName: "o/r", CreatedAt: time.Now(), UpdatedAt: time.Now()}}}
-	resp, err := h.GetProjectSource(context.Background(), connect.NewRequest(&controlplanev1.GetProjectSourceRequest{ProjectId: "p1"}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.Msg.GetSource().GetFullName() != "o/r" {
-		t.Errorf("full_name = %q", resp.Msg.GetSource().GetFullName())
-	}
-}
-
-func TestHandler_ListSourcesByWorkspace(t *testing.T) {
-	h := &handler{svc: &fakeService{list: []Source{{ID: "s1"}, {ID: "s2"}}}}
-	resp, err := h.ListSourcesByWorkspace(context.Background(), connect.NewRequest(&controlplanev1.ListSourcesByWorkspaceRequest{WorkspaceId: "w1"}))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if n := len(resp.Msg.GetSources()); n != 2 {
-		t.Fatalf("len = %d, want 2", n)
-	}
-}
-
-func TestHandler_DisconnectRepository(t *testing.T) {
-	svc := &fakeService{}
-	h := &handler{svc: svc}
-	if _, err := h.DisconnectRepository(context.Background(), connect.NewRequest(&controlplanev1.DisconnectRepositoryRequest{ProjectId: "p1"})); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if svc.gotProject != "p1" {
-		t.Errorf("project = %q, want p1", svc.gotProject)
-	}
-}
-
 func TestHandler_DisconnectGitHub(t *testing.T) {
 	svc := &fakeService{}
 	h := &handler{svc: svc}
@@ -191,7 +101,7 @@ func TestHandler_DisconnectGitHub(t *testing.T) {
 
 func TestHandler_MapsDomainErrorToConnectCode(t *testing.T) {
 	h := &handler{svc: &fakeService{err: problem.NotFound("nope")}}
-	_, err := h.GetProjectSource(context.Background(), connect.NewRequest(&controlplanev1.GetProjectSourceRequest{ProjectId: "p1"}))
+	_, err := h.GetConnection(context.Background(), connect.NewRequest(&controlplanev1.GetConnectionRequest{WorkspaceId: "w1"}))
 	if err == nil {
 		t.Fatal("expected an error")
 	}

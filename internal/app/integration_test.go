@@ -23,6 +23,7 @@ import (
 	"github.com/plorigo/plorigo/internal/projects"
 	"github.com/plorigo/plorigo/internal/secrets"
 	"github.com/plorigo/plorigo/internal/servers"
+	"github.com/plorigo/plorigo/internal/services"
 )
 
 // These tests exercise the assembled control plane against a real Postgres (CI
@@ -224,10 +225,16 @@ func TestIntegration_EnvVarsScopedToEnvironmentWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create environment: %v", err)
 	}
+	// Env vars are now SERVICE-scoped: create a service to hold them.
+	svcRes, err := a.services.Service().CreateService(ownerCtx, services.CreateInput{EnvironmentID: env.ID, Name: "web", SourceKind: services.SourceImage, ImageRef: "nginx", ContainerPort: 80})
+	if err != nil {
+		t.Fatalf("Create service: %v", err)
+	}
+	svc := svcRes.Service
 
-	// Set audits the REAL actor against the workspace resolved through the two-ancestor
-	// JOIN (env var -> environment -> project -> workspace).
-	ev, err := evSvc.Set(ownerCtx, envvars.SetInput{EnvironmentID: env.ID, Key: "DATABASE_URL", Value: "postgres://a"})
+	// Set audits the REAL actor against the workspace resolved through the service (which
+	// denormalizes workspace_id from environment -> project).
+	ev, err := evSvc.Set(ownerCtx, envvars.SetInput{ServiceID: svc.ID, Key: "DATABASE_URL", Value: "postgres://a"})
 	if err != nil {
 		t.Fatalf("Set env var: %v", err)
 	}
@@ -247,12 +254,12 @@ func TestIntegration_EnvVarsScopedToEnvironmentWorkspace(t *testing.T) {
 	}
 
 	// List returns it with the value (env vars are non-secret).
-	if list, err := evSvc.List(ownerCtx, env.ID); err != nil || len(list) != 1 || list[0].Value != "postgres://a" {
+	if list, err := evSvc.List(ownerCtx, svc.ID); err != nil || len(list) != 1 || list[0].Value != "postgres://a" {
 		t.Fatalf("List: list=%+v err=%v", list, err)
 	}
 
 	// Setting the same key again upserts: same row, new value, updated_at advances.
-	ev2, err := evSvc.Set(ownerCtx, envvars.SetInput{EnvironmentID: env.ID, Key: "DATABASE_URL", Value: "postgres://b"})
+	ev2, err := evSvc.Set(ownerCtx, envvars.SetInput{ServiceID: svc.ID, Key: "DATABASE_URL", Value: "postgres://b"})
 	if err != nil {
 		t.Fatalf("re-Set env var: %v", err)
 	}
@@ -262,43 +269,43 @@ func TestIntegration_EnvVarsScopedToEnvironmentWorkspace(t *testing.T) {
 	if !ev2.UpdatedAt.After(ev.UpdatedAt) {
 		t.Fatalf("updated_at did not advance: %v -> %v", ev.UpdatedAt, ev2.UpdatedAt)
 	}
-	if list, err := evSvc.List(ownerCtx, env.ID); err != nil || len(list) != 1 || list[0].Value != "postgres://b" {
+	if list, err := evSvc.List(ownerCtx, svc.ID); err != nil || len(list) != 1 || list[0].Value != "postgres://b" {
 		t.Fatalf("after upsert List: list=%+v err=%v", list, err)
 	}
 
 	// Delete removes it; a second delete reports NotFound (not a silent no-op).
-	if err := evSvc.Delete(ownerCtx, envvars.DeleteInput{EnvironmentID: env.ID, Key: "DATABASE_URL"}); err != nil {
+	if err := evSvc.Delete(ownerCtx, envvars.DeleteInput{ServiceID: svc.ID, Key: "DATABASE_URL"}); err != nil {
 		t.Fatalf("Delete env var: %v", err)
 	}
-	if list, err := evSvc.List(ownerCtx, env.ID); err != nil || len(list) != 0 {
+	if list, err := evSvc.List(ownerCtx, svc.ID); err != nil || len(list) != 0 {
 		t.Fatalf("after delete List: list=%+v err=%v", list, err)
 	}
-	if err := evSvc.Delete(ownerCtx, envvars.DeleteInput{EnvironmentID: env.ID, Key: "DATABASE_URL"}); !isKind(err, problem.KindNotFound) {
+	if err := evSvc.Delete(ownerCtx, envvars.DeleteInput{ServiceID: svc.ID, Key: "DATABASE_URL"}); !isKind(err, problem.KindNotFound) {
 		t.Fatalf("double delete: got %v, want NotFound", err)
 	}
 
-	// A non-member of the environment's workspace is denied for every op — proving
-	// authorization resolves through the parent environment, not caller-supplied input.
+	// A non-member of the service's workspace is denied for every op — proving authorization
+	// resolves through the parent service, not caller-supplied input.
 	other, _ := registerAndLogin(t, authSvc, ctx, "ev-other")
 	otherCtx := principal.NewContext(ctx, principal.Principal{UserID: other.User.ID, Method: principal.MethodSession})
-	if _, err := evSvc.Set(otherCtx, envvars.SetInput{EnvironmentID: env.ID, Key: "SNEAKY", Value: "x"}); !isKind(err, problem.KindPermissionDenied) {
+	if _, err := evSvc.Set(otherCtx, envvars.SetInput{ServiceID: svc.ID, Key: "SNEAKY", Value: "x"}); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("non-member set: got %v, want PermissionDenied", err)
 	}
-	if _, err := evSvc.List(otherCtx, env.ID); !isKind(err, problem.KindPermissionDenied) {
+	if _, err := evSvc.List(otherCtx, svc.ID); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("non-member list: got %v, want PermissionDenied", err)
 	}
-	if err := evSvc.Delete(otherCtx, envvars.DeleteInput{EnvironmentID: env.ID, Key: "DATABASE_URL"}); !isKind(err, problem.KindPermissionDenied) {
+	if err := evSvc.Delete(otherCtx, envvars.DeleteInput{ServiceID: svc.ID, Key: "DATABASE_URL"}); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("non-member delete: got %v, want PermissionDenied", err)
 	}
 
 	// An anonymous caller is denied.
-	if _, err := evSvc.Set(ctx, envvars.SetInput{EnvironmentID: env.ID, Key: "ANON", Value: "y"}); !isKind(err, problem.KindPermissionDenied) {
+	if _, err := evSvc.Set(ctx, envvars.SetInput{ServiceID: svc.ID, Key: "ANON", Value: "y"}); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("anonymous set: got %v, want PermissionDenied", err)
 	}
 
-	// Operating on a non-existent environment resolves to no workspace -> NotFound.
-	if _, err := evSvc.Set(ownerCtx, envvars.SetInput{EnvironmentID: id.New().String(), Key: "GHOST", Value: "z"}); !isKind(err, problem.KindNotFound) {
-		t.Fatalf("set in missing environment: got %v, want NotFound", err)
+	// Operating on a non-existent service resolves to no workspace -> NotFound.
+	if _, err := evSvc.Set(ownerCtx, envvars.SetInput{ServiceID: id.New().String(), Key: "GHOST", Value: "z"}); !isKind(err, problem.KindNotFound) {
+		t.Fatalf("set on missing service: got %v, want NotFound", err)
 	}
 }
 
@@ -534,12 +541,24 @@ func TestIntegration_DeploymentScopedToEnvironmentWorkspace(t *testing.T) {
 		t.Fatalf("Create server: %v", err)
 	}
 
-	// Authorized create records a queued deployment, defaults the image tag, denormalizes
-	// project+workspace, and audits the REAL actor against the workspace resolved through
-	// environment -> project.
-	dep, err := depSvc.Create(ownerCtx, deployments.CreateInput{EnvironmentID: env.ID, ServerID: srv.ID, ImageRef: "traefik/whoami", ContainerPort: 80})
+	svcSvc := a.services.Service()
+	mk := func(name, image string, port int32, serverID string, deploy bool) services.CreateInput {
+		return services.CreateInput{EnvironmentID: env.ID, Name: name, SourceKind: services.SourceImage, ImageRef: image, ContainerPort: port, ServerID: serverID, DeployNow: deploy}
+	}
+
+	// Creating a service with deploy_now records a queued deployment, defaults the image tag,
+	// denormalizes service+project+workspace, and audits the REAL actor against the workspace
+	// resolved through environment -> project.
+	res, err := svcSvc.CreateService(ownerCtx, mk("web", "traefik/whoami", 80, srv.ID, true))
 	if err != nil {
-		t.Fatalf("Create deployment: %v", err)
+		t.Fatalf("CreateService: %v", err)
+	}
+	if res.DeploymentID == "" {
+		t.Fatal("deploy_now should have enqueued a deployment")
+	}
+	dep, err := depSvc.Get(ownerCtx, res.DeploymentID)
+	if err != nil {
+		t.Fatalf("Get deployment: %v", err)
 	}
 	if dep.Status != deployments.StatusQueued {
 		t.Fatalf("status = %q, want queued", dep.Status)
@@ -547,21 +566,25 @@ func TestIntegration_DeploymentScopedToEnvironmentWorkspace(t *testing.T) {
 	if dep.ImageRef != "traefik/whoami:latest" {
 		t.Fatalf("image = %q, want :latest defaulted", dep.ImageRef)
 	}
-	if dep.ProjectID != proj.ID || dep.WorkspaceID != ws.ID {
-		t.Fatalf("dep = %+v, want denormalized project/workspace", dep)
+	if dep.ServiceID != res.Service.ID || dep.ProjectID != proj.ID || dep.WorkspaceID != ws.ID {
+		t.Fatalf("dep = %+v, want denormalized service/project/workspace", dep)
 	}
 	var auditActor, auditWS string
 	if err := a.db.Pool.QueryRow(ctx,
-		`SELECT actor, workspace_id FROM audit_events WHERE target_id=$1 AND action='deployment.create'`, dep.ID).Scan(&auditActor, &auditWS); err != nil {
+		`SELECT actor, workspace_id FROM audit_events WHERE target_id=$1 AND action='service.create'`, res.Service.ID).Scan(&auditActor, &auditWS); err != nil {
 		t.Fatalf("query audit: %v", err)
 	}
 	if auditActor != owner.User.ID || auditWS != ws.ID {
 		t.Fatalf("audit actor/ws = %q/%q, want %q/%q", auditActor, auditWS, owner.User.ID, ws.ID)
 	}
 
-	// Reads return it for the authorized owner, by environment, project, and workspace.
+	// Reads return the deployment for the authorized owner, by service, environment, project,
+	// and workspace.
 	if got, err := depSvc.Get(ownerCtx, dep.ID); err != nil || got.ID != dep.ID {
 		t.Fatalf("Get: got=%+v err=%v", got, err)
+	}
+	if list, err := depSvc.ListByService(ownerCtx, res.Service.ID); err != nil || len(list) != 1 {
+		t.Fatalf("ListByService: len=%d err=%v", len(list), err)
 	}
 	if list, err := depSvc.ListByEnvironment(ownerCtx, env.ID); err != nil || len(list) != 1 {
 		t.Fatalf("ListByEnvironment: len=%d err=%v", len(list), err)
@@ -573,8 +596,8 @@ func TestIntegration_DeploymentScopedToEnvironmentWorkspace(t *testing.T) {
 		t.Fatalf("ListByWorkspace: len=%d err=%v", len(list), err)
 	}
 
-	// Cross-tenant guard: a server in ANOTHER workspace is treated as not-found, so a
-	// caller can't deploy onto infrastructure outside the environment's workspace.
+	// Cross-tenant guard: a server in ANOTHER workspace is treated as not-found, so a caller
+	// can't deploy onto infrastructure outside the service's workspace. (Fails before insert.)
 	other, _ := registerAndLogin(t, authSvc, ctx, "dep-other")
 	otherCtx := principal.NewContext(ctx, principal.Principal{UserID: other.User.ID, Method: principal.MethodSession})
 	otherWss, _ := projSvc.ListMyWorkspaces(ctx, other.User.ID)
@@ -582,12 +605,12 @@ func TestIntegration_DeploymentScopedToEnvironmentWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create other server: %v", err)
 	}
-	if _, err := depSvc.Create(ownerCtx, deployments.CreateInput{EnvironmentID: env.ID, ServerID: otherSrv.ID, ImageRef: "nginx", ContainerPort: 80}); !isKind(err, problem.KindNotFound) {
+	if _, err := svcSvc.CreateService(ownerCtx, mk("web", "nginx", 80, otherSrv.ID, true)); !isKind(err, problem.KindNotFound) {
 		t.Fatalf("cross-workspace server: got %v, want NotFound", err)
 	}
 
-	// A non-member of the environment's workspace is denied for create and reads.
-	if _, err := depSvc.Create(otherCtx, deployments.CreateInput{EnvironmentID: env.ID, ServerID: srv.ID, ImageRef: "nginx", ContainerPort: 80}); !isKind(err, problem.KindPermissionDenied) {
+	// A non-member of the service's workspace is denied for create and reads.
+	if _, err := svcSvc.CreateService(otherCtx, mk("web", "nginx", 80, srv.ID, true)); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("non-member create: got %v, want PermissionDenied", err)
 	}
 	if _, err := depSvc.ListByEnvironment(otherCtx, env.ID); !isKind(err, problem.KindPermissionDenied) {
@@ -595,17 +618,17 @@ func TestIntegration_DeploymentScopedToEnvironmentWorkspace(t *testing.T) {
 	}
 
 	// An anonymous caller is denied.
-	if _, err := depSvc.Create(ctx, deployments.CreateInput{EnvironmentID: env.ID, ServerID: srv.ID, ImageRef: "nginx", ContainerPort: 80}); !isKind(err, problem.KindPermissionDenied) {
+	if _, err := svcSvc.CreateService(ctx, mk("web", "nginx", 80, srv.ID, true)); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("anonymous create: got %v, want PermissionDenied", err)
 	}
 
-	// Invalid input is rejected before any workspace work.
-	if _, err := depSvc.Create(ownerCtx, deployments.CreateInput{EnvironmentID: env.ID, ServerID: srv.ID, ImageRef: "nginx", ContainerPort: 0}); !isKind(err, problem.KindInvalidInput) {
+	// Invalid input (an image service with no port) is rejected before any insert.
+	if _, err := svcSvc.CreateService(ownerCtx, mk("web", "nginx", 0, srv.ID, true)); !isKind(err, problem.KindInvalidInput) {
 		t.Fatalf("bad port: got %v, want InvalidInput", err)
 	}
 
-	// Deploying into a non-existent environment resolves to no workspace -> NotFound.
-	if _, err := depSvc.Create(ownerCtx, deployments.CreateInput{EnvironmentID: id.New().String(), ServerID: srv.ID, ImageRef: "nginx", ContainerPort: 80}); !isKind(err, problem.KindNotFound) {
+	// Creating into a non-existent environment resolves to no workspace -> NotFound.
+	if _, err := svcSvc.CreateService(ownerCtx, services.CreateInput{EnvironmentID: id.New().String(), Name: "web", SourceKind: services.SourceImage, ImageRef: "nginx", ContainerPort: 80, ServerID: srv.ID, DeployNow: true}); !isKind(err, problem.KindNotFound) {
 		t.Fatalf("missing environment: got %v, want NotFound", err)
 	}
 }
@@ -642,9 +665,13 @@ func TestIntegration_DeploymentClaimAndReport(t *testing.T) {
 		t.Fatalf("Register agent: %v", err)
 	}
 
-	dep, err := depSvc.Create(ownerCtx, deployments.CreateInput{EnvironmentID: env.ID, ServerID: srv.ID, ImageRef: "traefik/whoami", ContainerPort: 80})
+	svcRes, err := a.services.Service().CreateService(ownerCtx, services.CreateInput{EnvironmentID: env.ID, Name: "web", SourceKind: services.SourceImage, ImageRef: "traefik/whoami", ContainerPort: 80, ServerID: srv.ID, DeployNow: true})
 	if err != nil {
-		t.Fatalf("Create deployment: %v", err)
+		t.Fatalf("CreateService: %v", err)
+	}
+	dep, err := depSvc.Get(ownerCtx, svcRes.DeploymentID)
+	if err != nil {
+		t.Fatalf("Get deployment: %v", err)
 	}
 
 	// An unknown credential cannot poll.
@@ -652,13 +679,17 @@ func TestIntegration_DeploymentClaimAndReport(t *testing.T) {
 		t.Fatalf("bad credential poll: got %v, want PermissionDenied", err)
 	}
 
-	// The agent claims the queued deployment exactly once (the claim is atomic).
+	// The agent claims the queued deployment exactly once (the claim is atomic). The app
+	// label is the SERVICE id (the route + container key), not the environment id.
 	claimed, err := depSvc.PollDeployment(ctx, deployments.PollInput{AgentID: reg.AgentID, Credential: reg.Credential})
 	if err != nil {
 		t.Fatalf("PollDeployment: %v", err)
 	}
-	if !claimed.HasWork || claimed.DeploymentID != dep.ID || claimed.AppLabel != env.ID {
-		t.Fatalf("claimed = %+v, want the queued deployment", claimed)
+	if !claimed.HasWork || claimed.DeploymentID != dep.ID || claimed.AppLabel != svcRes.Service.ID {
+		t.Fatalf("claimed = %+v, want the queued deployment with the service app label", claimed)
+	}
+	if claimed.NetworkName != "plorigo-"+env.ID || claimed.NetworkAlias != svcRes.Service.Slug {
+		t.Fatalf("claimed = %+v, want per-env network + slug alias", claimed)
 	}
 	if again, err := depSvc.PollDeployment(ctx, deployments.PollInput{AgentID: reg.AgentID, Credential: reg.Credential}); err != nil || again.HasWork {
 		t.Fatalf("second poll: again=%+v err=%v, want no work", again, err)
@@ -705,13 +736,15 @@ func TestIntegration_GitDeploymentClaimAndReport(t *testing.T) {
 	env, _ := envSvc.Create(ownerCtx, environments.CreateInput{ProjectID: proj.ID, Name: "Prod"})
 	srv, _ := serversSvc.Create(ownerCtx, servers.CreateInput{WorkspaceID: ws.ID, Name: "Edge"})
 
-	// A connection-less public source on the project. Insert directly to keep the test off
-	// the network; the sources module's connect path is covered by its own tests.
-	if _, err := a.db.Pool.Exec(ctx,
-		`INSERT INTO project_sources (project_id, owner, repo, full_name, branch, default_branch, access, html_url)
-		 VALUES ($1, 'octocat', 'hello', 'octocat/hello', 'main', 'main', 'public', 'https://github.com/octocat/hello')`,
-		proj.ID); err != nil {
-		t.Fatalf("insert public source: %v", err)
+	// A public git service. Insert the row directly to keep the test off the network (the
+	// services module's create path validates against GitHub; that is covered by its own tests).
+	var svcID string
+	if err := a.db.Pool.QueryRow(ctx,
+		`INSERT INTO services (environment_id, project_id, workspace_id, name, slug, source_kind, source_access, owner, repo, full_name, branch, default_branch, html_url, container_port)
+		 VALUES ($1, $2, $3, 'web', 'web', 'git', 'public', 'octocat', 'hello', 'octocat/hello', 'main', 'main', 'https://github.com/octocat/hello', 80)
+		 RETURNING id`,
+		env.ID, proj.ID, ws.ID).Scan(&svcID); err != nil {
+		t.Fatalf("insert git service: %v", err)
 	}
 
 	// Register an agent for the server to obtain a durable credential.
@@ -728,17 +761,17 @@ func TestIntegration_GitDeploymentClaimAndReport(t *testing.T) {
 		t.Fatalf("Register agent: %v", err)
 	}
 
-	// Create from source records a queued git deployment with the derived clone URL and the
-	// source's default branch (no explicit ref given).
-	dep, err := depSvc.CreateFromSource(ownerCtx, deployments.CreateFromSourceInput{EnvironmentID: env.ID, ServerID: srv.ID, ContainerPort: 80})
+	// Deploying the git service records a queued git deployment with the derived clone URL and
+	// the service's branch (no explicit ref override given).
+	dep, err := depSvc.CreateForService(ownerCtx, deployments.CreateForServiceInput{ServiceID: svcID, ServerID: srv.ID})
 	if err != nil {
-		t.Fatalf("CreateFromSource: %v", err)
+		t.Fatalf("CreateForService: %v", err)
 	}
 	if dep.SourceKind != deployments.SourceGit || dep.SourceAccess != "public" {
 		t.Fatalf("dep = %+v, want a public git deployment", dep)
 	}
 	if dep.CloneURL != "https://github.com/octocat/hello.git" || dep.GitRef != "main" {
-		t.Fatalf("dep = %+v, want derived clone url + default-branch ref", dep)
+		t.Fatalf("dep = %+v, want derived clone url + service-branch ref", dep)
 	}
 
 	// The agent claims it and receives the source fields + a build tag, and no image ref.
@@ -777,11 +810,9 @@ func TestIntegration_GitDeploymentClaimAndReport(t *testing.T) {
 		t.Fatalf("after report dep = %+v, want running with commit + built image", got)
 	}
 
-	// A project with no connected source can't deploy from source.
-	bare, _ := projSvc.Create(ownerCtx, projects.CreateInput{WorkspaceID: ws.ID, Name: "No Source"})
-	bareEnv, _ := envSvc.Create(ownerCtx, environments.CreateInput{ProjectID: bare.ID, Name: "Prod"})
-	if _, err := depSvc.CreateFromSource(ownerCtx, deployments.CreateFromSourceInput{EnvironmentID: bareEnv.ID, ServerID: srv.ID, ContainerPort: 80}); !isKind(err, problem.KindNotFound) {
-		t.Fatalf("no-source create: got %v, want NotFound", err)
+	// Deploying a service that does not exist is NotFound.
+	if _, err := depSvc.CreateForService(ownerCtx, deployments.CreateForServiceInput{ServiceID: id.New().String(), ServerID: srv.ID}); !isKind(err, problem.KindNotFound) {
+		t.Fatalf("missing service: got %v, want NotFound", err)
 	}
 }
 

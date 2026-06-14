@@ -41,6 +41,12 @@ package** describing only what it needs (a *consumer-defined port*). `internal/a
 injects B's concrete `Service`, and Go structural typing satisfies the port — A never
 imports B.
 
+`internal/services` is a clean second example: its `CreateService` can kick off a first
+deployment, so it declares an `Enqueuer` port (just the one method it needs) that
+`*deployments.Service` satisfies structurally — `services` never imports `deployments`. It
+reuses the same GitHub-client port and crypto `SecretBox` as the `sources` module to
+validate a git source.
+
 ```go
 // internal/projects/store.go — projects declares what it needs from audit.
 type Recorder interface {
@@ -89,9 +95,9 @@ err := s.tx.WithinTx(ctx, func(tx database.Tx) error {
 ## Rule 4 — the authorization seam (follow it for every privileged module)
 
 `auth` and `policy` now exist (see [auth.md](./auth.md)), so the seam is real and
-`projects` is privileged. A privileged module (deployments, secrets, agents, docker,
-caddy, backups, terminal, ai, mcp — see [control-plane.md](./control-plane.md)) must
-authorize **before** mutating:
+`projects` is privileged. A privileged module (services, deployments, secrets, agents,
+docker, caddy, backups, terminal, ai, mcp — see [control-plane.md](./control-plane.md))
+must authorize **before** mutating:
 
 - the service reads the caller with `principal.FromContext(ctx)` (the interceptor in
   `internal/app` put it there);

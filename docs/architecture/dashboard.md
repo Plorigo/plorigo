@@ -47,6 +47,17 @@ separate concern and can make its own choice.)
   see [conventions](../conventions.md).
 
 > [!NOTE]
-> Specific screens and navigation are product scope, not architecture — see
-> [ROADMAP.md](../../ROADMAP.md). This doc is about the stack and the conventions every screen
-> follows.
+> **Service-centric structure.** Now that a **service** is the deployable unit (see
+> [data-and-api.md](./data-and-api.md)), the UI follows the same shape: the project page lists
+> the project's **services** (the old deployments-table + source panel are gone), and its
+> primary action is **Add service** rather than "Deploy". The full-page picker at
+> `/deployments/new` now **creates a service** — it adds a service-name field and a
+> public/private visibility toggle and calls `ServiceService.CreateService(deploy_now)`. A
+> **service detail page** at `/projects/$projectId/services/$serviceId` shows the source, port,
+> visibility, env vars, and deployment history, with a **Redeploy** action
+> (`CreateDeploymentForService`). Env-var management is **service-scoped**.
+
+> [!NOTE]
+> Beyond the structure above, specific screens and navigation are product scope, not
+> architecture — see [ROADMAP.md](../../ROADMAP.md). This doc is about the stack and the
+> conventions every screen follows.

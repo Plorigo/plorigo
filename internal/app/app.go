@@ -20,6 +20,7 @@ import (
 	"github.com/plorigo/plorigo/internal/projects"
 	"github.com/plorigo/plorigo/internal/secrets"
 	"github.com/plorigo/plorigo/internal/servers"
+	"github.com/plorigo/plorigo/internal/services"
 	"github.com/plorigo/plorigo/internal/sources"
 )
 
@@ -40,6 +41,7 @@ type App struct {
 	servers      *servers.Module
 	deployments  *deployments.Module
 	sources      *sources.Module
+	services     *services.Module
 }
 
 // New validates config, opens the DB pool, builds modules, and prepares the server.

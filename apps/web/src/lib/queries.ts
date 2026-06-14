@@ -1,4 +1,3 @@
-import { Code, ConnectError } from "@connectrpc/connect";
 import { useQuery } from "@tanstack/react-query";
 
 import {
@@ -10,6 +9,7 @@ import {
   projectClient,
   secretClient,
   serverClient,
+  serviceClient,
   sourceClient,
   workspaceClient,
 } from "./clients";
@@ -78,11 +78,12 @@ export function useEnvironments(projectId: string) {
   });
 }
 
-export function useEnvVars(environmentId: string) {
+// Env vars are now per-SERVICE: list/set/delete are keyed by serviceId.
+export function useEnvVars(serviceId: string) {
   return useQuery({
-    queryKey: ["envVars", environmentId],
-    queryFn: async () => (await envVarClient.listEnvVars({ environmentId })).envVars,
-    enabled: environmentId.length > 0,
+    queryKey: ["envVars", serviceId],
+    queryFn: async () => (await envVarClient.listEnvVars({ serviceId })).envVars,
+    enabled: serviceId.length > 0,
   });
 }
 
@@ -122,31 +123,32 @@ export function useBranches(workspaceId: string, owner: string, repo: string) {
   });
 }
 
-// useProjectSource returns the project's connected repository, or null when none is
-// connected (the backend reports NotFound, which is the expected "not connected" state).
-export function useProjectSource(projectId: string) {
+// Services — a project's deployable components (each owns a source, port, visibility,
+// env vars, and deployment history). Listed by project/environment, or read by id.
+export function useServicesByProject(projectId: string) {
   return useQuery({
-    queryKey: ["projectSource", projectId],
-    queryFn: async () => {
-      try {
-        return (await sourceClient.getProjectSource({ projectId })).source ?? null;
-      } catch (err) {
-        if (err instanceof ConnectError && err.code === Code.NotFound) return null;
-        throw err;
-      }
-    },
+    queryKey: ["services", "project", projectId],
+    queryFn: async () => (await serviceClient.listServicesByProject({ projectId })).services,
     // Skip the live API for demo (prototype-*) ids — they aren't UUIDs, so the backend
     // would reject them; demo pages fall back to fixtures instead.
     enabled: projectId.length > 0 && !isPrototypeId(projectId),
   });
 }
 
-// useSourcesByWorkspace batches every project's source for the grid (avoids an N+1).
-export function useSourcesByWorkspace(workspaceId: string) {
+export function useServicesByEnvironment(environmentId: string) {
   return useQuery({
-    queryKey: ["sources", workspaceId],
-    queryFn: async () => (await sourceClient.listSourcesByWorkspace({ workspaceId })).sources,
-    enabled: workspaceId.length > 0,
+    queryKey: ["services", "environment", environmentId],
+    queryFn: async () =>
+      (await serviceClient.listServicesByEnvironment({ environmentId })).services,
+    enabled: environmentId.length > 0 && !isPrototypeId(environmentId),
+  });
+}
+
+export function useService(serviceId: string) {
+  return useQuery({
+    queryKey: ["service", serviceId],
+    queryFn: async () => (await serviceClient.getService({ id: serviceId })).service ?? null,
+    enabled: serviceId.length > 0 && !isPrototypeId(serviceId),
   });
 }
 
@@ -175,6 +177,16 @@ export function useDeploymentsByProject(projectId: string) {
     // Skip the live API for demo (prototype-*) ids — they aren't UUIDs, so the backend
     // would reject them; demo pages fall back to fixtures instead.
     enabled: projectId.length > 0 && !isPrototypeId(projectId),
+    refetchInterval: 5000,
+  });
+}
+
+export function useDeploymentsByService(serviceId: string) {
+  return useQuery({
+    queryKey: ["deployments", "service", serviceId],
+    queryFn: async () =>
+      (await deploymentClient.listDeploymentsByService({ serviceId })).deployments,
+    enabled: serviceId.length > 0 && !isPrototypeId(serviceId),
     refetchInterval: 5000,
   });
 }

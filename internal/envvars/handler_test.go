@@ -20,7 +20,7 @@ func (f *fakeService) Set(_ context.Context, in SetInput) (EnvVar, error) {
 	if f.err != nil {
 		return EnvVar{}, f.err
 	}
-	return EnvVar{ID: "id1", EnvironmentID: in.EnvironmentID, Key: in.Key, Value: in.Value, CreatedAt: time.Now(), UpdatedAt: time.Now()}, nil
+	return EnvVar{ID: "id1", ServiceID: in.ServiceID, Key: in.Key, Value: in.Value, CreatedAt: time.Now(), UpdatedAt: time.Now()}, nil
 }
 func (f *fakeService) List(_ context.Context, _ string) ([]EnvVar, error) {
 	return f.list, f.err
@@ -32,7 +32,7 @@ func (f *fakeService) Delete(_ context.Context, _ DeleteInput) error {
 func TestHandler_SetEnvVar(t *testing.T) {
 	h := &handler{svc: &fakeService{}}
 	resp, err := h.SetEnvVar(context.Background(),
-		connect.NewRequest(&controlplanev1.SetEnvVarRequest{EnvironmentId: "e1", Key: "PORT", Value: "8080"}))
+		connect.NewRequest(&controlplanev1.SetEnvVarRequest{ServiceId: "e1", Key: "PORT", Value: "8080"}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestHandler_SetEnvVar(t *testing.T) {
 func TestHandler_ListEnvVars(t *testing.T) {
 	h := &handler{svc: &fakeService{list: []EnvVar{{ID: "id1", Key: "A", Value: "1"}, {ID: "id2", Key: "B", Value: "2"}}}}
 	resp, err := h.ListEnvVars(context.Background(),
-		connect.NewRequest(&controlplanev1.ListEnvVarsRequest{EnvironmentId: "e1"}))
+		connect.NewRequest(&controlplanev1.ListEnvVarsRequest{ServiceId: "e1"}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestHandler_ListEnvVars(t *testing.T) {
 func TestHandler_DeleteEnvVar(t *testing.T) {
 	h := &handler{svc: &fakeService{}}
 	resp, err := h.DeleteEnvVar(context.Background(),
-		connect.NewRequest(&controlplanev1.DeleteEnvVarRequest{EnvironmentId: "e1", Key: "PORT"}))
+		connect.NewRequest(&controlplanev1.DeleteEnvVarRequest{ServiceId: "e1", Key: "PORT"}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -71,7 +71,7 @@ func TestHandler_DeleteEnvVar(t *testing.T) {
 func TestHandler_MapsDomainErrorToConnectCode(t *testing.T) {
 	h := &handler{svc: &fakeService{err: problem.NotFound("nope")}}
 	_, err := h.ListEnvVars(context.Background(),
-		connect.NewRequest(&controlplanev1.ListEnvVarsRequest{EnvironmentId: "e1"}))
+		connect.NewRequest(&controlplanev1.ListEnvVarsRequest{ServiceId: "e1"}))
 	if err == nil {
 		t.Fatal("expected an error")
 	}

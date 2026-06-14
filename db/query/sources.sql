@@ -37,61 +37,6 @@ DELETE FROM source_connections
 WHERE workspace_id = $1 AND provider = $2
 RETURNING id;
 
--- name: CountProjectSourcesByConnection :one
--- Guards DisconnectGitHub: a connection still in use by projects must not be removed.
-SELECT count(*) FROM project_sources WHERE connection_id = $1;
-
--- name: UpsertProjectSource :one
--- Create-or-update by project_id (one source per project). The conflict is the success
--- path (reconnecting a project to a different repo or branch). connection_id is NULL for
--- a public source; `access` records how the source is reached ('oauth'|'public'|'app').
-INSERT INTO project_sources (
-    project_id, connection_id, provider, owner, repo, full_name, branch, default_branch, is_private, html_url, access
-)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-ON CONFLICT (project_id)
-DO UPDATE SET
-    connection_id = EXCLUDED.connection_id,
-    provider = EXCLUDED.provider,
-    owner = EXCLUDED.owner,
-    repo = EXCLUDED.repo,
-    full_name = EXCLUDED.full_name,
-    branch = EXCLUDED.branch,
-    default_branch = EXCLUDED.default_branch,
-    is_private = EXCLUDED.is_private,
-    html_url = EXCLUDED.html_url,
-    access = EXCLUDED.access,
-    updated_at = now()
-RETURNING id, project_id, connection_id, provider, owner, repo, full_name, branch, default_branch, is_private, html_url, access, created_at, updated_at;
-
--- name: GetProjectSource :one
--- LEFT JOIN the connection for the account login (display): a public source has no
--- connection, so github_login is NULL there. Workspace resolution for authorization uses
--- the shared GetProjectWorkspaceID.
-SELECT
-    ps.id, ps.project_id, ps.connection_id, ps.provider, ps.owner, ps.repo, ps.full_name,
-    ps.branch, ps.default_branch, ps.is_private, ps.html_url, ps.access, ps.created_at, ps.updated_at,
-    sc.github_login
-FROM project_sources ps
-LEFT JOIN source_connections sc ON sc.id = ps.connection_id
-WHERE ps.project_id = $1;
-
--- name: ListProjectSourcesByWorkspace :many
--- Batch read for the projects grid (avoids an N+1 over GetProjectSource). Joins the
--- parent project to scope by workspace and LEFT JOINs the connection for the account
--- login (NULL for a public source, which has no connection).
-SELECT
-    ps.id, ps.project_id, ps.connection_id, ps.provider, ps.owner, ps.repo, ps.full_name,
-    ps.branch, ps.default_branch, ps.is_private, ps.html_url, ps.access, ps.created_at, ps.updated_at,
-    sc.github_login
-FROM project_sources ps
-LEFT JOIN source_connections sc ON sc.id = ps.connection_id
-JOIN projects p ON p.id = ps.project_id
-WHERE p.workspace_id = $1
-ORDER BY ps.updated_at DESC;
-
--- name: DeleteProjectSource :one
--- RETURNING id distinguishes a real delete from a no-op (NotFound).
-DELETE FROM project_sources
-WHERE project_id = $1
-RETURNING id;
+-- A service's connected repository lives on the services table now (folded in, see
+-- db/query/services.sql). The guard that a connection is still in use is
+-- CountServicesByConnection, which the sources module reads as a sibling-table read.

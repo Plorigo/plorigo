@@ -10,6 +10,7 @@ const controlPlaneServices = [
   "WorkspaceService",
   "ProjectService",
   "EnvironmentService",
+  "ServiceService",
   "DeploymentService",
   "EnvVarService",
   "SecretService",

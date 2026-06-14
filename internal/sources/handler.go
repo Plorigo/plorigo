@@ -56,83 +56,11 @@ func (h *handler) ListBranches(ctx context.Context, req *connect.Request[control
 	return connect.NewResponse(&controlplanev1.ListBranchesResponse{Branches: branches}), nil
 }
 
-func (h *handler) ConnectRepository(ctx context.Context, req *connect.Request[controlplanev1.ConnectRepositoryRequest]) (*connect.Response[controlplanev1.ConnectRepositoryResponse], error) {
-	src, err := h.svc.ConnectRepository(ctx, ConnectRepoInput{
-		ProjectID: req.Msg.GetProjectId(),
-		Owner:     req.Msg.GetOwner(),
-		Repo:      req.Msg.GetRepo(),
-		Branch:    req.Msg.GetBranch(),
-	})
-	if err != nil {
-		return nil, problem.ToConnect(err)
-	}
-	return connect.NewResponse(&controlplanev1.ConnectRepositoryResponse{Source: toProtoSource(src)}), nil
-}
-
-func (h *handler) ConnectPublicRepository(ctx context.Context, req *connect.Request[controlplanev1.ConnectPublicRepositoryRequest]) (*connect.Response[controlplanev1.ConnectPublicRepositoryResponse], error) {
-	src, err := h.svc.ConnectPublicRepository(ctx, ConnectPublicRepoInput{
-		ProjectID: req.Msg.GetProjectId(),
-		RepoURL:   req.Msg.GetRepoUrl(),
-		Branch:    req.Msg.GetBranch(),
-	})
-	if err != nil {
-		return nil, problem.ToConnect(err)
-	}
-	return connect.NewResponse(&controlplanev1.ConnectPublicRepositoryResponse{Source: toProtoSource(src)}), nil
-}
-
-func (h *handler) GetProjectSource(ctx context.Context, req *connect.Request[controlplanev1.GetProjectSourceRequest]) (*connect.Response[controlplanev1.GetProjectSourceResponse], error) {
-	src, err := h.svc.GetProjectSource(ctx, req.Msg.GetProjectId())
-	if err != nil {
-		return nil, problem.ToConnect(err)
-	}
-	return connect.NewResponse(&controlplanev1.GetProjectSourceResponse{Source: toProtoSource(src)}), nil
-}
-
-func (h *handler) ListSourcesByWorkspace(ctx context.Context, req *connect.Request[controlplanev1.ListSourcesByWorkspaceRequest]) (*connect.Response[controlplanev1.ListSourcesByWorkspaceResponse], error) {
-	srcs, err := h.svc.ListByWorkspace(ctx, req.Msg.GetWorkspaceId())
-	if err != nil {
-		return nil, problem.ToConnect(err)
-	}
-	out := make([]*controlplanev1.Source, 0, len(srcs))
-	for _, s := range srcs {
-		out = append(out, toProtoSource(s))
-	}
-	return connect.NewResponse(&controlplanev1.ListSourcesByWorkspaceResponse{Sources: out}), nil
-}
-
-func (h *handler) DisconnectRepository(ctx context.Context, req *connect.Request[controlplanev1.DisconnectRepositoryRequest]) (*connect.Response[controlplanev1.DisconnectRepositoryResponse], error) {
-	if err := h.svc.DisconnectRepository(ctx, req.Msg.GetProjectId()); err != nil {
-		return nil, problem.ToConnect(err)
-	}
-	return connect.NewResponse(&controlplanev1.DisconnectRepositoryResponse{}), nil
-}
-
 func (h *handler) DisconnectGitHub(ctx context.Context, req *connect.Request[controlplanev1.DisconnectGitHubRequest]) (*connect.Response[controlplanev1.DisconnectGitHubResponse], error) {
 	if err := h.svc.DisconnectGitHub(ctx, req.Msg.GetWorkspaceId()); err != nil {
 		return nil, problem.ToConnect(err)
 	}
 	return connect.NewResponse(&controlplanev1.DisconnectGitHubResponse{}), nil
-}
-
-func toProtoSource(s Source) *controlplanev1.Source {
-	return &controlplanev1.Source{
-		Id:            s.ID,
-		ProjectId:     s.ProjectID,
-		ConnectionId:  s.ConnectionID,
-		Provider:      s.Provider,
-		Owner:         s.Owner,
-		Repo:          s.Repo,
-		FullName:      s.FullName,
-		Branch:        s.Branch,
-		DefaultBranch: s.DefaultBranch,
-		IsPrivate:     s.IsPrivate,
-		HtmlUrl:       s.HTMLURL,
-		GithubLogin:   s.GitHubLogin,
-		Access:        s.Access,
-		CreatedAt:     s.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:     s.UpdatedAt.UTC().Format(time.RFC3339),
-	}
 }
 
 func toProtoConnection(c Connection) *controlplanev1.Connection {

@@ -1,5 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
-import { Box, ChevronDown, Plus, Rocket, Server, Users } from "lucide-react";
+import { Box, Boxes, ChevronDown, Plus, Server, Users } from "lucide-react";
 
 import {
   DropdownMenu,
@@ -38,8 +38,8 @@ export function AddNewMenu() {
           Project
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => navigate({ to: "/deployments/new", search: {} })}>
-          <Rocket className="h-4 w-4" aria-hidden="true" />
-          Deployment
+          <Boxes className="h-4 w-4" aria-hidden="true" />
+          Service
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => navigate({ to: "/servers" })}>

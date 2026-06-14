@@ -21,14 +21,14 @@ func newPostgresStore(d *database.DB) *postgresStore {
 	return &postgresStore{pool: d.Pool}
 }
 
-// UpsertEnvVar inserts or updates by (environment_id, key). The unique conflict is the
+// UpsertEnvVar inserts or updates by (service_id, key). The unique conflict is the
 // success path, so there is no AlreadyExists mapping here (unlike the create-only
 // modules).
 func (s *postgresStore) UpsertEnvVar(ctx context.Context, tx database.Tx, e EnvVar) (EnvVar, error) {
 	row, err := db.New(tx).UpsertEnvVar(ctx, db.UpsertEnvVarParams{
-		EnvironmentID: e.EnvironmentID,
-		Key:           e.Key,
-		Value:         e.Value,
+		ServiceID: e.ServiceID,
+		Key:       e.Key,
+		Value:     e.Value,
 	})
 	if err != nil {
 		return EnvVar{}, err
@@ -36,8 +36,8 @@ func (s *postgresStore) UpsertEnvVar(ctx context.Context, tx database.Tx, e EnvV
 	return envVarFromRow(row), nil
 }
 
-func (s *postgresStore) ListByEnvironment(ctx context.Context, environmentID string) ([]EnvVar, error) {
-	rows, err := db.New(s.pool).ListEnvVarsByEnvironment(ctx, environmentID)
+func (s *postgresStore) ListByService(ctx context.Context, serviceID string) ([]EnvVar, error) {
+	rows, err := db.New(s.pool).ListEnvVarsByService(ctx, serviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -48,8 +48,8 @@ func (s *postgresStore) ListByEnvironment(ctx context.Context, environmentID str
 	return out, nil
 }
 
-func (s *postgresStore) DeleteEnvVar(ctx context.Context, tx database.Tx, environmentID, key string) (string, bool, error) {
-	deletedID, err := db.New(tx).DeleteEnvVar(ctx, db.DeleteEnvVarParams{EnvironmentID: environmentID, Key: key})
+func (s *postgresStore) DeleteEnvVar(ctx context.Context, tx database.Tx, serviceID, key string) (string, bool, error) {
+	deletedID, err := db.New(tx).DeleteEnvVar(ctx, db.DeleteEnvVarParams{ServiceID: serviceID, Key: key})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", false, nil
@@ -59,8 +59,8 @@ func (s *postgresStore) DeleteEnvVar(ctx context.Context, tx database.Tx, enviro
 	return deletedID, true, nil
 }
 
-func (s *postgresStore) WorkspaceIDForEnvironment(ctx context.Context, environmentID string) (string, bool, error) {
-	workspaceID, err := db.New(s.pool).GetEnvironmentWorkspaceID(ctx, environmentID)
+func (s *postgresStore) WorkspaceIDForService(ctx context.Context, serviceID string) (string, bool, error) {
+	workspaceID, err := db.New(s.pool).GetServiceWorkspaceID(ctx, serviceID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", false, nil
@@ -74,11 +74,11 @@ func (s *postgresStore) WorkspaceIDForEnvironment(ctx context.Context, environme
 // authorization/auditing and filled in by the service.
 func envVarFromRow(r db.EnvVar) EnvVar {
 	return EnvVar{
-		ID:            r.ID,
-		EnvironmentID: r.EnvironmentID,
-		Key:           r.Key,
-		Value:         r.Value,
-		CreatedAt:     r.CreatedAt,
-		UpdatedAt:     r.UpdatedAt,
+		ID:        r.ID,
+		ServiceID: r.ServiceID,
+		Key:       r.Key,
+		Value:     r.Value,
+		CreatedAt: r.CreatedAt,
+		UpdatedAt: r.UpdatedAt,
 	}
 }

@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	testServiceID = "00000000-0000-0000-0000-0000000000aa"
 	testEnvID     = "11111111-1111-1111-1111-111111111111"
 	testServerID  = "22222222-2222-2222-2222-222222222222"
 	testProjectID = "33333333-3333-3333-3333-333333333333"
@@ -23,6 +24,14 @@ const (
 )
 
 type fakeStore struct {
+	// WorkspaceAndProjectForService
+	svcWs, svcProj string
+	svcMetaOK      bool
+
+	// ServiceForDeploy / ServiceForDeployTx
+	svc   ServiceForDeploy
+	svcOK bool
+
 	envWs, envProj string
 	envOK          bool
 	envErr         error
@@ -38,12 +47,9 @@ type fakeStore struct {
 
 	env map[string]string
 
-	inserted  NewDeployment
-	insertErr error
-
-	src         Source
-	srcOK       bool
+	inserted    NewDeployment
 	insertedGit NewDeploymentFromGit
+	insertErr   error
 
 	getDep Deployment
 	getOK  bool
@@ -51,13 +57,19 @@ type fakeStore struct {
 	claimDep Deployment
 	claimOK  bool
 
-	statusUpdates []StatusUpdate
-	events        []NewEvent
-	superseded    bool
+	statusUpdates    []StatusUpdate
+	events           []NewEvent
+	supersededWith   string // service id passed to SupersedePreviousRunning
+	superseded       bool
+	routeServiceID   string
+	routeURLReported string
 }
 
 func (f *fakeStore) WorkspaceAndProjectForEnvironment(_ context.Context, _ string) (string, string, bool, error) {
 	return f.envWs, f.envProj, f.envOK, f.envErr
+}
+func (f *fakeStore) WorkspaceAndProjectForService(_ context.Context, _ string) (string, string, bool, error) {
+	return f.svcWs, f.svcProj, f.svcMetaOK, nil
 }
 func (f *fakeStore) WorkspaceForServer(_ context.Context, _ string) (string, bool, error) {
 	return f.serverWs, f.serverOK, nil
@@ -68,8 +80,14 @@ func (f *fakeStore) WorkspaceForProject(_ context.Context, _ string) (string, bo
 func (f *fakeStore) AgentServerByCredential(_ context.Context, _ []byte) (string, string, bool, error) {
 	return f.credAgentID, f.credServerID, f.credOK, nil
 }
-func (f *fakeStore) EnvVarsForEnvironment(_ context.Context, _ string) (map[string]string, error) {
+func (f *fakeStore) EnvVarsForService(_ context.Context, _ string) (map[string]string, error) {
 	return f.env, nil
+}
+func (f *fakeStore) ServiceForDeploy(_ context.Context, _ string) (ServiceForDeploy, bool, error) {
+	return f.svc, f.svcOK, nil
+}
+func (f *fakeStore) ServiceForDeployTx(_ context.Context, _ database.Tx, _ string) (ServiceForDeploy, bool, error) {
+	return f.svc, f.svcOK, nil
 }
 func (f *fakeStore) InsertDeployment(_ context.Context, _ database.Tx, d NewDeployment) (Deployment, error) {
 	f.inserted = d
@@ -78,6 +96,7 @@ func (f *fakeStore) InsertDeployment(_ context.Context, _ database.Tx, d NewDepl
 	}
 	return Deployment{
 		ID:            testDeployID,
+		ServiceID:     d.ServiceID,
 		EnvironmentID: d.EnvironmentID,
 		ProjectID:     d.ProjectID,
 		WorkspaceID:   d.WorkspaceID,
@@ -87,9 +106,6 @@ func (f *fakeStore) InsertDeployment(_ context.Context, _ database.Tx, d NewDepl
 		Status:        StatusQueued,
 	}, nil
 }
-func (f *fakeStore) SourceForProject(_ context.Context, _ string) (Source, bool, error) {
-	return f.src, f.srcOK, nil
-}
 func (f *fakeStore) InsertDeploymentFromGit(_ context.Context, _ database.Tx, d NewDeploymentFromGit) (Deployment, error) {
 	f.insertedGit = d
 	if f.insertErr != nil {
@@ -97,6 +113,7 @@ func (f *fakeStore) InsertDeploymentFromGit(_ context.Context, _ database.Tx, d 
 	}
 	return Deployment{
 		ID:            testDeployID,
+		ServiceID:     d.ServiceID,
 		EnvironmentID: d.EnvironmentID,
 		ProjectID:     d.ProjectID,
 		WorkspaceID:   d.WorkspaceID,
@@ -112,6 +129,7 @@ func (f *fakeStore) InsertDeploymentFromGit(_ context.Context, _ database.Tx, d 
 func (f *fakeStore) GetDeployment(_ context.Context, _ string) (Deployment, bool, error) {
 	return f.getDep, f.getOK, nil
 }
+func (f *fakeStore) ListByService(_ context.Context, _ string) ([]Deployment, error) { return nil, nil }
 func (f *fakeStore) ListByEnvironment(_ context.Context, _ string) ([]Deployment, error) {
 	return nil, nil
 }
@@ -129,8 +147,14 @@ func (f *fakeStore) UpdateStatus(_ context.Context, _ database.Tx, u StatusUpdat
 	f.statusUpdates = append(f.statusUpdates, u)
 	return nil
 }
-func (f *fakeStore) SupersedePreviousRunning(_ context.Context, _ database.Tx, _, _, _ string) error {
+func (f *fakeStore) SupersedePreviousRunning(_ context.Context, _ database.Tx, serviceID, _, _ string) error {
 	f.superseded = true
+	f.supersededWith = serviceID
+	return nil
+}
+func (f *fakeStore) UpdateServiceRouteURL(_ context.Context, _ database.Tx, serviceID, routeURL string) error {
+	f.routeServiceID = serviceID
+	f.routeURLReported = routeURL
 	return nil
 }
 func (f *fakeStore) AppendEvent(_ context.Context, _ database.Tx, e NewEvent) error {
@@ -175,12 +199,25 @@ func wantKind(t *testing.T, err error, kind problem.Kind) {
 	}
 }
 
-func TestCreate_AuthorizedInsertsQueuedAndAudits(t *testing.T) {
-	store := &fakeStore{envWs: testWorkspace, envProj: testProjectID, envOK: true, serverWs: testWorkspace, serverOK: true}
+// imageService is a resolved image service used across CreateForService tests.
+func imageService() ServiceForDeploy {
+	return ServiceForDeploy{
+		EnvironmentID: testEnvID, ProjectID: testProjectID, WorkspaceID: testWorkspace,
+		SourceKind: SourceImage, ImageRef: "traefik/whoami", ContainerPort: 80,
+		Visibility: "public", Slug: "web",
+	}
+}
+
+func TestCreateForService_AuthorizedInsertsQueuedAndAudits(t *testing.T) {
+	store := &fakeStore{
+		svcWs: testWorkspace, svcProj: testProjectID, svcMetaOK: true,
+		svc: imageService(), svcOK: true,
+		serverWs: testWorkspace, serverOK: true,
+	}
 	rec := &fakeRecorder{}
 	svc := newSvc(store, fakeAuthz{}, rec)
 
-	dep, err := svc.Create(authedCtx(), CreateInput{EnvironmentID: testEnvID, ServerID: testServerID, ImageRef: "traefik/whoami", ContainerPort: 80})
+	dep, err := svc.CreateForService(authedCtx(), CreateForServiceInput{ServiceID: testServiceID, ServerID: testServerID})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -190,64 +227,173 @@ func TestCreate_AuthorizedInsertsQueuedAndAudits(t *testing.T) {
 	if store.inserted.ImageRef != "traefik/whoami:latest" {
 		t.Errorf("image = %q, want :latest defaulted", store.inserted.ImageRef)
 	}
-	if store.inserted.ProjectID != testProjectID || store.inserted.WorkspaceID != testWorkspace {
-		t.Errorf("inserted = %+v, want denormalized project/workspace", store.inserted)
+	if store.inserted.ServiceID != testServiceID || store.inserted.ProjectID != testProjectID || store.inserted.WorkspaceID != testWorkspace {
+		t.Errorf("inserted = %+v, want denormalized service/project/workspace", store.inserted)
 	}
 	if !rec.called || rec.action != "deployment.create" {
 		t.Errorf("audit not recorded: called=%v action=%q", rec.called, rec.action)
 	}
 }
 
-func TestCreate_DeniedWritesNothing(t *testing.T) {
-	store := &fakeStore{envWs: testWorkspace, envProj: testProjectID, envOK: true}
+func TestCreateForService_PortOverride(t *testing.T) {
+	store := &fakeStore{
+		svcWs: testWorkspace, svcProj: testProjectID, svcMetaOK: true,
+		svc: imageService(), svcOK: true, serverWs: testWorkspace, serverOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	if _, err := svc.CreateForService(authedCtx(), CreateForServiceInput{ServiceID: testServiceID, ServerID: testServerID, ContainerPort: 9090}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.inserted.ContainerPort != 9090 {
+		t.Errorf("port = %d, want the override 9090", store.inserted.ContainerPort)
+	}
+}
+
+func TestCreateForService_DeniedWritesNothing(t *testing.T) {
+	store := &fakeStore{svcWs: testWorkspace, svcProj: testProjectID, svcMetaOK: true, svc: imageService(), svcOK: true}
 	rec := &fakeRecorder{}
 	svc := newSvc(store, fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
 
-	_, err := svc.Create(authedCtx(), CreateInput{EnvironmentID: testEnvID, ServerID: testServerID, ImageRef: "nginx", ContainerPort: 80})
+	_, err := svc.CreateForService(authedCtx(), CreateForServiceInput{ServiceID: testServiceID, ServerID: testServerID})
 	wantKind(t, err, problem.KindPermissionDenied)
-	if store.inserted.ImageRef != "" {
-		t.Error("a denied create must not insert a deployment")
-	}
-	if rec.called {
-		t.Error("a denied create must not write an audit event")
+	if store.inserted.ImageRef != "" || rec.called {
+		t.Error("a denied create must not insert or audit")
 	}
 }
 
-func TestCreate_InvalidImageRef(t *testing.T) {
-	svc := newSvc(&fakeStore{}, fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.Create(authedCtx(), CreateInput{EnvironmentID: testEnvID, ServerID: testServerID, ImageRef: "  ", ContainerPort: 80})
-	wantKind(t, err, problem.KindInvalidInput)
-}
-
-func TestCreate_InvalidPort(t *testing.T) {
-	svc := newSvc(&fakeStore{}, fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.Create(authedCtx(), CreateInput{EnvironmentID: testEnvID, ServerID: testServerID, ImageRef: "nginx", ContainerPort: 0})
-	wantKind(t, err, problem.KindInvalidInput)
-}
-
-func TestCreate_EnvironmentNotFound(t *testing.T) {
-	store := &fakeStore{envOK: false}
+func TestCreateForService_InvalidImageRef(t *testing.T) {
+	bad := imageService()
+	bad.ImageRef = "  "
+	store := &fakeStore{svcWs: testWorkspace, svcProj: testProjectID, svcMetaOK: true, svc: bad, svcOK: true, serverWs: testWorkspace, serverOK: true}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.Create(authedCtx(), CreateInput{EnvironmentID: testEnvID, ServerID: testServerID, ImageRef: "nginx", ContainerPort: 80})
+	_, err := svc.CreateForService(authedCtx(), CreateForServiceInput{ServiceID: testServiceID, ServerID: testServerID})
+	wantKind(t, err, problem.KindInvalidInput)
+}
+
+func TestCreateForService_InvalidPort(t *testing.T) {
+	noPort := imageService()
+	noPort.ContainerPort = 0
+	store := &fakeStore{svcWs: testWorkspace, svcProj: testProjectID, svcMetaOK: true, svc: noPort, svcOK: true, serverWs: testWorkspace, serverOK: true}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.CreateForService(authedCtx(), CreateForServiceInput{ServiceID: testServiceID, ServerID: testServerID})
+	wantKind(t, err, problem.KindInvalidInput)
+}
+
+func TestCreateForService_ServiceNotFound(t *testing.T) {
+	store := &fakeStore{svcMetaOK: false}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.CreateForService(authedCtx(), CreateForServiceInput{ServiceID: testServiceID, ServerID: testServerID})
 	wantKind(t, err, problem.KindNotFound)
 }
 
-func TestCreate_ServerInOtherWorkspaceNotFound(t *testing.T) {
-	store := &fakeStore{envWs: testWorkspace, envProj: testProjectID, envOK: true, serverWs: "other-ws", serverOK: true}
+func TestCreateForService_ServerInOtherWorkspaceNotFound(t *testing.T) {
+	store := &fakeStore{svcWs: testWorkspace, svcProj: testProjectID, svcMetaOK: true, svc: imageService(), svcOK: true, serverWs: "other-ws", serverOK: true}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.Create(authedCtx(), CreateInput{EnvironmentID: testEnvID, ServerID: testServerID, ImageRef: "nginx", ContainerPort: 80})
+	_, err := svc.CreateForService(authedCtx(), CreateForServiceInput{ServiceID: testServiceID, ServerID: testServerID})
 	wantKind(t, err, problem.KindNotFound)
 	if store.inserted.ImageRef != "" {
 		t.Error("a cross-workspace server must not insert a deployment")
 	}
 }
 
-func TestPollDeployment_ClaimsJobWithEnv(t *testing.T) {
+func TestCreateForService_GitPublicInsertsGitDeployment(t *testing.T) {
+	store := &fakeStore{
+		svcWs: testWorkspace, svcProj: testProjectID, svcMetaOK: true,
+		svc: ServiceForDeploy{
+			EnvironmentID: testEnvID, ProjectID: testProjectID, WorkspaceID: testWorkspace,
+			SourceKind: SourceGit, SourceAccess: "public", Owner: "o", Repo: "r",
+			Branch: "feature", DefaultBranch: "main", Slug: "web",
+		},
+		svcOK: true, serverWs: testWorkspace, serverOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	dep, err := svc.CreateForService(authedCtx(), CreateForServiceInput{ServiceID: testServiceID, ServerID: testServerID})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dep.SourceKind != SourceGit {
+		t.Errorf("source kind = %q, want git", dep.SourceKind)
+	}
+	if store.insertedGit.CloneURL != "https://github.com/o/r.git" || store.insertedGit.SourceAccess != "public" {
+		t.Errorf("inserted = %+v, want public clone url", store.insertedGit)
+	}
+	if store.insertedGit.GitRef != "feature" { // defaults to the service's branch
+		t.Errorf("git_ref = %q, want the service branch defaulted", store.insertedGit.GitRef)
+	}
+}
+
+func TestCreateForService_GitRefOverrideAndDefaultBranch(t *testing.T) {
+	store := &fakeStore{
+		svcWs: testWorkspace, svcProj: testProjectID, svcMetaOK: true,
+		svc: ServiceForDeploy{
+			EnvironmentID: testEnvID, ProjectID: testProjectID, WorkspaceID: testWorkspace,
+			SourceKind: SourceGit, SourceAccess: "public", Owner: "o", Repo: "r", DefaultBranch: "main",
+		},
+		svcOK: true, serverWs: testWorkspace, serverOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	// No explicit ref and no branch -> default branch.
+	if _, err := svc.CreateForService(authedCtx(), CreateForServiceInput{ServiceID: testServiceID, ServerID: testServerID}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.insertedGit.GitRef != "main" {
+		t.Errorf("git_ref = %q, want default branch", store.insertedGit.GitRef)
+	}
+	// Explicit override wins.
+	if _, err := svc.CreateForService(authedCtx(), CreateForServiceInput{ServiceID: testServiceID, ServerID: testServerID, GitRef: "v2"}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.insertedGit.GitRef != "v2" {
+		t.Errorf("git_ref = %q, want the override", store.insertedGit.GitRef)
+	}
+}
+
+func TestCreateForService_RejectsPrivateGit(t *testing.T) {
+	store := &fakeStore{
+		svcWs: testWorkspace, svcProj: testProjectID, svcMetaOK: true,
+		svc: ServiceForDeploy{
+			EnvironmentID: testEnvID, ProjectID: testProjectID, WorkspaceID: testWorkspace,
+			SourceKind: SourceGit, SourceAccess: "oauth", Owner: "o", Repo: "r", Branch: "main",
+		},
+		svcOK: true, serverWs: testWorkspace, serverOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.CreateForService(authedCtx(), CreateForServiceInput{ServiceID: testServiceID, ServerID: testServerID})
+	wantKind(t, err, problem.KindInvalidInput)
+	if store.insertedGit.CloneURL != "" {
+		t.Error("a private git source must not insert a deployment (public-first)")
+	}
+}
+
+func TestEnqueueFirstDeployment_InsertsWithinTx(t *testing.T) {
+	store := &fakeStore{svc: imageService(), svcOK: true}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	id, err := svc.EnqueueFirstDeployment(context.Background(), nil, testServiceID, testServerID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != testDeployID {
+		t.Errorf("id = %q, want the new deployment id", id)
+	}
+	if store.inserted.ServiceID != testServiceID || store.inserted.ImageRef != "traefik/whoami:latest" {
+		t.Errorf("inserted = %+v, want the service's image", store.inserted)
+	}
+}
+
+func TestEnqueueFirstDeployment_ServiceNotFound(t *testing.T) {
+	store := &fakeStore{svcOK: false}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.EnqueueFirstDeployment(context.Background(), nil, testServiceID, testServerID)
+	wantKind(t, err, problem.KindNotFound)
+}
+
+func TestPollDeployment_ClaimsJobWithServiceLabelAndNetwork(t *testing.T) {
 	store := &fakeStore{
 		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
-		claimDep: Deployment{ID: testDeployID, EnvironmentID: testEnvID, ImageRef: "img:latest", ContainerPort: 8080},
+		claimDep: Deployment{ID: testDeployID, ServiceID: testServiceID, EnvironmentID: testEnvID, ImageRef: "img:latest", ContainerPort: 8080},
 		claimOK:  true,
 		env:      map[string]string{"FOO": "bar"},
+		svc:      ServiceForDeploy{Slug: "api", Visibility: "private"}, svcOK: true,
 	}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
 
@@ -258,8 +404,12 @@ func TestPollDeployment_ClaimsJobWithEnv(t *testing.T) {
 	if !claimed.HasWork || claimed.DeploymentID != testDeployID || claimed.ImageRef != "img:latest" || claimed.ContainerPort != 8080 {
 		t.Errorf("claimed = %+v, want the queued job", claimed)
 	}
-	if claimed.AppLabel != testEnvID || claimed.Env["FOO"] != "bar" {
-		t.Errorf("claimed = %+v, want env + app label", claimed)
+	// The app label is the SERVICE id (route + container key), not the environment id.
+	if claimed.AppLabel != testServiceID || claimed.Env["FOO"] != "bar" {
+		t.Errorf("claimed = %+v, want env + service app label", claimed)
+	}
+	if claimed.NetworkName != "plorigo-"+testEnvID || claimed.NetworkAlias != "api" || claimed.Visibility != "private" {
+		t.Errorf("claimed = %+v, want per-env network + slug alias + visibility", claimed)
 	}
 	if len(store.events) != 1 || store.events[0].Status != StatusAssigned {
 		t.Errorf("events = %+v, want one assigned event", store.events)
@@ -285,10 +435,33 @@ func TestPollDeployment_UnknownCredential(t *testing.T) {
 	wantKind(t, err, problem.KindPermissionDenied)
 }
 
+func TestPollDeployment_GitClaimCarriesSourceAndBuildTag(t *testing.T) {
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		claimDep: Deployment{
+			ID: testDeployID, ServiceID: testServiceID, EnvironmentID: testEnvID, ContainerPort: 8080,
+			SourceKind: SourceGit, CloneURL: "https://github.com/o/r.git", GitRef: "main",
+		},
+		claimOK: true,
+		svc:     ServiceForDeploy{Slug: "web", Visibility: "public"}, svcOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	claimed, err := svc.PollDeployment(context.Background(), PollInput{AgentID: testAgentID, Credential: "plag_x"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if claimed.SourceKind != SourceGit || claimed.CloneURL != "https://github.com/o/r.git" || claimed.GitRef != "main" {
+		t.Errorf("claimed = %+v, want git source fields", claimed)
+	}
+	if claimed.BuiltImageTag != "plorigo-build:"+testDeployID {
+		t.Errorf("built tag = %q, want deterministic per-deployment tag", claimed.BuiltImageTag)
+	}
+}
+
 func TestReportDeployment_MismatchedServerDenied(t *testing.T) {
 	store := &fakeStore{
 		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
-		getDep: Deployment{ID: testDeployID, ServerID: otherServerID, EnvironmentID: testEnvID},
+		getDep: Deployment{ID: testDeployID, ServiceID: testServiceID, ServerID: otherServerID, EnvironmentID: testEnvID},
 		getOK:  true,
 	}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
@@ -299,16 +472,17 @@ func TestReportDeployment_MismatchedServerDenied(t *testing.T) {
 	}
 }
 
-func TestReportDeployment_RunningUpdatesAndSupersedes(t *testing.T) {
+func TestReportDeployment_RunningUpdatesAndSupersedesByService(t *testing.T) {
 	store := &fakeStore{
 		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
-		getDep: Deployment{ID: testDeployID, ServerID: testServerID, EnvironmentID: testEnvID},
+		getDep: Deployment{ID: testDeployID, ServiceID: testServiceID, ServerID: testServerID, EnvironmentID: testEnvID},
 		getOK:  true,
 	}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
 	err := svc.ReportDeployment(context.Background(), ReportInput{
 		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID,
-		Status: StatusRunning, HostPort: 32768, ContainerID: "abc", LogLines: []string{"hello", "  "}, Message: "up",
+		Status: StatusRunning, HostPort: 32768, ContainerID: "abc", RouteURL: "http://svc.localhost:8083",
+		LogLines: []string{"hello", "  "}, Message: "up",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -316,10 +490,12 @@ func TestReportDeployment_RunningUpdatesAndSupersedes(t *testing.T) {
 	if len(store.statusUpdates) != 1 || store.statusUpdates[0].Status != StatusRunning || store.statusUpdates[0].HostPort != 32768 {
 		t.Errorf("status updates = %+v, want one running update with host port", store.statusUpdates)
 	}
-	if !store.superseded {
-		t.Error("reaching running must supersede the previous running deployment")
+	if !store.superseded || store.supersededWith != testServiceID {
+		t.Errorf("supersede = (%v, %q), want supersede keyed by the service", store.superseded, store.supersededWith)
 	}
-	// one status event + one log event (the blank log line is skipped).
+	if store.routeServiceID != testServiceID || store.routeURLReported != "http://svc.localhost:8083" {
+		t.Errorf("route cache = (%q, %q), want the service URL cached", store.routeServiceID, store.routeURLReported)
+	}
 	statusEvents, logEvents := 0, 0
 	for _, e := range store.events {
 		switch e.Kind {
@@ -334,14 +510,32 @@ func TestReportDeployment_RunningUpdatesAndSupersedes(t *testing.T) {
 	}
 }
 
-func TestReportDeployment_StampsStreamOnLogEventsOnly(t *testing.T) {
+func TestReportDeployment_PrivateRunningCachesNoRoute(t *testing.T) {
 	store := &fakeStore{
 		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
-		getDep: Deployment{ID: testDeployID, ServerID: testServerID, EnvironmentID: testEnvID},
+		getDep: Deployment{ID: testDeployID, ServiceID: testServiceID, ServerID: testServerID, EnvironmentID: testEnvID},
 		getOK:  true,
 	}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	// A runtime-log tick: status running, two log lines (one blank, skipped), runtime stream.
+	// A private service reports running with no route URL: the service route cache stays untouched.
+	if err := svc.ReportDeployment(context.Background(), ReportInput{
+		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID,
+		Status: StatusRunning, HostPort: 32768,
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.routeServiceID != "" || store.routeURLReported != "" {
+		t.Errorf("route cache = (%q, %q), want untouched for a private service", store.routeServiceID, store.routeURLReported)
+	}
+}
+
+func TestReportDeployment_StampsStreamOnLogEventsOnly(t *testing.T) {
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		getDep: Deployment{ID: testDeployID, ServiceID: testServiceID, ServerID: testServerID, EnvironmentID: testEnvID},
+		getOK:  true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
 	err := svc.ReportDeployment(context.Background(), ReportInput{
 		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID,
 		Status: StatusRunning, LogLines: []string{"serving on :8080", "  ", "GET / 200"},
@@ -359,7 +553,6 @@ func TestReportDeployment_StampsStreamOnLogEventsOnly(t *testing.T) {
 			logStreams = append(logStreams, e.Stream)
 		}
 	}
-	// The status event is stream-less; each (non-blank) log line carries the report's stream.
 	if len(statusStreams) != 1 || statusStreams[0] != "" {
 		t.Errorf("status event streams = %v, want one empty stream", statusStreams)
 	}
@@ -369,11 +562,9 @@ func TestReportDeployment_StampsStreamOnLogEventsOnly(t *testing.T) {
 }
 
 func TestReportDeployment_RuntimeLogTickDoesNotSupersede(t *testing.T) {
-	// The tail loop re-reports status=running with host port 0 just to attach log lines.
-	// That must not re-run the supersede (which belongs to the real "now running" report).
 	store := &fakeStore{
 		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
-		getDep: Deployment{ID: testDeployID, ServerID: testServerID, EnvironmentID: testEnvID},
+		getDep: Deployment{ID: testDeployID, ServiceID: testServiceID, ServerID: testServerID, EnvironmentID: testEnvID},
 		getOK:  true,
 	}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
@@ -387,7 +578,6 @@ func TestReportDeployment_RuntimeLogTickDoesNotSupersede(t *testing.T) {
 	if store.superseded {
 		t.Error("a runtime-log tick (host port 0) must not supersede the previous deployment")
 	}
-	// It still records the status update and the log line.
 	if len(store.statusUpdates) != 1 {
 		t.Errorf("status updates = %d, want 1", len(store.statusUpdates))
 	}
@@ -399,117 +589,13 @@ func TestReportDeployment_InvalidStatus(t *testing.T) {
 	wantKind(t, err, problem.KindInvalidInput)
 }
 
-func TestCreateFromSource_PublicInsertsGitDeploymentAndAudits(t *testing.T) {
-	store := &fakeStore{
-		envWs: testWorkspace, envProj: testProjectID, envOK: true,
-		serverWs: testWorkspace, serverOK: true,
-		src:   Source{CloneURL: "https://github.com/o/r.git", Branch: "feature", DefaultBranch: "main", Access: "public"},
-		srcOK: true,
-	}
-	rec := &fakeRecorder{}
-	svc := newSvc(store, fakeAuthz{}, rec)
-
-	dep, err := svc.CreateFromSource(authedCtx(), CreateFromSourceInput{EnvironmentID: testEnvID, ServerID: testServerID, ContainerPort: 80})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if dep.Status != StatusQueued || dep.SourceKind != SourceGit {
-		t.Errorf("dep = %+v, want queued git deployment", dep)
-	}
-	if store.insertedGit.CloneURL != "https://github.com/o/r.git" || store.insertedGit.SourceAccess != "public" {
-		t.Errorf("inserted = %+v, want public clone url", store.insertedGit)
-	}
-	// No explicit ref: defaults to the source's selected branch.
-	if store.insertedGit.GitRef != "feature" {
-		t.Errorf("git_ref = %q, want the source branch defaulted", store.insertedGit.GitRef)
-	}
-	if store.insertedGit.ProjectID != testProjectID || store.insertedGit.WorkspaceID != testWorkspace {
-		t.Errorf("inserted = %+v, want denormalized project/workspace", store.insertedGit)
-	}
-	if !rec.called || rec.action != "deployment.create" {
-		t.Errorf("audit not recorded: called=%v action=%q", rec.called, rec.action)
-	}
-}
-
-func TestCreateFromSource_DefaultsRefToDefaultBranchWhenNoBranch(t *testing.T) {
-	store := &fakeStore{
-		envWs: testWorkspace, envProj: testProjectID, envOK: true,
-		serverWs: testWorkspace, serverOK: true,
-		src:   Source{CloneURL: "https://github.com/o/r.git", DefaultBranch: "main", Access: "public"},
-		srcOK: true,
-	}
-	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	if _, err := svc.CreateFromSource(authedCtx(), CreateFromSourceInput{EnvironmentID: testEnvID, ServerID: testServerID, ContainerPort: 80}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if store.insertedGit.GitRef != "main" {
-		t.Errorf("git_ref = %q, want default branch", store.insertedGit.GitRef)
-	}
-}
-
-func TestCreateFromSource_RejectsPrivateSource(t *testing.T) {
-	store := &fakeStore{
-		envWs: testWorkspace, envProj: testProjectID, envOK: true,
-		serverWs: testWorkspace, serverOK: true,
-		src:   Source{CloneURL: "https://github.com/o/r.git", Branch: "main", Access: "oauth"},
-		srcOK: true,
-	}
-	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.CreateFromSource(authedCtx(), CreateFromSourceInput{EnvironmentID: testEnvID, ServerID: testServerID, ContainerPort: 80})
-	wantKind(t, err, problem.KindInvalidInput)
-	if store.insertedGit.CloneURL != "" {
-		t.Error("a private source must not insert a deployment (public-first)")
-	}
-}
-
-func TestCreateFromSource_NoSourceNotFound(t *testing.T) {
-	store := &fakeStore{envWs: testWorkspace, envProj: testProjectID, envOK: true, serverWs: testWorkspace, serverOK: true, srcOK: false}
-	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.CreateFromSource(authedCtx(), CreateFromSourceInput{EnvironmentID: testEnvID, ServerID: testServerID, ContainerPort: 80})
-	wantKind(t, err, problem.KindNotFound)
-}
-
-func TestCreateFromSource_DeniedWritesNothing(t *testing.T) {
-	store := &fakeStore{envWs: testWorkspace, envProj: testProjectID, envOK: true, srcOK: true, src: Source{Access: "public"}}
-	rec := &fakeRecorder{}
-	svc := newSvc(store, fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
-	_, err := svc.CreateFromSource(authedCtx(), CreateFromSourceInput{EnvironmentID: testEnvID, ServerID: testServerID, ContainerPort: 80})
-	wantKind(t, err, problem.KindPermissionDenied)
-	if store.insertedGit.CloneURL != "" || rec.called {
-		t.Error("a denied create must not insert or audit")
-	}
-}
-
-func TestPollDeployment_GitClaimCarriesSourceAndBuildTag(t *testing.T) {
-	store := &fakeStore{
-		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
-		claimDep: Deployment{
-			ID: testDeployID, EnvironmentID: testEnvID, ContainerPort: 8080,
-			SourceKind: SourceGit, CloneURL: "https://github.com/o/r.git", GitRef: "main",
-		},
-		claimOK: true,
-	}
-	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	claimed, err := svc.PollDeployment(context.Background(), PollInput{AgentID: testAgentID, Credential: "plag_x"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if claimed.SourceKind != SourceGit || claimed.CloneURL != "https://github.com/o/r.git" || claimed.GitRef != "main" {
-		t.Errorf("claimed = %+v, want git source fields", claimed)
-	}
-	if claimed.BuiltImageTag != "plorigo-build:"+testDeployID {
-		t.Errorf("built tag = %q, want deterministic per-deployment tag", claimed.BuiltImageTag)
-	}
-}
-
 func TestReportDeployment_BuildPhasesAndCommitAccepted(t *testing.T) {
 	store := &fakeStore{
 		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
-		getDep: Deployment{ID: testDeployID, ServerID: testServerID, EnvironmentID: testEnvID},
+		getDep: Deployment{ID: testDeployID, ServiceID: testServiceID, ServerID: testServerID, EnvironmentID: testEnvID},
 		getOK:  true,
 	}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	// 'building' and 'routing' are valid agent-reported statuses.
 	if err := svc.ReportDeployment(context.Background(), ReportInput{
 		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID, Status: StatusBuilding, Message: "building image",
 	}); err != nil {
@@ -520,7 +606,6 @@ func TestReportDeployment_BuildPhasesAndCommitAccepted(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("routing report rejected: %v", err)
 	}
-	// 'running' with the built image + commit threads them into the status update.
 	if err := svc.ReportDeployment(context.Background(), ReportInput{
 		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID,
 		Status: StatusRunning, HostPort: 32768, ContainerID: "abc",

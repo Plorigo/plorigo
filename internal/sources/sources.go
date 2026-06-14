@@ -23,37 +23,6 @@ import (
 // the `provider` CHECK constraint (a migration) rather than reshaping the tables.
 const provider = "github"
 
-// access records how a project source is reached, mirrored on the `access` column and
-// Source.Access. A public source carries no connection and no credential; an oauth
-// source resolves through the workspace's OAuth Connection. ('app' — the GitHub App — is
-// a later slice; the column's CHECK already permits it.)
-const (
-	accessOAuth  = "oauth"
-	accessPublic = "public"
-)
-
-// Source is a project's connected repository + branch (the domain model, independent of
-// DB and transport types). It carries no token. WorkspaceID is resolved through the
-// parent project for authorization/audit and is not part of the wire contract.
-type Source struct {
-	ID            string
-	ProjectID     string
-	ConnectionID  string
-	WorkspaceID   string
-	Provider      string
-	Owner         string
-	Repo          string
-	FullName      string
-	Branch        string
-	DefaultBranch string
-	IsPrivate     bool
-	HTMLURL       string
-	GitHubLogin   string // the connected account this source resolves through; empty when public
-	Access        string // how the source is reached: "oauth" | "public" | "app"
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-}
-
 // Connection is a workspace's link to a Git provider account (one per workspace). It
 // carries metadata only — the sealed OAuth token never appears here.
 type Connection struct {
@@ -86,24 +55,6 @@ type Repository struct {
 	IsPrivate     bool
 	HTMLURL       string
 	Description   string
-}
-
-// ConnectRepoInput selects the repository + branch to connect to a project.
-type ConnectRepoInput struct {
-	ProjectID string
-	Owner     string
-	Repo      string
-	Branch    string
-}
-
-// ConnectPublicRepoInput connects a public repository to a project with no provider
-// connection. RepoURL is a public repo URL ("https://github.com/owner/repo", with or
-// without ".git") or a bare "owner/repo"; Branch is optional (empty selects the
-// repository's default branch).
-type ConnectPublicRepoInput struct {
-	ProjectID string
-	RepoURL   string
-	Branch    string
 }
 
 // ListReposInput lists repositories the workspace's connection can access. Query is an
@@ -155,8 +106,10 @@ func (c OAuthConfig) Configured() bool {
 
 // Service is the surface other code (handlers, the OAuth HTTP handlers, internal/app,
 // tests) depends on. BeginGitHubAuth/CompleteGitHubAuth drive the browser OAuth flow
-// (called by the plain HTTP handlers); the rest back the SourceService RPCs. No method
-// ever returns the access token.
+// (called by the plain HTTP handlers); the rest back the SourceService RPCs — workspace
+// connection + repository/branch DISCOVERY. Connecting a repository to a service lives in
+// the services module (the repo is folded onto the service). No method ever returns the
+// access token.
 type Service interface {
 	BeginGitHubAuth(ctx context.Context, in BeginAuthInput) (BeginAuthResult, error)
 	CompleteGitHubAuth(ctx context.Context, in CompleteAuthInput) (CompleteAuthResult, error)
@@ -165,10 +118,4 @@ type Service interface {
 	DisconnectGitHub(ctx context.Context, workspaceID string) error
 	ListRepositories(ctx context.Context, in ListReposInput) ([]Repository, error)
 	ListBranches(ctx context.Context, workspaceID, owner, repo string) ([]string, error)
-
-	ConnectRepository(ctx context.Context, in ConnectRepoInput) (Source, error)
-	ConnectPublicRepository(ctx context.Context, in ConnectPublicRepoInput) (Source, error)
-	GetProjectSource(ctx context.Context, projectID string) (Source, error)
-	ListByWorkspace(ctx context.Context, workspaceID string) ([]Source, error)
-	DisconnectRepository(ctx context.Context, projectID string) error
 }

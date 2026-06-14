@@ -18,6 +18,7 @@ import (
 	"github.com/plorigo/plorigo/internal/projects"
 	"github.com/plorigo/plorigo/internal/secrets"
 	"github.com/plorigo/plorigo/internal/servers"
+	"github.com/plorigo/plorigo/internal/services"
 	"github.com/plorigo/plorigo/internal/sources"
 )
 
@@ -129,6 +130,22 @@ func (a *App) buildModules() error {
 			RedirectURL:  a.cfg.GitHubRedirectURL(),
 		},
 		Log: a.log,
+	})
+
+	// services are a project's deployable components, each living in one environment and
+	// owning its source (folded onto the row), port, visibility, env vars, and deployment
+	// history. CreateService validates a git source through the same GitHub client as
+	// sources and seals/opens through the same crypto box; deploy_now enqueues the first
+	// deployment through the deployments Enqueuer port (*deployments.Service) — built above,
+	// so this is constructed after it.
+	a.services = services.New(services.Deps{
+		DB:       a.db,
+		Audit:    auditSvc,
+		Policy:   policySvc,
+		Crypto:   box,
+		GitHub:   github.NewClient(github.Config{}),
+		Enqueuer: a.deployments.Service(),
+		Log:      a.log,
 	})
 
 	mailerSvc := mailer.New(mailer.Config{

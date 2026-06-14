@@ -29,7 +29,7 @@ var envVarKeyRe = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 // service is the business logic. It orchestrates ports only — no SQL, no transport.
 // Authorization is workspace-scoped, so the owning workspace is resolved through the
-// parent environment's project; every mutation authorizes the caller (via the
+// parent service (which denormalizes it); every mutation authorizes the caller (via the
 // authz.Authorizer port) before the WithinTx block and audits inside it (see
 // modules.md, Rule 4). Values are non-secret but are never logged, so this module
 // stays a safe template for the future secrets module.
@@ -48,8 +48,8 @@ func newService(tx TxRunner, store Store, authorizer authz.Authorizer, audit Rec
 var _ Service = (*service)(nil)
 
 func (s *service) Set(ctx context.Context, in SetInput) (EnvVar, error) {
-	if _, err := id.Parse(in.EnvironmentID); err != nil {
-		return EnvVar{}, problem.InvalidInput("a valid environment_id is required")
+	if _, err := id.Parse(in.ServiceID); err != nil {
+		return EnvVar{}, problem.InvalidInput("a valid service_id is required")
 	}
 	key, err := validateKey(in.Key)
 	if err != nil {
@@ -59,14 +59,14 @@ func (s *service) Set(ctx context.Context, in SetInput) (EnvVar, error) {
 		return EnvVar{}, problem.InvalidInput("value must be at most %d bytes", maxValueLen)
 	}
 
-	// Resolve the owning workspace through the parent environment's project —
-	// authorization and auditing are workspace-scoped.
-	workspaceID, ok, err := s.store.WorkspaceIDForEnvironment(ctx, in.EnvironmentID)
+	// Resolve the owning workspace through the parent service — authorization and
+	// auditing are workspace-scoped.
+	workspaceID, ok, err := s.store.WorkspaceIDForService(ctx, in.ServiceID)
 	if err != nil {
 		return EnvVar{}, problem.Internalf(err, "set env var")
 	}
 	if !ok {
-		return EnvVar{}, problem.NotFound("environment %s not found", in.EnvironmentID)
+		return EnvVar{}, problem.NotFound("service %s not found", in.ServiceID)
 	}
 
 	caller := principal.FromContext(ctx)
@@ -74,7 +74,7 @@ func (s *service) Set(ctx context.Context, in SetInput) (EnvVar, error) {
 		return EnvVar{}, err
 	}
 
-	candidate := EnvVar{EnvironmentID: in.EnvironmentID, WorkspaceID: workspaceID, Key: key, Value: in.Value}
+	candidate := EnvVar{ServiceID: in.ServiceID, WorkspaceID: workspaceID, Key: key, Value: in.Value}
 
 	var saved EnvVar
 	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
@@ -91,25 +91,25 @@ func (s *service) Set(ctx context.Context, in SetInput) (EnvVar, error) {
 	}
 	saved.WorkspaceID = workspaceID
 	// Log the key NAME and never the value (redaction habit shared with secrets).
-	s.log.Info("env var set", "id", saved.ID, "environment_id", saved.EnvironmentID, "key", saved.Key, "workspace_id", workspaceID, "actor", caller.UserID)
+	s.log.Info("env var set", "id", saved.ID, "service_id", saved.ServiceID, "key", saved.Key, "workspace_id", workspaceID, "actor", caller.UserID)
 	return saved, nil
 }
 
-func (s *service) List(ctx context.Context, environmentID string) ([]EnvVar, error) {
-	if _, err := id.Parse(environmentID); err != nil {
-		return nil, problem.InvalidInput("a valid environment_id is required")
+func (s *service) List(ctx context.Context, serviceID string) ([]EnvVar, error) {
+	if _, err := id.Parse(serviceID); err != nil {
+		return nil, problem.InvalidInput("a valid service_id is required")
 	}
-	workspaceID, ok, err := s.store.WorkspaceIDForEnvironment(ctx, environmentID)
+	workspaceID, ok, err := s.store.WorkspaceIDForService(ctx, serviceID)
 	if err != nil {
 		return nil, problem.Internalf(err, "list env vars")
 	}
 	if !ok {
-		return nil, problem.NotFound("environment %s not found", environmentID)
+		return nil, problem.NotFound("service %s not found", serviceID)
 	}
 	if err := s.authorizer.Authorize(ctx, principal.FromContext(ctx), authz.ActionEnvVarRead, authz.Resource{Type: "env_var", WorkspaceID: workspaceID}); err != nil {
 		return nil, err
 	}
-	vars, err := s.store.ListByEnvironment(ctx, environmentID)
+	vars, err := s.store.ListByService(ctx, serviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -120,20 +120,20 @@ func (s *service) List(ctx context.Context, environmentID string) ([]EnvVar, err
 }
 
 func (s *service) Delete(ctx context.Context, in DeleteInput) error {
-	if _, err := id.Parse(in.EnvironmentID); err != nil {
-		return problem.InvalidInput("a valid environment_id is required")
+	if _, err := id.Parse(in.ServiceID); err != nil {
+		return problem.InvalidInput("a valid service_id is required")
 	}
 	key, err := validateKey(in.Key)
 	if err != nil {
 		return err
 	}
 
-	workspaceID, ok, err := s.store.WorkspaceIDForEnvironment(ctx, in.EnvironmentID)
+	workspaceID, ok, err := s.store.WorkspaceIDForService(ctx, in.ServiceID)
 	if err != nil {
 		return problem.Internalf(err, "delete env var")
 	}
 	if !ok {
-		return problem.NotFound("environment %s not found", in.EnvironmentID)
+		return problem.NotFound("service %s not found", in.ServiceID)
 	}
 
 	caller := principal.FromContext(ctx)
@@ -142,7 +142,7 @@ func (s *service) Delete(ctx context.Context, in DeleteInput) error {
 	}
 
 	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
-		deletedID, deleted, txErr := s.store.DeleteEnvVar(ctx, tx, in.EnvironmentID, key)
+		deletedID, deleted, txErr := s.store.DeleteEnvVar(ctx, tx, in.ServiceID, key)
 		if txErr != nil {
 			return txErr
 		}
@@ -156,7 +156,7 @@ func (s *service) Delete(ctx context.Context, in DeleteInput) error {
 	if err != nil {
 		return mapErr(err, "delete env var")
 	}
-	s.log.Info("env var deleted", "environment_id", in.EnvironmentID, "key", key, "workspace_id", workspaceID, "actor", caller.UserID)
+	s.log.Info("env var deleted", "service_id", in.ServiceID, "key", key, "workspace_id", workspaceID, "actor", caller.UserID)
 	return nil
 }
 

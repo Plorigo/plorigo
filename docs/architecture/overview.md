@@ -66,7 +66,8 @@ and self-host shape live in [control-plane.md](./control-plane.md).
 
 ## The deploy flow, at a glance
 
-A deployment is a record plus a job the agent executes. The happy path:
+A deployment is one deploy attempt of a **service** (a project's deployable component:
+`web`, `api`, `worker`, …) — a record plus a job the agent executes. The happy path:
 
 1. Trigger (Git event or manual) → control plane creates a deployment record and a job.
 2. Agent receives the signed job and fetches the source.

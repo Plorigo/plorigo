@@ -12,6 +12,7 @@ import { ProjectDetailPage } from "./features/projects/ProjectDetailPage";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
 import { NewProjectPage } from "./features/projects/new/NewProjectPage";
 import { ResourcesPage } from "./features/resources/ResourcesPage";
+import { ServiceDetailPage } from "./features/services/ServiceDetailPage";
 import { SecurityPage } from "./features/security/SecurityPage";
 import { ServersPage } from "./features/servers/ServersPage";
 import { TeamPage } from "./features/team/TeamPage";
@@ -49,6 +50,11 @@ const projectDetailRoute = createRoute({
   path: "/projects/$projectId",
   component: ProjectDetailPage,
 });
+const serviceDetailRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/projects/$projectId/services/$serviceId",
+  component: ServiceDetailPage,
+});
 const serversRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/servers", component: ServersPage });
 const resourcesRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/resources", component: ResourcesPage });
 const deploymentsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/deployments", component: DeploymentsPage });
@@ -84,6 +90,7 @@ export const routeTree = rootRoute.addChildren([
     projectsRoute,
     projectsNewRoute,
     projectDetailRoute,
+    serviceDetailRoute,
     serversRoute,
     resourcesRoute,
     deploymentsRoute,

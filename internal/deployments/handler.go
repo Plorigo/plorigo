@@ -22,22 +22,9 @@ type adminHandler struct {
 
 var _ controlplanev1connect.DeploymentServiceHandler = (*adminHandler)(nil)
 
-func (h *adminHandler) CreateDeployment(ctx context.Context, req *connect.Request[controlplanev1.CreateDeploymentRequest]) (*connect.Response[controlplanev1.CreateDeploymentResponse], error) {
-	dep, err := h.svc.Create(ctx, CreateInput{
-		EnvironmentID: req.Msg.GetEnvironmentId(),
-		ServerID:      req.Msg.GetServerId(),
-		ImageRef:      req.Msg.GetImageRef(),
-		ContainerPort: req.Msg.GetContainerPort(),
-	})
-	if err != nil {
-		return nil, problem.ToConnect(err)
-	}
-	return connect.NewResponse(&controlplanev1.CreateDeploymentResponse{Deployment: toProto(dep)}), nil
-}
-
-func (h *adminHandler) CreateDeploymentFromSource(ctx context.Context, req *connect.Request[controlplanev1.CreateDeploymentFromSourceRequest]) (*connect.Response[controlplanev1.CreateDeploymentFromSourceResponse], error) {
-	dep, err := h.svc.CreateFromSource(ctx, CreateFromSourceInput{
-		EnvironmentID: req.Msg.GetEnvironmentId(),
+func (h *adminHandler) CreateDeploymentForService(ctx context.Context, req *connect.Request[controlplanev1.CreateDeploymentForServiceRequest]) (*connect.Response[controlplanev1.CreateDeploymentForServiceResponse], error) {
+	dep, err := h.svc.CreateForService(ctx, CreateForServiceInput{
+		ServiceID:     req.Msg.GetServiceId(),
 		ServerID:      req.Msg.GetServerId(),
 		ContainerPort: req.Msg.GetContainerPort(),
 		GitRef:        req.Msg.GetGitRef(),
@@ -45,7 +32,15 @@ func (h *adminHandler) CreateDeploymentFromSource(ctx context.Context, req *conn
 	if err != nil {
 		return nil, problem.ToConnect(err)
 	}
-	return connect.NewResponse(&controlplanev1.CreateDeploymentFromSourceResponse{Deployment: toProto(dep)}), nil
+	return connect.NewResponse(&controlplanev1.CreateDeploymentForServiceResponse{Deployment: toProto(dep)}), nil
+}
+
+func (h *adminHandler) ListDeploymentsByService(ctx context.Context, req *connect.Request[controlplanev1.ListDeploymentsByServiceRequest]) (*connect.Response[controlplanev1.ListDeploymentsByServiceResponse], error) {
+	deps, err := h.svc.ListByService(ctx, req.Msg.GetServiceId())
+	if err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&controlplanev1.ListDeploymentsByServiceResponse{Deployments: toProtos(deps)}), nil
 }
 
 func (h *adminHandler) GetDeployment(ctx context.Context, req *connect.Request[controlplanev1.GetDeploymentRequest]) (*connect.Response[controlplanev1.GetDeploymentResponse], error) {
@@ -120,6 +115,9 @@ func (h *gatewayHandler) PollDeployment(ctx context.Context, req *connect.Reques
 		CloneUrl:      claimed.CloneURL,
 		GitRef:        claimed.GitRef,
 		BuiltImageTag: claimed.BuiltImageTag,
+		Visibility:    claimed.Visibility,
+		NetworkName:   claimed.NetworkName,
+		NetworkAlias:  claimed.NetworkAlias,
 	}), nil
 }
 
@@ -154,6 +152,7 @@ func toProtos(ds []Deployment) []*controlplanev1.Deployment {
 func toProto(d Deployment) *controlplanev1.Deployment {
 	return &controlplanev1.Deployment{
 		Id:            d.ID,
+		ServiceId:     d.ServiceID,
 		EnvironmentId: d.EnvironmentID,
 		ProjectId:     d.ProjectID,
 		WorkspaceId:   d.WorkspaceID,

@@ -30,6 +30,23 @@ func (q *Queries) DeleteSecret(ctx context.Context, arg DeleteSecretParams) (str
 	return id, err
 }
 
+const getEnvironmentWorkspaceID = `-- name: GetEnvironmentWorkspaceID :one
+SELECT p.workspace_id
+FROM environments e
+JOIN projects p ON p.id = e.project_id
+WHERE e.id = $1
+`
+
+// Resolves an environment's owning workspace through its parent project, so this
+// environment-scoped module can authorize and audit against the workspace. (Secrets stay
+// environment-scoped; env vars moved to per-service, so this query lives here now.)
+func (q *Queries) GetEnvironmentWorkspaceID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, getEnvironmentWorkspaceID, id)
+	var workspace_id string
+	err := row.Scan(&workspace_id)
+	return workspace_id, err
+}
+
 const listSecretsByEnvironment = `-- name: ListSecretsByEnvironment :many
 SELECT id, environment_id, key, created_at, updated_at
 FROM secrets

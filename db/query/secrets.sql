@@ -22,3 +22,12 @@ ORDER BY key;
 DELETE FROM secrets
 WHERE environment_id = $1 AND key = $2
 RETURNING id;
+
+-- name: GetEnvironmentWorkspaceID :one
+-- Resolves an environment's owning workspace through its parent project, so this
+-- environment-scoped module can authorize and audit against the workspace. (Secrets stay
+-- environment-scoped; env vars moved to per-service, so this query lives here now.)
+SELECT p.workspace_id
+FROM environments e
+JOIN projects p ON p.id = e.project_id
+WHERE e.id = $1;

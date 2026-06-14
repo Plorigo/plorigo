@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// A Service is a deployable component of a project — its own source (a pre-built image, a
+// PUBLIC git repo, or a template), port, visibility, env vars, and deployment history. A
+// project is a SYSTEM made of one or more services (web, api, worker, db), each with a
+// DIFFERENT source. A service lives in exactly one environment. project_id and workspace_id
+// are denormalized from the environment. See docs/architecture/deployment-engine.md.
+message Service {
+  string id = 1;
+  string environment_id = 2;
+  string project_id = 3;
+  string workspace_id = 4;
+  string name = 5;
+  string slug = 6;
+  string source_kind = 7;     // "image" | "git" | "template"
+  string image_ref = 8;       // image / template source
+  string template_id = 9;     // template source
+  string connection_id = 10;  // git oauth source (empty for public)
+  string provider = 11;       // "" | "github"
+  string owner = 12;
+  string repo = 13;
+  string full_name = 14;
+  string branch = 15;
+  string default_branch = 16;
+  bool is_private = 17;
+  string html_url = 18;
+  string source_access = 19;  // "" | "public" | "oauth" | "app"
+  int32 container_port = 20;
+  string visibility = 21;     // "public" | "private"
+  string route_url = 22;      // the public URL (public services only; empty for private)
+  string internal_host = 23;  // the service's DNS alias; siblings reach it at http://{internal_host}:{container_port}
+  string github_login = 24;   // the connected account for an oauth source (display; empty for public)
+  string created_at = 25;     // RFC 3339
+  string updated_at = 26;     // RFC 3339
+}
+
+// CreateServiceRequest creates a service under an environment from one source, optionally
+// enqueuing its first deployment (deploy_now). The source is one of: a pre-built image
+// (image_ref), a template (template_id + image_ref), a PUBLIC git repo (repo_url), or a
+// connected OAuth git repo (owner+repo). project_id and workspace_id are derived from the
+// environment server-side.
+message CreateServiceRequest {
+  string environment_id = 1;
+  string name = 2;
+  string source_kind = 3;     // "image" | "git" | "template"
+  string image_ref = 4;       // image / template
+  string template_id = 5;     // template
+  string repo_url = 6;        // git (public): a public repo URL or "owner/repo"
+  string owner = 7;           // git (oauth): from a connected repo
+  string repo = 8;            // git (oauth)
+  string branch = 9;          // git: optional (empty = the repo's default branch)
+  int32 container_port = 10;  // 0 = auto-detect from the Dockerfile EXPOSE (git only)
+  string visibility = 11;     // "public" | "private" (empty = public)
+  string server_id = 12;      // required when deploy_now
+  bool deploy_now = 13;       // create the service AND enqueue its first deployment
+}
+
+message CreateServiceResponse {
+  Service service = 1;
+  // The first deployment's id, set only when deploy_now enqueued a build. Empty when
+  // deploy_now was false, or when the source can't be built yet (an OAuth/private git repo).
+  string deployment_id = 2;
+}
+
+message GetServiceRequest {
+  string id = 1;
+}
+
+message GetServiceResponse {
+  Service service = 1;
+}
+
+message ListServicesByEnvironmentRequest {
+  string environment_id = 1;
+}
+
+message ListServicesByEnvironmentResponse {
+  repeated Service services = 1;
+}
+
+message ListServicesByProjectRequest {
+  string project_id = 1;
+}
+
+message ListServicesByProjectResponse {
+  repeated Service services = 1;
+}
+
+message ListServicesByWorkspaceRequest {
+  string workspace_id = 1;
+}
+
+message ListServicesByWorkspaceResponse {
+  repeated Service services = 1;
+}
+
+// UpdateServiceSource reconnects/changes a service's source (and port). The shape mirrors
+// CreateServiceRequest's source selection.
+message UpdateServiceSourceRequest {
+  string id = 1;
+  string source_kind = 2;
+  string image_ref = 3;
+  string template_id = 4;
+  string repo_url = 5;
+  string owner = 6;
+  string repo = 7;
+  string branch = 8;
+  int32 container_port = 9;
+}
+
+message UpdateServiceSourceResponse {
+  Service service = 1;
+}
+
+message UpdateServiceVisibilityRequest {
+  string id = 1;
+  string visibility = 2; // "public" | "private"
+}
+
+message UpdateServiceVisibilityResponse {
+  Service service = 1;
+}
+
+message DeleteServiceRequest {
+  string id = 1;
+}
+
+message DeleteServiceResponse {}
+
+// ServiceService is the dashboard-facing API for services: create a service (and optionally
+// deploy it), read and list services, change a service's source or visibility, and delete a
+// service. Every RPC is session/token-authenticated and policy-authorized.
+service ServiceService {
+  rpc CreateService(CreateServiceRequest) returns (CreateServiceResponse);
+  rpc GetService(GetServiceRequest) returns (GetServiceResponse);
+  rpc ListServicesByEnvironment(ListServicesByEnvironmentRequest) returns (ListServicesByEnvironmentResponse);
+  rpc ListServicesByProject(ListServicesByProjectRequest) returns (ListServicesByProjectResponse);
+  rpc ListServicesByWorkspace(ListServicesByWorkspaceRequest) returns (ListServicesByWorkspaceResponse);
+  rpc UpdateServiceSource(UpdateServiceSourceRequest) returns (UpdateServiceSourceResponse);
+  rpc UpdateServiceVisibility(UpdateServiceVisibilityRequest) returns (UpdateServiceVisibilityResponse);
+  rpc DeleteService(DeleteServiceRequest) returns (DeleteServiceResponse);
+}

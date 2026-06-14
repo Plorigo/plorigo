@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import { useDemoData } from "@/lib/demo";
 import { formatDate } from "@/lib/format";
 import { prototypeProjects, type DashboardProject } from "@/lib/mockDashboard";
-import { useProjects, useSourcesByWorkspace } from "@/lib/queries";
+import { useProjects } from "@/lib/queries";
 import { type Tone } from "@/lib/status";
 import { useWorkspaceStore } from "@/store";
 
@@ -22,31 +22,26 @@ interface LiveProject {
   createdAt: string;
 }
 
-// LiveSource is the subset of a connected repository this view displays.
-interface LiveSource {
-  fullName: string;
-  branch: string;
-}
-
 // Live backend projects don't yet carry the rich UI fields (framework, services,
 // readiness…), so we project them into the DashboardProject shape with sensible
-// placeholders. The repo and branch come from the connected source when present.
-// When there are no live projects and demo mode is on, we show the prototype fixtures.
-function toDashboardProject(project: LiveProject, source?: LiveSource): DashboardProject {
+// placeholders. A project's source now lives on its services (see ServiceService), so the
+// repo/branch here stay empty placeholders. When there are no live projects and demo mode
+// is on, we show the prototype fixtures.
+function toDashboardProject(project: LiveProject): DashboardProject {
   return {
     id: project.id,
     name: project.name,
     slug: project.slug,
-    repo: source ? source.fullName : "No repository connected",
+    repo: "",
     framework: "ConnectRPC",
     url: `${project.slug}.plorigo.local`,
-    branch: source ? source.branch : "—",
+    branch: "—",
     commit: project.id.slice(0, 7) || "live",
     status: "healthy",
     source: "live",
     updated: `created ${formatDate(project.createdAt)}`,
     environments: [{ name: "Production", tone: "green" }],
-    services: ["Web", "DB"],
+    services: [],
     owner: "Workspace",
     readiness: 91,
     collaborators: 1,
@@ -59,19 +54,14 @@ export function useDashboardProjects() {
   const demo = useDemoData();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
   const projects = useProjects(workspaceId);
-  const sources = useSourcesByWorkspace(workspaceId);
 
   const dashboardProjects = useMemo<DashboardProject[]>(() => {
     const live = projects.data ?? [];
     if (live.length > 0) {
-      const sourceByProject = new Map<string, LiveSource>();
-      for (const s of sources.data ?? []) {
-        sourceByProject.set(s.projectId, { fullName: s.fullName, branch: s.branch });
-      }
-      return live.map((p) => toDashboardProject(p, sourceByProject.get(p.id)));
+      return live.map((p) => toDashboardProject(p));
     }
     return demo ? prototypeProjects : [];
-  }, [projects.data, sources.data, demo]);
+  }, [projects.data, demo]);
 
   return { query: projects, dashboardProjects, liveCount: projects.data?.length ?? 0 };
 }

@@ -1,0 +1,330 @@
+package services
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"testing"
+
+	"github.com/plorigo/plorigo/internal/platform/authz"
+	"github.com/plorigo/plorigo/internal/platform/database"
+	"github.com/plorigo/plorigo/internal/platform/github"
+	"github.com/plorigo/plorigo/internal/platform/principal"
+	"github.com/plorigo/plorigo/internal/platform/problem"
+)
+
+const (
+	testEnvID     = "11111111-1111-1111-1111-111111111111"
+	testProjectID = "33333333-3333-3333-3333-333333333333"
+	testServerID  = "22222222-2222-2222-2222-222222222222"
+	testServiceID = "00000000-0000-0000-0000-0000000000aa"
+	testWorkspace = "ws-1"
+	testDepID     = "44444444-4444-4444-4444-444444444444"
+)
+
+type fakeStore struct {
+	envWs, envProj string
+	envOK          bool
+
+	svcWs, svcProj string
+	svcMetaOK      bool
+
+	serverWs string
+	serverOK bool
+
+	projWs string
+	projOK bool
+
+	connID, connLogin string
+	connOK            bool
+	token             []byte
+	tokenOK           bool
+
+	insertedImage ServiceWrite
+	insertedGit   GitServiceWrite
+	insertErr     error
+
+	getSvc Service
+	getOK  bool
+}
+
+func (f *fakeStore) InsertService(_ context.Context, _ database.Tx, w ServiceWrite) (Service, error) {
+	f.insertedImage = w
+	if f.insertErr != nil {
+		return Service{}, f.insertErr
+	}
+	return Service{ID: testServiceID, EnvironmentID: w.EnvironmentID, ProjectID: w.ProjectID, WorkspaceID: w.WorkspaceID, Name: w.Name, Slug: w.Slug, SourceKind: w.SourceKind, ImageRef: w.ImageRef, ContainerPort: w.ContainerPort, Visibility: w.Visibility}, nil
+}
+func (f *fakeStore) InsertGitService(_ context.Context, _ database.Tx, w GitServiceWrite) (Service, error) {
+	f.insertedGit = w
+	if f.insertErr != nil {
+		return Service{}, f.insertErr
+	}
+	return Service{ID: testServiceID, EnvironmentID: w.EnvironmentID, ProjectID: w.ProjectID, WorkspaceID: w.WorkspaceID, Name: w.Name, Slug: w.Slug, SourceKind: SourceGit, SourceAccess: w.SourceAccess, ConnectionID: w.ConnectionID, Owner: w.Owner, Repo: w.Repo, Branch: w.Branch, ContainerPort: w.ContainerPort, Visibility: w.Visibility}, nil
+}
+func (f *fakeStore) GetService(_ context.Context, _ string) (Service, bool, error) {
+	return f.getSvc, f.getOK, nil
+}
+func (f *fakeStore) ListByEnvironment(_ context.Context, _ string) ([]Service, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListByProject(_ context.Context, _ string) ([]Service, error)   { return nil, nil }
+func (f *fakeStore) ListByWorkspace(_ context.Context, _ string) ([]Service, error) { return nil, nil }
+func (f *fakeStore) UpdateServiceSource(_ context.Context, _ database.Tx, w SourceWrite) (Service, error) {
+	return Service{ID: w.ID, SourceKind: w.SourceKind, ImageRef: w.ImageRef, ContainerPort: w.ContainerPort}, nil
+}
+func (f *fakeStore) UpdateVisibility(_ context.Context, _ database.Tx, id, visibility string) (Service, error) {
+	return Service{ID: id, Visibility: visibility}, nil
+}
+func (f *fakeStore) DeleteService(_ context.Context, _ database.Tx, id string) (string, bool, error) {
+	return id, f.getOK, nil
+}
+func (f *fakeStore) WorkspaceAndProjectForEnvironment(_ context.Context, _ string) (string, string, bool, error) {
+	return f.envWs, f.envProj, f.envOK, nil
+}
+func (f *fakeStore) WorkspaceAndProjectForService(_ context.Context, _ string) (string, string, bool, error) {
+	return f.svcWs, f.svcProj, f.svcMetaOK, nil
+}
+func (f *fakeStore) WorkspaceForServer(_ context.Context, _ string) (string, bool, error) {
+	return f.serverWs, f.serverOK, nil
+}
+func (f *fakeStore) WorkspaceForProject(_ context.Context, _ string) (string, bool, error) {
+	return f.projWs, f.projOK, nil
+}
+func (f *fakeStore) GetConnection(_ context.Context, _ string) (string, string, bool, error) {
+	return f.connID, f.connLogin, f.connOK, nil
+}
+func (f *fakeStore) GetConnectionToken(_ context.Context, _ string) ([]byte, bool, error) {
+	return f.token, f.tokenOK, nil
+}
+
+type fakeEnqueuer struct {
+	called    bool
+	serviceID string
+}
+
+func (f *fakeEnqueuer) EnqueueFirstDeployment(_ context.Context, _ database.Tx, serviceID, _ string) (string, error) {
+	f.called = true
+	f.serviceID = serviceID
+	return testDepID, nil
+}
+
+type fakeBox struct{}
+
+func (fakeBox) Open(sealed []byte) ([]byte, error) { return sealed, nil }
+
+type fakeGH struct {
+	info github.RepoInfo
+	err  error
+}
+
+func (f fakeGH) GetRepository(_ context.Context, _, owner, repo string) (github.RepoInfo, error) {
+	if f.err != nil {
+		return github.RepoInfo{}, f.err
+	}
+	info := f.info
+	if info.Owner == "" {
+		info.Owner = owner
+		info.Name = repo
+		info.FullName = owner + "/" + repo
+	}
+	return info, nil
+}
+func (f fakeGH) GetBranch(_ context.Context, _, _, _, _ string) error { return nil }
+
+type fakeRecorder struct {
+	called bool
+	action string
+}
+
+func (f *fakeRecorder) Record(_ context.Context, _ database.Tx, action, _, _, _, _ string) error {
+	f.called = true
+	f.action = action
+	return nil
+}
+
+type fakeAuthz struct{ err error }
+
+func (f fakeAuthz) Authorize(_ context.Context, _ principal.Principal, _ authz.Action, _ authz.Resource) error {
+	return f.err
+}
+
+type fakeTx struct{}
+
+func (fakeTx) WithinTx(_ context.Context, fn func(tx database.Tx) error) error { return fn(nil) }
+
+func authedCtx() context.Context {
+	return principal.NewContext(context.Background(), principal.Principal{UserID: "user-1", Method: principal.MethodSession})
+}
+
+func newSvc(store Store, gh GitHubClient, enq Enqueuer, authorizer authz.Authorizer, rec Recorder) *service {
+	return newService(fakeTx{}, store, fakeBox{}, gh, enq, authorizer, rec, slog.Default())
+}
+
+func wantKind(t *testing.T, err error, kind problem.Kind) {
+	t.Helper()
+	var pe *problem.Error
+	if !errors.As(err, &pe) || pe.Kind != kind {
+		t.Fatalf("got %v, want %v", err, kind)
+	}
+}
+
+func envResolved() *fakeStore {
+	return &fakeStore{envWs: testWorkspace, envProj: testProjectID, envOK: true, serverWs: testWorkspace, serverOK: true}
+}
+
+func TestCreateService_ImageDeployNow(t *testing.T) {
+	store := envResolved()
+	rec := &fakeRecorder{}
+	enq := &fakeEnqueuer{}
+	svc := newSvc(store, fakeGH{}, enq, fakeAuthz{}, rec)
+
+	res, err := svc.CreateService(authedCtx(), CreateInput{
+		EnvironmentID: testEnvID, Name: "Web API", SourceKind: SourceImage, ImageRef: "nginx",
+		ContainerPort: 80, ServerID: testServerID, DeployNow: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.insertedImage.Slug != "web-api" || store.insertedImage.ImageRef != "nginx:latest" {
+		t.Errorf("inserted = %+v, want slugified name + :latest image", store.insertedImage)
+	}
+	if store.insertedImage.Visibility != VisibilityPublic {
+		t.Errorf("visibility = %q, want default public", store.insertedImage.Visibility)
+	}
+	if !enq.called || enq.serviceID != testServiceID || res.DeploymentID != testDepID {
+		t.Errorf("enqueue = (%v,%q) dep=%q, want first deployment enqueued", enq.called, enq.serviceID, res.DeploymentID)
+	}
+	if !rec.called || rec.action != "service.create" {
+		t.Errorf("audit not recorded: called=%v action=%q", rec.called, rec.action)
+	}
+}
+
+func TestCreateService_GitPublicDeployNow(t *testing.T) {
+	store := envResolved()
+	enq := &fakeEnqueuer{}
+	svc := newSvc(store, fakeGH{info: github.RepoInfo{DefaultBranch: "main"}}, enq, fakeAuthz{}, &fakeRecorder{})
+
+	res, err := svc.CreateService(authedCtx(), CreateInput{
+		EnvironmentID: testEnvID, Name: "web", SourceKind: SourceGit,
+		RepoURL: "https://github.com/o/r", ContainerPort: 0, ServerID: testServerID, DeployNow: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.insertedGit.SourceAccess != accessPublic || store.insertedGit.ConnectionID != "" {
+		t.Errorf("inserted = %+v, want public access + no connection", store.insertedGit)
+	}
+	if store.insertedGit.Branch != "main" {
+		t.Errorf("branch = %q, want default branch", store.insertedGit.Branch)
+	}
+	if res.DeploymentID != testDepID {
+		t.Error("a public git service with deploy_now should enqueue a build")
+	}
+}
+
+func TestCreateService_GitOAuthDeployNowSkipsDeploy(t *testing.T) {
+	store := envResolved()
+	store.connID, store.connLogin, store.connOK = "conn-1", "octocat", true
+	store.token, store.tokenOK = []byte("tok"), true
+	enq := &fakeEnqueuer{}
+	svc := newSvc(store, fakeGH{info: github.RepoInfo{DefaultBranch: "main", Private: true}}, enq, fakeAuthz{}, &fakeRecorder{})
+
+	res, err := svc.CreateService(authedCtx(), CreateInput{
+		EnvironmentID: testEnvID, Name: "api", SourceKind: SourceGit,
+		Owner: "o", Repo: "r", ContainerPort: 0, ServerID: testServerID, DeployNow: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.insertedGit.SourceAccess != accessOAuth || store.insertedGit.ConnectionID != "conn-1" {
+		t.Errorf("inserted = %+v, want oauth access + connection id", store.insertedGit)
+	}
+	// An OAuth/private repo can't be built yet: the service is created but no deployment.
+	if enq.called || res.DeploymentID != "" {
+		t.Errorf("enqueue=%v dep=%q, want NO deployment for an oauth git service", enq.called, res.DeploymentID)
+	}
+	if res.Service.GitHubLogin != "octocat" {
+		t.Errorf("github_login = %q, want the connected account", res.Service.GitHubLogin)
+	}
+}
+
+func TestCreateService_DeniedWritesNothing(t *testing.T) {
+	store := envResolved()
+	rec := &fakeRecorder{}
+	svc := newSvc(store, fakeGH{}, &fakeEnqueuer{}, fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
+	_, err := svc.CreateService(authedCtx(), CreateInput{EnvironmentID: testEnvID, Name: "web", SourceKind: SourceImage, ImageRef: "nginx", ContainerPort: 80})
+	wantKind(t, err, problem.KindPermissionDenied)
+	if store.insertedImage.Name != "" || rec.called {
+		t.Error("a denied create must not insert or audit")
+	}
+}
+
+func TestCreateService_InvalidName(t *testing.T) {
+	svc := newSvc(envResolved(), fakeGH{}, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.CreateService(authedCtx(), CreateInput{EnvironmentID: testEnvID, Name: "  ", SourceKind: SourceImage, ImageRef: "nginx", ContainerPort: 80})
+	wantKind(t, err, problem.KindInvalidInput)
+}
+
+func TestCreateService_ImageRequiresPort(t *testing.T) {
+	svc := newSvc(envResolved(), fakeGH{}, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.CreateService(authedCtx(), CreateInput{EnvironmentID: testEnvID, Name: "web", SourceKind: SourceImage, ImageRef: "nginx", ContainerPort: 0})
+	wantKind(t, err, problem.KindInvalidInput)
+}
+
+func TestCreateService_EnvironmentNotFound(t *testing.T) {
+	store := &fakeStore{envOK: false}
+	svc := newSvc(store, fakeGH{}, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.CreateService(authedCtx(), CreateInput{EnvironmentID: testEnvID, Name: "web", SourceKind: SourceImage, ImageRef: "nginx", ContainerPort: 80})
+	wantKind(t, err, problem.KindNotFound)
+}
+
+func TestCreateService_PublicGitRejectsPrivateRepo(t *testing.T) {
+	store := envResolved()
+	svc := newSvc(store, fakeGH{info: github.RepoInfo{Owner: "o", Name: "r", FullName: "o/r", Private: true}}, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.CreateService(authedCtx(), CreateInput{EnvironmentID: testEnvID, Name: "web", SourceKind: SourceGit, RepoURL: "https://github.com/o/r", ServerID: testServerID, DeployNow: true})
+	wantKind(t, err, problem.KindInvalidInput)
+}
+
+func TestCreateService_DeployNowServerOtherWorkspace(t *testing.T) {
+	store := envResolved()
+	store.serverWs = "other-ws"
+	svc := newSvc(store, fakeGH{}, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.CreateService(authedCtx(), CreateInput{EnvironmentID: testEnvID, Name: "web", SourceKind: SourceImage, ImageRef: "nginx", ContainerPort: 80, ServerID: testServerID, DeployNow: true})
+	wantKind(t, err, problem.KindNotFound)
+}
+
+func TestGetService_AuthorizesAndReturns(t *testing.T) {
+	store := &fakeStore{getOK: true, getSvc: Service{ID: testServiceID, WorkspaceID: testWorkspace, Name: "web"}}
+	svc := newSvc(store, fakeGH{}, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
+	got, err := svc.GetService(authedCtx(), testServiceID)
+	if err != nil || got.ID != testServiceID {
+		t.Fatalf("got (%+v, %v), want the service", got, err)
+	}
+}
+
+func TestGetService_NotFound(t *testing.T) {
+	svc := newSvc(&fakeStore{getOK: false}, fakeGH{}, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.GetService(authedCtx(), testServiceID)
+	wantKind(t, err, problem.KindNotFound)
+}
+
+func TestUpdateVisibility_AuditsAndReturns(t *testing.T) {
+	store := &fakeStore{svcWs: testWorkspace, svcProj: testProjectID, svcMetaOK: true}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, fakeGH{}, &fakeEnqueuer{}, fakeAuthz{}, rec)
+	got, err := svc.UpdateVisibility(authedCtx(), testServiceID, VisibilityPrivate)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Visibility != VisibilityPrivate || !rec.called || rec.action != "service.update" {
+		t.Errorf("got %+v audit=(%v,%q), want private + audited", got, rec.called, rec.action)
+	}
+}
+
+func TestDeleteService_NotFound(t *testing.T) {
+	store := &fakeStore{svcWs: testWorkspace, svcMetaOK: true, getOK: false}
+	svc := newSvc(store, fakeGH{}, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
+	err := svc.DeleteService(authedCtx(), testServiceID)
+	wantKind(t, err, problem.KindNotFound)
+}
