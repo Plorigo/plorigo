@@ -28,15 +28,17 @@ type caddyRunner func(ctx context.Context, name string, args ...string) ([]byte,
 // production implementation; tests use a fake so deployment sequencing stays unit-testable.
 type deploymentRouter interface {
 	apply(ctx context.Context, routes []managedRoute) ([]string, error)
-	routeURL(environmentID string) (string, error)
+	routeURL(serviceID string) (string, error)
 }
 
-// managedRoute is the desired Caddy route for one running Plorigo-managed container.
+// managedRoute is the desired Caddy route for one running Plorigo-managed container. It is
+// keyed by the service id (the route host label), so two services in one environment get
+// distinct hosts.
 type managedRoute struct {
-	EnvironmentID string
-	DeploymentID  string
-	ContainerID   string
-	HostPort      int32
+	ServiceID    string
+	DeploymentID string
+	ContainerID  string
+	HostPort     int32
 }
 
 type caddyManager struct {
@@ -124,8 +126,8 @@ func runCaddyCommand(ctx context.Context, name string, args ...string) ([]byte, 
 	return out, nil
 }
 
-func (m *caddyManager) routeURL(environmentID string) (string, error) {
-	host, err := routeHost(environmentID, m.baseDomain)
+func (m *caddyManager) routeURL(serviceID string) (string, error) {
+	host, err := routeHost(serviceID, m.baseDomain)
 	if err != nil {
 		return "", err
 	}
@@ -231,7 +233,7 @@ func (m *caddyManager) render(routes []managedRoute) (string, error) {
 	b.WriteString("\tauto_https off\n")
 	b.WriteString("}\n\n")
 	for _, r := range normalized {
-		host, err := routeHost(r.EnvironmentID, m.baseDomain)
+		host, err := routeHost(r.ServiceID, m.baseDomain)
 		if err != nil {
 			return "", err
 		}
@@ -243,27 +245,27 @@ func (m *caddyManager) render(routes []managedRoute) (string, error) {
 }
 
 func normalizeRoutes(routes []managedRoute) ([]managedRoute, error) {
-	byEnvironment := make(map[string]managedRoute, len(routes))
+	byService := make(map[string]managedRoute, len(routes))
 	for _, r := range routes {
-		env := strings.ToLower(strings.TrimSpace(r.EnvironmentID))
-		if err := validateDNSLabel("environment route label", env); err != nil {
+		svc := strings.ToLower(strings.TrimSpace(r.ServiceID))
+		if err := validateDNSLabel("service route label", svc); err != nil {
 			return nil, err
 		}
 		if r.HostPort <= 0 || r.HostPort > 65535 {
-			return nil, fmt.Errorf("route for environment %s has invalid host port %d", env, r.HostPort)
+			return nil, fmt.Errorf("route for service %s has invalid host port %d", svc, r.HostPort)
 		}
-		r.EnvironmentID = env
-		cur, ok := byEnvironment[env]
+		r.ServiceID = svc
+		cur, ok := byService[svc]
 		if !ok || routeTieBreak(r, cur) > 0 {
-			byEnvironment[env] = r
+			byService[svc] = r
 		}
 	}
-	out := make([]managedRoute, 0, len(byEnvironment))
-	for _, r := range byEnvironment {
+	out := make([]managedRoute, 0, len(byService))
+	for _, r := range byService {
 		out = append(out, r)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return out[i].EnvironmentID < out[j].EnvironmentID
+		return out[i].ServiceID < out[j].ServiceID
 	})
 	return out, nil
 }
@@ -284,16 +286,16 @@ func routeTieBreak(a, b managedRoute) int {
 	return 0
 }
 
-func routeHost(environmentID, baseDomain string) (string, error) {
-	env := strings.ToLower(strings.TrimSpace(environmentID))
-	if err := validateDNSLabel("environment route label", env); err != nil {
+func routeHost(serviceID, baseDomain string) (string, error) {
+	svc := strings.ToLower(strings.TrimSpace(serviceID))
+	if err := validateDNSLabel("service route label", svc); err != nil {
 		return "", err
 	}
 	base := strings.ToLower(strings.TrimSpace(baseDomain))
 	if err := validateDomainName(base); err != nil {
 		return "", err
 	}
-	return env + "." + base, nil
+	return svc + "." + base, nil
 }
 
 func siteAddress(host string, port int) string {

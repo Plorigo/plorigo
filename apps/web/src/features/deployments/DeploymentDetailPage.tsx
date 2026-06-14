@@ -133,19 +133,17 @@ export function DeploymentDetailPage() {
               </p>
             )}
             {d.routeUrl && (
-              <Row
-                label="URL"
-                value={
-                  <a
-                    href={d.routeUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="truncate font-mono text-sm text-blue-400 hover:text-blue-300 hover:underline"
-                  >
-                    {d.routeUrl}
-                  </a>
-                }
-              />
+              <div className="space-y-1">
+                <span className="text-muted-foreground">URL</span>
+                <a
+                  href={d.routeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="block break-all font-mono text-sm text-blue-400 hover:text-blue-300 hover:underline"
+                >
+                  {d.routeUrl}
+                </a>
+              </div>
             )}
           </div>
         </Panel>

@@ -12,6 +12,11 @@ reversibly. Read this before changing build, deploy, rollback, runtime, or proxy
 
 ## The deploy flow
 
+A deployment is one deploy attempt **of a service** (the deployable component — see
+[data-and-api.md](./data-and-api.md)); it inherits that service's source, port, and
+visibility. Creating a service with `deploy_now` enqueues the first deployment;
+`DeploymentService.CreateDeploymentForService` enqueues a **redeploy** of an existing one.
+
 1. A Git event or manual action **triggers** a deploy.
 2. The control plane creates a **deployment record** and a **job**.
 3. The **agent** receives the signed job and **fetches the source**.
@@ -27,11 +32,12 @@ Jobs and streaming are described in [jobs-and-realtime.md](./jobs-and-realtime.m
 side of Caddy and container management is in [agent.md](./agent.md).
 
 > [!NOTE]
-> **What's built so far.** A deployment has a **source kind**:
+> **What's built so far.** A deployment carries its service's **source kind**:
 > - **`image`** — a pre-built public image. The agent claims it (steps 1–3), pulls the image,
->   starts the container on a published **host port**, health-checks it, validates/reloads a
->   Caddy route to that host port, retains/replaces the previous container, and reports status
->   + logs (steps 6–11).
+>   joins the container to its [per-environment network](#visibility--per-environment-networking),
+>   and — for a **public** service — also publishes a **host port**, health-checks it,
+>   validates/reloads a Caddy route to that host port, supersedes the **service's** previous
+>   container, and reports status + logs (steps 6–11).
 > - **`git`** — a **public** repository. The agent additionally **clones** the repo (step 3 —
 >   an anonymous shallow clone, no credential) and **builds its Dockerfile with BuildKit**
 >   (steps 4–5: `docker build` with `DOCKER_BUILDKIT=1`) into a local image, then runs that
@@ -46,9 +52,10 @@ side of Caddy and container management is in [agent.md](./agent.md).
 > module below is still deferred), and **private repos aren't built yet** — only `access =
 > 'public'` sources are dispatched, so no credential ever leaves the control plane (see
 > [security.md](./security.md)). Logs are delivered by **polling**, not SSE; Caddy routing is
-> HTTP-only and derives a route from the environment id. SSL, custom domains, Compose/Nixpacks/
-> static builds, and one-click rollback are later slices. The claim is atomic per server (a
-> queued deployment is the unit of work; a general job queue comes later).
+> HTTP-only and derives a route from the **service id** (so two services in one environment
+> don't collide). SSL, custom domains, Compose/Nixpacks/static builds, and one-click rollback
+> are later slices. The claim is atomic per server (a queued deployment is the unit of work; a
+> general job queue comes later).
 
 ## Build priority
 
@@ -91,8 +98,10 @@ a roadmap decision, not an assumption to build in now.
 
 Rollback should, wherever possible, be a **route switch back** to the previous healthy
 container — fast and low-risk because the old version is still around within the retention
-window. The failed deployment's logs and diff stay available so the failure can be understood
-(and, per [principles.md](./principles.md), every scary action keeps a recovery path).
+window. Supersede is **per service**: a new running deployment replaces only that **service's**
+previous running container on the server, so deploying one service never disturbs a sibling.
+The failed deployment's logs and diff stay available so the failure can be understood (and, per
+[principles.md](./principles.md), every scary action keeps a recovery path).
 
 ## Reverse proxy & SSL (Caddy)
 
@@ -105,3 +114,26 @@ Internet → Caddy (on the user's server) → Docker network → app containers
 Caddy handles app routing, preview URLs, custom domains, automatic HTTPS, HTTP→HTTPS
 redirects, WebSocket proxying, and the route switch during deploy/rollback. The **agent** owns
 generating, validating, reloading, and reporting Caddy config — details in [agent.md](./agent.md).
+
+The Caddy **route key is the service id**: the generated host is `{service-id}.{baseDomain}`
+(it was `{env-id}.{baseDomain}`), so two services in one environment get distinct routes. The
+control plane carries this to the agent as the job's **`app_label`** (now the service id), and
+the agent stamps it on the container as the `plorigo.service` label — what it matches on to
+find and supersede the service's previous container. Only a **public** service gets a route at
+all (see below).
+
+## Visibility & per-environment networking
+
+Every service container joins a **per-environment Docker network** named
+`plorigo-{environment-id}`, with a `--network-alias` equal to the service's **slug**. A sibling
+in the same environment therefore reaches it at `http://{slug}:{container_port}` — east-west
+traffic stays on the private network and never goes through Caddy. The slug is unique within
+the environment (it is the service's DNS label), so aliases don't collide.
+
+A service's **visibility** decides what is exposed to the outside:
+
+- **`public`** — additionally publishes a **host port** and gets a **Caddy route + public
+  URL** (`route_url`). This is the front door (a web app, an API).
+- **`private`** — publishes **nothing** to the host and has **no Caddy route** (so no
+  `route_url`). It is reachable only by its siblings over the per-environment network — the
+  shape for a database, cache, or internal worker.

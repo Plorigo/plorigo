@@ -33,8 +33,9 @@ message PollDeploymentResponse {
   string image_ref = 3; // set for image deployments; empty for git (built on the server)
   int32 container_port = 4;
   map<string, string> env = 5;
-  // app_label is the stable identifier the agent stamps on the container (the
-  // environment id) so a redeploy can find and replace the previous container.
+  // app_label is the stable identifier the agent stamps on the container (the SERVICE id)
+  // so a redeploy can find and replace this service's previous container, and so two
+  // services in one environment never collide on the same Caddy route host.
   string app_label = 6;
   // Build-from-Git fields, set only when source_kind == "git". The agent clones
   // clone_url at git_ref, builds the Dockerfile to built_image_tag, then runs that tag.
@@ -43,6 +44,13 @@ message PollDeploymentResponse {
   string clone_url = 8;        // the repo to clone (git)
   string git_ref = 9;          // the branch/tag to build (git)
   string built_image_tag = 10; // the local tag the agent should build to and run (git)
+  // Visibility + internal networking. A "public" service is published on a host port and
+  // gets a Caddy route + public URL; a "private" service is reachable only by sibling
+  // services. Every service joins network_name (one per environment) with network_alias
+  // (its slug), so a sibling resolves it at http://{network_alias}:{container_port}.
+  string visibility = 11;    // "public" | "private"
+  string network_name = 12;  // the per-environment Docker network to attach the container to
+  string network_alias = 13; // the service's DNS alias on that network (its slug)
 }
 
 message ReportDeploymentRequest {
@@ -60,8 +68,9 @@ message ReportDeploymentRequest {
   // start output) or "runtime" (the container's stdout/stderr). Empty when the report
   // carries no logs. The control plane stamps each stored log line with it.
   string log_stream = 11;
-  // The real deployment URL (e.g. http://{env-id}.localhost:8083), set once the agent
-  // has computed the route. The control plane stores it so the dashboard can display it.
+  // The real deployment URL (e.g. http://{service-id}.localhost:8083), set once the agent
+  // has computed the route for a PUBLIC service. Empty for a private service (no route).
+  // The control plane stores it on the deployment and the service so the dashboard can show it.
   string route_url = 12;
 }
 

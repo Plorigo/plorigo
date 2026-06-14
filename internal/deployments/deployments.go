@@ -14,6 +14,8 @@ package deployments
 import (
 	"context"
 	"time"
+
+	"github.com/plorigo/plorigo/internal/platform/database"
 )
 
 // Deployment statuses, persisted on the deployments row and CHECK-constrained in the
@@ -53,10 +55,12 @@ const (
 	StreamRuntime = "runtime"
 )
 
-// Deployment is one attempt to run an image in an environment on a server. The
-// workspace and project are denormalized from the environment (both immutable).
+// Deployment is one attempt to run a service in an environment on a server. The service,
+// environment, project, and workspace are all denormalized onto the row (all immutable),
+// so authorization, scoping, and the dashboard's views need no joins.
 type Deployment struct {
 	ID            string
+	ServiceID     string
 	EnvironmentID string
 	ProjectID     string
 	WorkspaceID   string
@@ -79,8 +83,9 @@ type Deployment struct {
 	CommitSha     string
 	BuiltImageRef string
 
-	// RouteURL is the real deployment URL (e.g. http://{env-id}.localhost:8083) computed
-	// by the agent and stored so the dashboard can display a clickable link.
+	// RouteURL is the real deployment URL (e.g. http://{service-id}.localhost:8083) computed
+	// by the agent for a PUBLIC service and stored so the dashboard can display a clickable
+	// link. Empty for a private service (no public route).
 	RouteURL string
 }
 
@@ -99,22 +104,33 @@ type Event struct {
 	CreatedAt    time.Time
 }
 
-// CreateInput is what the dashboard supplies to trigger a pre-built-image deployment.
-type CreateInput struct {
-	EnvironmentID string
-	ServerID      string
-	ImageRef      string
-	ContainerPort int32
-}
-
-// CreateFromSourceInput is what the dashboard supplies to build-and-deploy the project's
-// connected repository. It carries no repo URL — the service resolves the project's
-// source server-side. GitRef is optional (empty = the source's default branch).
-type CreateFromSourceInput struct {
-	EnvironmentID string
+// CreateForServiceInput is what the dashboard supplies to (re)deploy an existing service.
+// It carries no repo URL or image — the service resolves the service's source server-side.
+// ContainerPort and GitRef are optional overrides (0 / empty = the service's configured
+// port and branch/default).
+type CreateForServiceInput struct {
+	ServiceID     string
 	ServerID      string
 	ContainerPort int32
 	GitRef        string
+}
+
+// ServiceForDeploy is a service's source + routing facts, resolved when enqueuing a deploy.
+// It is read from the services table (a sibling-table read modules.md Rule 2 permits).
+type ServiceForDeploy struct {
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	SourceKind    string // "image" | "git" | "template"
+	ImageRef      string
+	SourceAccess  string // "" | "public" | "oauth" | "app"
+	Owner         string
+	Repo          string
+	Branch        string
+	DefaultBranch string
+	ContainerPort int32
+	Visibility    string // "public" | "private"
+	Slug          string
 }
 
 // PollInput is what an agent presents to claim the next queued deployment for its
@@ -124,16 +140,19 @@ type PollInput struct {
 	Credential string
 }
 
-// Claimed is the job handed to an agent when it polls, including the environment's
-// configured (non-secret) env vars to inject and the app label used to find and
-// replace the previous container on a redeploy.
+// Claimed is the job handed to an agent when it polls, including the service's configured
+// (non-secret) env vars to inject and the app label used to find and replace the previous
+// container on a redeploy.
 type Claimed struct {
 	HasWork       bool
 	DeploymentID  string
 	ImageRef      string
 	ContainerPort int32
 	Env           map[string]string
-	AppLabel      string
+	// AppLabel is the SERVICE id: the agent stamps it on the container (to find and replace
+	// this service's previous container) and uses it as the Caddy route host label, so two
+	// services in one environment never collide.
+	AppLabel string
 
 	// Build-from-Git. For a git deployment SourceKind is SourceGit and the agent clones
 	// CloneURL at GitRef, builds the Dockerfile to BuiltImageTag, then runs that tag. No
@@ -142,6 +161,13 @@ type Claimed struct {
 	CloneURL      string
 	GitRef        string
 	BuiltImageTag string
+
+	// Visibility + internal networking. A public service is published + routed through Caddy;
+	// a private service is reachable only by siblings. Every service joins NetworkName (one
+	// per environment) with NetworkAlias (its slug) for sibling-to-sibling traffic.
+	Visibility   string
+	NetworkName  string
+	NetworkAlias string
 }
 
 // ReportInput is an agent's progress update for a deployment it is executing.
@@ -163,13 +189,21 @@ type ReportInput struct {
 // Service is the surface other code depends on. It backs both the dashboard-facing
 // controlplane.v1.DeploymentService and the agent-facing agent.v1.DeployService.
 type Service interface {
-	Create(ctx context.Context, in CreateInput) (Deployment, error)
-	CreateFromSource(ctx context.Context, in CreateFromSourceInput) (Deployment, error)
+	CreateForService(ctx context.Context, in CreateForServiceInput) (Deployment, error)
 	Get(ctx context.Context, deploymentID string) (Deployment, error)
+	ListByService(ctx context.Context, serviceID string) ([]Deployment, error)
 	ListByEnvironment(ctx context.Context, environmentID string) ([]Deployment, error)
 	ListByProject(ctx context.Context, projectID string) ([]Deployment, error)
 	ListByWorkspace(ctx context.Context, workspaceID string) ([]Deployment, error)
 	ListEvents(ctx context.Context, deploymentID string, afterSeq int64) ([]Event, error)
+
+	// EnqueueFirstDeployment queues a brand new service's first deployment inside the
+	// CALLER's transaction (the services module, which has already authorized the create),
+	// resolving the service's source from the tx so create+deploy commit atomically. It is
+	// a consumer-defined port: the services module declares the same signature and Go
+	// structural typing satisfies it — services never imports deployments. Returns the new
+	// deployment id.
+	EnqueueFirstDeployment(ctx context.Context, tx database.Tx, serviceID, serverID string) (string, error)
 
 	// Agent gateway (credential-authenticated, NOT policy-authorized — like Heartbeat).
 	PollDeployment(ctx context.Context, in PollInput) (Claimed, error)

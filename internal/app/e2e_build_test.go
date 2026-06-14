@@ -127,7 +127,7 @@ func TestE2EBuildDeploy(t *testing.T) {
 	}
 
 	bOwner, bRepo, bBranch := e2eBuildRepo()
-	insertPublicSource(t, ctx, a, proj.ID, bOwner, bRepo, bBranch)
+	svcID := insertGitService(t, ctx, a, env.ID, proj.ID, ws.ID, bOwner, bRepo, bBranch)
 
 	// Start the real agent on the host. It registers, then its deploy loop builds whatever we
 	// queue. Capture its output for diagnosis.
@@ -150,11 +150,11 @@ func TestE2EBuildDeploy(t *testing.T) {
 
 	// --- Success: a public repo with a Dockerfile builds and runs, with the port AUTO-DETECTED
 	// from the image's EXPOSE (no container port given). ---
-	dep, err := a.deployments.Service().CreateFromSource(ownerCtx, deployments.CreateFromSourceInput{
-		EnvironmentID: env.ID, ServerID: srvRec.ID, ContainerPort: 0,
+	dep, err := a.deployments.Service().CreateForService(ownerCtx, deployments.CreateForServiceInput{
+		ServiceID: svcID, ServerID: srvRec.ID,
 	})
 	if err != nil {
-		t.Fatalf("CreateFromSource: %v", err)
+		t.Fatalf("CreateForService: %v", err)
 	}
 	t.Logf("queued git deployment %s for %s/%s@%s (auto-detect port)", dep.ID, bOwner, bRepo, bBranch)
 
@@ -175,7 +175,7 @@ func TestE2EBuildDeploy(t *testing.T) {
 
 	// The built app actually serves through the Caddy route. The host port remains
 	// bound, but it is now the internal Caddy upstream target.
-	assertServesThroughCaddy(t, caddyHTTPPort, env.ID)
+	assertServesThroughCaddy(t, caddyHTTPPort, svcID)
 	assertServes(t, got.HostPort)
 
 	// The timeline went through the build phases.
@@ -193,15 +193,15 @@ func TestE2EBuildDeploy(t *testing.T) {
 	// --- Failure: a repo with no Dockerfile fails with a clear message. ---
 	noDockerProj, _ := a.projects.Service().Create(ownerCtx, projects.CreateInput{WorkspaceID: ws.ID, Name: "No Dockerfile"})
 	noDockerEnv, _ := a.environments.Service().Create(ownerCtx, environments.CreateInput{ProjectID: noDockerProj.ID, Name: "Prod"})
-	insertPublicSource(t, ctx, a, noDockerProj.ID,
+	noDockerSvcID := insertGitService(t, ctx, a, noDockerEnv.ID, noDockerProj.ID, ws.ID,
 		envOr("PLORIGO_E2E_NODOCKER_OWNER", "octocat"),
 		envOr("PLORIGO_E2E_NODOCKER_REPO", "Hello-World"),
 		envOr("PLORIGO_E2E_NODOCKER_BRANCH", "master"))
-	failDep, err := a.deployments.Service().CreateFromSource(ownerCtx, deployments.CreateFromSourceInput{
-		EnvironmentID: noDockerEnv.ID, ServerID: srvRec.ID, ContainerPort: 80,
+	failDep, err := a.deployments.Service().CreateForService(ownerCtx, deployments.CreateForServiceInput{
+		ServiceID: noDockerSvcID, ServerID: srvRec.ID, ContainerPort: 80,
 	})
 	if err != nil {
-		t.Fatalf("CreateFromSource (no Dockerfile): %v", err)
+		t.Fatalf("CreateForService (no Dockerfile): %v", err)
 	}
 	failed := waitForTerminal(t, ownerCtx, a.deployments.Service(), failDep.ID, 2*time.Minute, &agentOut)
 	if failed.Status != deployments.StatusFailed || !strings.Contains(strings.ToLower(failed.Message), "dockerfile") {
@@ -209,15 +209,20 @@ func TestE2EBuildDeploy(t *testing.T) {
 	}
 }
 
-func insertPublicSource(t *testing.T, ctx context.Context, a *App, projectID, owner, repo, branch string) {
+// insertGitService inserts a public git service directly (keeping the test off the network)
+// and returns its id. Each call targets a distinct environment, so the 'web' slug never
+// collides.
+func insertGitService(t *testing.T, ctx context.Context, a *App, environmentID, projectID, workspaceID, owner, repo, branch string) string {
 	t.Helper()
-	if _, err := a.db.Pool.Exec(ctx,
-		`INSERT INTO project_sources (project_id, owner, repo, full_name, branch, default_branch, access, html_url)
-		 VALUES ($1, $2, $3, $4, $5, $5, 'public', $6)
-		 ON CONFLICT (project_id) DO UPDATE SET owner=$2, repo=$3, full_name=$4, branch=$5, default_branch=$5, access='public', html_url=$6`,
-		projectID, owner, repo, owner+"/"+repo, branch, "https://github.com/"+owner+"/"+repo); err != nil {
-		t.Fatalf("insert public source: %v", err)
+	var id string
+	if err := a.db.Pool.QueryRow(ctx,
+		`INSERT INTO services (environment_id, project_id, workspace_id, name, slug, source_kind, source_access, owner, repo, full_name, branch, default_branch, html_url, container_port)
+		 VALUES ($1, $2, $3, 'web', 'web', 'git', 'public', $4, $5, $6, $7, $7, $8, 0)
+		 RETURNING id`,
+		environmentID, projectID, workspaceID, owner, repo, owner+"/"+repo, branch, "https://github.com/"+owner+"/"+repo).Scan(&id); err != nil {
+		t.Fatalf("insert git service: %v", err)
 	}
+	return id
 }
 
 // waitForTerminal polls until the deployment reaches a terminal status (running/failed/
@@ -389,10 +394,10 @@ func waitTCP(t *testing.T, addr string, timeout time.Duration, logs func() strin
 	}
 }
 
-func assertServesThroughCaddy(t *testing.T, caddyPort int, environmentID string) {
+func assertServesThroughCaddy(t *testing.T, caddyPort int, serviceID string) {
 	t.Helper()
 	addr := fmt.Sprintf("http://127.0.0.1:%d/", caddyPort)
-	host := environmentID + ".localhost"
+	host := serviceID + ".localhost"
 	deadline := time.Now().Add(30 * time.Second)
 	var lastErr error
 	var lastStatus int

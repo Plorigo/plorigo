@@ -40,30 +40,31 @@ func newService(tx TxRunner, store Store, authorizer authz.Authorizer, audit Rec
 
 var _ Service = (*service)(nil)
 
-// Create records a queued deployment for an environment on a server. The server must
-// belong to the environment's workspace (cross-tenant guard). The agent for that server
-// claims the queued row on its next poll.
-func (s *service) Create(ctx context.Context, in CreateInput) (Deployment, error) {
-	if _, err := id.Parse(in.EnvironmentID); err != nil {
-		return Deployment{}, problem.InvalidInput("a valid environment_id is required")
+// CreateForService records a queued deployment for an existing service on a server, so the
+// agent for that server claims it on its next poll. The service resolves the source
+// server-side from the service row (a pre-built image, or a PUBLIC git repo it clones and
+// builds) — a caller can't smuggle a private URL through. The server must belong to the
+// service's workspace (cross-tenant guard). container_port and git_ref are optional
+// overrides (0 / empty = the service's configured port and branch/default).
+func (s *service) CreateForService(ctx context.Context, in CreateForServiceInput) (Deployment, error) {
+	if _, err := id.Parse(in.ServiceID); err != nil {
+		return Deployment{}, problem.InvalidInput("a valid service_id is required")
 	}
 	if _, err := id.Parse(in.ServerID); err != nil {
 		return Deployment{}, problem.InvalidInput("a valid server_id is required")
 	}
-	imageRef, err := validateImageRef(in.ImageRef)
-	if err != nil {
-		return Deployment{}, err
-	}
-	if in.ContainerPort < 1 || in.ContainerPort > maxPort {
-		return Deployment{}, problem.InvalidInput("container_port must be between 1 and %d", maxPort)
+	// 0 means "use the service's configured port" (which for git may itself be 0 =
+	// auto-detect from the Dockerfile EXPOSE on the agent after the build).
+	if in.ContainerPort < 0 || in.ContainerPort > maxPort {
+		return Deployment{}, problem.InvalidInput("container_port must be between 1 and %d, or 0 to use the service's port", maxPort)
 	}
 
-	workspaceID, projectID, ok, err := s.store.WorkspaceAndProjectForEnvironment(ctx, in.EnvironmentID)
+	workspaceID, _, ok, err := s.store.WorkspaceAndProjectForService(ctx, in.ServiceID)
 	if err != nil {
 		return Deployment{}, problem.Internalf(err, "create deployment")
 	}
 	if !ok {
-		return Deployment{}, problem.NotFound("environment %s not found", in.EnvironmentID)
+		return Deployment{}, problem.NotFound("service %s not found", in.ServiceID)
 	}
 
 	caller := principal.FromContext(ctx)
@@ -71,9 +72,9 @@ func (s *service) Create(ctx context.Context, in CreateInput) (Deployment, error
 		return Deployment{}, err
 	}
 
-	// The target server must live in the same workspace as the environment. Resolving
-	// after authorization (and treating another workspace's server as not-found) avoids
-	// revealing servers the caller has no access to.
+	// The target server must live in the same workspace as the service. Resolving after
+	// authorization (and treating another workspace's server as not-found) avoids revealing
+	// servers the caller has no access to.
 	serverWorkspace, ok, err := s.store.WorkspaceForServer(ctx, in.ServerID)
 	if err != nil {
 		return Deployment{}, problem.Internalf(err, "create deployment")
@@ -84,15 +85,14 @@ func (s *service) Create(ctx context.Context, in CreateInput) (Deployment, error
 
 	var created Deployment
 	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
-		var txErr error
-		created, txErr = s.store.InsertDeployment(ctx, tx, NewDeployment{
-			EnvironmentID: in.EnvironmentID,
-			ProjectID:     projectID,
-			WorkspaceID:   workspaceID,
-			ServerID:      in.ServerID,
-			ImageRef:      imageRef,
-			ContainerPort: in.ContainerPort,
-		})
+		svc, ok, txErr := s.store.ServiceForDeployTx(ctx, tx, in.ServiceID)
+		if txErr != nil {
+			return txErr
+		}
+		if !ok {
+			return problem.NotFound("service %s not found", in.ServiceID)
+		}
+		created, txErr = s.buildAndInsert(ctx, tx, in.ServiceID, svc, in.ServerID, in.ContainerPort, in.GitRef)
 		if txErr != nil {
 			return txErr
 		}
@@ -101,93 +101,83 @@ func (s *service) Create(ctx context.Context, in CreateInput) (Deployment, error
 	if err != nil {
 		return Deployment{}, mapErr(err, "create deployment")
 	}
-	s.log.Info("deployment created", "id", created.ID, "environment_id", created.EnvironmentID, "server_id", created.ServerID, "image", imageRef, "workspace_id", workspaceID, "actor", caller.UserID)
+	s.log.Info("deployment created", "id", created.ID, "service_id", in.ServiceID, "server_id", created.ServerID, "source_kind", created.SourceKind, "workspace_id", workspaceID, "actor", caller.UserID)
 	return created, nil
 }
 
-// CreateFromSource records a queued git deployment that builds the project's connected
-// repository on the server. The request carries no repo URL: the service resolves the
-// project's source and derives the clone URL, so a caller can't smuggle one through. This
-// slice builds PUBLIC repositories only — a private/OAuth source is rejected with a plain
-// message (the agent receives no credential). git_ref is optional (empty = default branch).
-func (s *service) CreateFromSource(ctx context.Context, in CreateFromSourceInput) (Deployment, error) {
-	if _, err := id.Parse(in.EnvironmentID); err != nil {
-		return Deployment{}, problem.InvalidInput("a valid environment_id is required")
-	}
-	if _, err := id.Parse(in.ServerID); err != nil {
-		return Deployment{}, problem.InvalidInput("a valid server_id is required")
-	}
-	// 0 means "auto-detect from the image's EXPOSE on the agent after the build".
-	if in.ContainerPort < 0 || in.ContainerPort > maxPort {
-		return Deployment{}, problem.InvalidInput("container_port must be between 1 and %d, or 0 to auto-detect from the Dockerfile", maxPort)
-	}
-
-	workspaceID, projectID, ok, err := s.store.WorkspaceAndProjectForEnvironment(ctx, in.EnvironmentID)
+// EnqueueFirstDeployment queues a brand new service's first deployment inside the CALLER's
+// transaction (the services module, which has already authorized the create and validated
+// the server). It resolves the service through the tx — so it sees the service inserted
+// earlier in the same transaction — and returns the new deployment id. No authorization or
+// audit here: both belong to the caller's service.create action.
+func (s *service) EnqueueFirstDeployment(ctx context.Context, tx database.Tx, serviceID, serverID string) (string, error) {
+	svc, ok, err := s.store.ServiceForDeployTx(ctx, tx, serviceID)
 	if err != nil {
-		return Deployment{}, problem.Internalf(err, "create deployment from source")
+		return "", err
 	}
 	if !ok {
-		return Deployment{}, problem.NotFound("environment %s not found", in.EnvironmentID)
+		return "", problem.NotFound("service %s not found", serviceID)
+	}
+	dep, err := s.buildAndInsert(ctx, tx, serviceID, svc, serverID, 0, "")
+	if err != nil {
+		return "", err
+	}
+	return dep.ID, nil
+}
+
+// buildAndInsert inserts a queued deployment (image or git) for a resolved service inside
+// tx. portOverride > 0 replaces the service's configured port; gitRef overrides the branch.
+// It is the shared core of CreateForService and EnqueueFirstDeployment.
+func (s *service) buildAndInsert(ctx context.Context, tx database.Tx, serviceID string, svc ServiceForDeploy, serverID string, portOverride int32, gitRef string) (Deployment, error) {
+	port := svc.ContainerPort
+	if portOverride > 0 {
+		port = portOverride
 	}
 
-	caller := principal.FromContext(ctx)
-	if err := s.authorizer.Authorize(ctx, caller, authz.ActionDeploymentCreate, authz.Resource{Type: "deployment", WorkspaceID: workspaceID}); err != nil {
+	if svc.SourceKind == SourceGit {
+		// Public-first: the agent only ever receives a clone URL, never a credential.
+		// Building a private repo needs a short-lived credential, which lands with the
+		// GitHub App. The services module gates deploy_now on this too; this is defense.
+		if svc.SourceAccess != "public" {
+			return Deployment{}, problem.InvalidInput("building private repositories isn't supported yet — connect a public repo (GitHub App support is coming)")
+		}
+		ref := strings.TrimSpace(gitRef)
+		if ref == "" {
+			if ref = svc.Branch; ref == "" {
+				ref = svc.DefaultBranch
+			}
+		}
+		return s.store.InsertDeploymentFromGit(ctx, tx, NewDeploymentFromGit{
+			ServiceID:     serviceID,
+			EnvironmentID: svc.EnvironmentID,
+			ProjectID:     svc.ProjectID,
+			WorkspaceID:   svc.WorkspaceID,
+			ServerID:      serverID,
+			ContainerPort: port,
+			SourceAccess:  svc.SourceAccess,
+			// Provider is GitHub-only today; construct the standard clone URL from owner/repo.
+			CloneURL: "https://github.com/" + svc.Owner + "/" + svc.Repo + ".git",
+			GitRef:   ref,
+		})
+	}
+
+	// image or template (a template's image_ref is resolved at service-create time).
+	imageRef, err := validateImageRef(svc.ImageRef)
+	if err != nil {
 		return Deployment{}, err
 	}
-
-	src, ok, err := s.store.SourceForProject(ctx, projectID)
-	if err != nil {
-		return Deployment{}, problem.Internalf(err, "create deployment from source")
+	if port < 1 || port > maxPort {
+		return Deployment{}, problem.InvalidInput("container_port must be between 1 and %d", maxPort)
 	}
-	if !ok {
-		return Deployment{}, problem.NotFound("connect a repository to this project before deploying from source")
-	}
-	// Public-first: the agent only ever receives a clone URL, never a credential. Building
-	// a private repo needs a short-lived credential, which lands with the GitHub App.
-	if src.Access != "public" {
-		return Deployment{}, problem.InvalidInput("building private repositories isn't supported yet — connect a public repo (GitHub App support is coming)")
-	}
-
-	// The target server must live in the same workspace as the environment (cross-tenant
-	// guard). Resolve after authorization; another workspace's server is treated as not-found.
-	serverWorkspace, ok, err := s.store.WorkspaceForServer(ctx, in.ServerID)
-	if err != nil {
-		return Deployment{}, problem.Internalf(err, "create deployment from source")
-	}
-	if !ok || serverWorkspace != workspaceID {
-		return Deployment{}, problem.NotFound("server %s not found in this workspace", in.ServerID)
-	}
-
-	ref := strings.TrimSpace(in.GitRef)
-	if ref == "" {
-		if ref = src.Branch; ref == "" {
-			ref = src.DefaultBranch
-		}
-	}
-
-	var created Deployment
-	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
-		var txErr error
-		created, txErr = s.store.InsertDeploymentFromGit(ctx, tx, NewDeploymentFromGit{
-			EnvironmentID: in.EnvironmentID,
-			ProjectID:     projectID,
-			WorkspaceID:   workspaceID,
-			ServerID:      in.ServerID,
-			ContainerPort: in.ContainerPort,
-			SourceAccess:  src.Access,
-			CloneURL:      src.CloneURL,
-			GitRef:        ref,
-		})
-		if txErr != nil {
-			return txErr
-		}
-		return s.audit.Record(ctx, tx, "deployment.create", "deployment", created.ID, workspaceID, caller.UserID)
+	return s.store.InsertDeployment(ctx, tx, NewDeployment{
+		ServiceID:     serviceID,
+		EnvironmentID: svc.EnvironmentID,
+		ProjectID:     svc.ProjectID,
+		WorkspaceID:   svc.WorkspaceID,
+		ServerID:      serverID,
+		ImageRef:      imageRef,
+		ContainerPort: port,
 	})
-	if err != nil {
-		return Deployment{}, mapErr(err, "create deployment from source")
-	}
-	s.log.Info("git deployment created", "id", created.ID, "environment_id", created.EnvironmentID, "server_id", created.ServerID, "clone_url", src.CloneURL, "git_ref", ref, "workspace_id", workspaceID, "actor", caller.UserID)
-	return created, nil
 }
 
 func (s *service) Get(ctx context.Context, deploymentID string) (Deployment, error) {
@@ -205,6 +195,23 @@ func (s *service) Get(ctx context.Context, deploymentID string) (Deployment, err
 		return Deployment{}, err
 	}
 	return dep, nil
+}
+
+func (s *service) ListByService(ctx context.Context, serviceID string) ([]Deployment, error) {
+	if _, err := id.Parse(serviceID); err != nil {
+		return nil, problem.InvalidInput("a valid service_id is required")
+	}
+	workspaceID, _, ok, err := s.store.WorkspaceAndProjectForService(ctx, serviceID)
+	if err != nil {
+		return nil, problem.Internalf(err, "list deployments")
+	}
+	if !ok {
+		return nil, problem.NotFound("service %s not found", serviceID)
+	}
+	if err := s.authorizer.Authorize(ctx, principal.FromContext(ctx), authz.ActionDeploymentRead, authz.Resource{Type: "deployment", WorkspaceID: workspaceID}); err != nil {
+		return nil, err
+	}
+	return s.store.ListByService(ctx, serviceID)
 }
 
 func (s *service) ListByEnvironment(ctx context.Context, environmentID string) ([]Deployment, error) {
@@ -300,19 +307,31 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 		return Claimed{HasWork: false}, nil
 	}
 
-	env, err := s.store.EnvVarsForEnvironment(ctx, claimed.EnvironmentID)
+	env, err := s.store.EnvVarsForService(ctx, claimed.ServiceID)
 	if err != nil {
 		return Claimed{}, problem.Internalf(err, "poll deployment")
 	}
-	s.log.Info("deployment claimed", "id", claimed.ID, "server_id", serverID, "source_kind", claimed.SourceKind, "image", claimed.ImageRef)
+	// Resolve the service's slug + visibility for the route label and the per-environment
+	// network the agent attaches the container to.
+	svc, ok, err := s.store.ServiceForDeploy(ctx, claimed.ServiceID)
+	if err != nil {
+		return Claimed{}, problem.Internalf(err, "poll deployment")
+	}
+	if !ok {
+		return Claimed{}, problem.Internalf(errors.New("service for claimed deployment not found"), "poll deployment")
+	}
+	s.log.Info("deployment claimed", "id", claimed.ID, "service_id", claimed.ServiceID, "server_id", serverID, "source_kind", claimed.SourceKind, "image", claimed.ImageRef)
 	out := Claimed{
 		HasWork:       true,
 		DeploymentID:  claimed.ID,
 		ImageRef:      claimed.ImageRef,
 		ContainerPort: claimed.ContainerPort,
 		Env:           env,
-		AppLabel:      claimed.EnvironmentID,
+		AppLabel:      claimed.ServiceID,
 		SourceKind:    claimed.SourceKind,
+		Visibility:    svc.Visibility,
+		NetworkName:   environmentNetworkName(claimed.EnvironmentID),
+		NetworkAlias:  svc.Slug,
 	}
 	// For a git deployment the agent clones + builds; hand it the clone URL, ref, and a
 	// deterministic local tag to build to and then run. No credential (public repos only).
@@ -328,6 +347,13 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 // and then runs. It is unique per deployment and a valid Docker reference.
 func builtImageTag(deploymentID string) string {
 	return "plorigo-build:" + deploymentID
+}
+
+// environmentNetworkName is the per-environment Docker network that all of an environment's
+// service containers join, so siblings reach each other by their service slug (network
+// alias) while different environments stay isolated. The agent ensures it exists.
+func environmentNetworkName(environmentID string) string {
+	return "plorigo-" + environmentID
 }
 
 // ReportDeployment records a status transition and any new runtime log lines for a
@@ -382,12 +408,21 @@ func (s *service) ReportDeployment(ctx context.Context, in ReportInput) error {
 				return txErr
 			}
 		}
-		// Supersede the previous release only on the agent's real "now running" report,
-		// which carries the bound host port. The runtime-log tail loop re-reports
+		// Cache the public URL on the service whenever the agent reports one (public
+		// services only; private services report an empty route), so the dashboard can show
+		// a service's current URL without walking its deployment history.
+		if in.RouteURL != "" {
+			if txErr := s.store.UpdateServiceRouteURL(ctx, tx, dep.ServiceID, in.RouteURL); txErr != nil {
+				return txErr
+			}
+		}
+		// Supersede THIS service's previous release only on the agent's real "now running"
+		// report, which carries the bound host port. The runtime-log tail loop re-reports
 		// status='running' (host port 0) just to attach new log lines — that must not
-		// re-run the supersede on every tick.
+		// re-run the supersede on every tick. Keyed by service so a sibling service in the
+		// same environment is never superseded.
 		if in.Status == StatusRunning && in.HostPort > 0 {
-			return s.store.SupersedePreviousRunning(ctx, tx, dep.EnvironmentID, serverID, in.DeploymentID)
+			return s.store.SupersedePreviousRunning(ctx, tx, dep.ServiceID, serverID, in.DeploymentID)
 		}
 		return nil
 	})

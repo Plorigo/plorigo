@@ -77,6 +77,7 @@ type Deployment struct {
 	CommitSha     string
 	BuiltImageRef string
 	RouteUrl      string
+	ServiceID     string
 }
 
 type DeploymentEvent struct {
@@ -91,12 +92,12 @@ type DeploymentEvent struct {
 }
 
 type EnvVar struct {
-	ID            string
-	EnvironmentID string
-	Key           string
-	Value         string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID        string
+	Key       string
+	Value     string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	ServiceID string
 }
 
 type Environment struct {
@@ -128,23 +129,6 @@ type Project struct {
 	CreatedAt   time.Time
 }
 
-type ProjectSource struct {
-	ID            string
-	ProjectID     string
-	ConnectionID  *string
-	Provider      string
-	Owner         string
-	Repo          string
-	FullName      string
-	Branch        string
-	DefaultBranch string
-	IsPrivate     bool
-	HtmlUrl       string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	Access        string
-}
-
 type Secret struct {
 	ID            string
 	EnvironmentID string
@@ -160,6 +144,33 @@ type Server struct {
 	Name        string
 	Slug        string
 	CreatedAt   time.Time
+}
+
+type Service struct {
+	ID            string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	Name          string
+	Slug          string
+	SourceKind    string
+	ImageRef      string
+	TemplateID    string
+	ConnectionID  *string
+	Provider      string
+	Owner         string
+	Repo          string
+	FullName      string
+	Branch        string
+	DefaultBranch string
+	IsPrivate     bool
+	HtmlUrl       string
+	SourceAccess  string
+	ContainerPort int32
+	Visibility    string
+	RouteUrl      string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type Session struct {

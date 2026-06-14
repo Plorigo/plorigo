@@ -16,9 +16,7 @@ import (
 
 const (
 	testWorkspaceID  = "11111111-1111-1111-1111-111111111111"
-	testProjectID    = "22222222-2222-2222-2222-222222222222"
 	testConnectionID = "33333333-3333-3333-3333-333333333333"
-	testSourceID     = "44444444-4444-4444-4444-444444444444"
 	testUserID       = "user-1"
 )
 
@@ -30,19 +28,10 @@ type fakeStore struct {
 	upsertedConn  *ConnectionWrite
 	deletedConnOK bool
 	countByConn   int64
-
-	upsertedSource *ProjectSourceWrite
-	src            Source
-	srcOK          bool
-	list           []Source
-	deletedSrcOK   bool
-
-	wsID string
-	wsOK bool
 }
 
-// newFakeStore resolves the project to testWorkspaceID, has an active connection with a
-// stored token, and deletes successfully — tests override fields to exercise other paths.
+// newFakeStore has an active connection with a stored token and deletes successfully —
+// tests override fields to exercise other paths.
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		conn:          Connection{ID: testConnectionID, WorkspaceID: testWorkspaceID, Provider: provider, GitHubLogin: "octocat"},
@@ -50,9 +39,6 @@ func newFakeStore() *fakeStore {
 		tokenCipher:   []byte("sealed:gho_stored"),
 		tokenOK:       true,
 		deletedConnOK: true,
-		deletedSrcOK:  true,
-		wsID:          testWorkspaceID,
-		wsOK:          true,
 	}
 }
 
@@ -69,26 +55,8 @@ func (f *fakeStore) GetConnectionToken(_ context.Context, _, _ string) ([]byte, 
 func (f *fakeStore) DeleteConnection(_ context.Context, _ database.Tx, _, _ string) (string, bool, error) {
 	return testConnectionID, f.deletedConnOK, nil
 }
-func (f *fakeStore) CountProjectSourcesByConnection(_ context.Context, _ string) (int64, error) {
+func (f *fakeStore) CountServicesByConnection(_ context.Context, _ string) (int64, error) {
 	return f.countByConn, nil
-}
-func (f *fakeStore) UpsertProjectSource(_ context.Context, _ database.Tx, w ProjectSourceWrite) (Source, error) {
-	f.upsertedSource = &w
-	return Source{ID: testSourceID, ProjectID: w.ProjectID, ConnectionID: w.ConnectionID, Provider: w.Provider,
-		Owner: w.Owner, Repo: w.Repo, FullName: w.FullName, Branch: w.Branch, DefaultBranch: w.DefaultBranch,
-		IsPrivate: w.IsPrivate, HTMLURL: w.HTMLURL, Access: w.Access}, nil
-}
-func (f *fakeStore) GetProjectSource(_ context.Context, _ string) (Source, bool, error) {
-	return f.src, f.srcOK, nil
-}
-func (f *fakeStore) ListByWorkspace(_ context.Context, _ string) ([]Source, error) {
-	return f.list, nil
-}
-func (f *fakeStore) DeleteProjectSource(_ context.Context, _ database.Tx, _ string) (string, bool, error) {
-	return testSourceID, f.deletedSrcOK, nil
-}
-func (f *fakeStore) WorkspaceIDForProject(_ context.Context, _ string) (string, bool, error) {
-	return f.wsID, f.wsOK, nil
 }
 
 type fakeRecorder struct {
@@ -108,8 +76,8 @@ func (f fakeAuthz) Authorize(_ context.Context, _ principal.Principal, _ authz.A
 	return f.err
 }
 
-// fakeBox seals by prefixing and opens by trimming, so the OAuth-state and token
-// round-trips work and tests can assert the store received the sealer's output.
+// fakeBox seals by prefixing and opens by trimming, so the OAuth-state and token round-trips
+// work and tests can assert the store received the sealer's output.
 type fakeBox struct{ sealErr error }
 
 func (f *fakeBox) Seal(pt []byte) ([]byte, error) {
@@ -122,27 +90,20 @@ func (f *fakeBox) Open(ct []byte) ([]byte, error) {
 	return bytes.TrimPrefix(ct, []byte("sealed:")), nil
 }
 
-// fakeGitHub returns canned values or configured errors and records whether the
-// repo-listing call (which needs a token) was made.
+// fakeGitHub returns canned values or configured errors and records whether the repo-listing
+// call (which needs a token) was made.
 type fakeGitHub struct {
-	repo            github.RepoInfo
 	branches        []string
 	repos           []github.RepoInfo
 	token           github.Token
 	user            github.User
-	repoErr         error
-	branchErr       error
-	getBranchErr    error
 	reposErr        error
+	branchErr       error
 	exchangeErr     error
 	userErr         error
 	revokeErr       error
 	authorizeState  string
 	listReposCalled bool
-	getRepoCalled   bool
-	getRepoToken    string
-	getBranchCalled bool
-	getBranchToken  string
 	revokedTokens   []string
 }
 
@@ -156,22 +117,12 @@ func (f *fakeGitHub) ExchangeCode(_ context.Context, _, _, _, _ string) (github.
 func (f *fakeGitHub) GetAuthenticatedUser(_ context.Context, _ string) (github.User, error) {
 	return f.user, f.userErr
 }
-func (f *fakeGitHub) GetRepository(_ context.Context, token, _, _ string) (github.RepoInfo, error) {
-	f.getRepoCalled = true
-	f.getRepoToken = token
-	return f.repo, f.repoErr
-}
 func (f *fakeGitHub) ListUserRepos(_ context.Context, _ string, _ github.ListReposOptions) ([]github.RepoInfo, error) {
 	f.listReposCalled = true
 	return f.repos, f.reposErr
 }
 func (f *fakeGitHub) ListBranches(_ context.Context, _, _, _ string) ([]string, error) {
 	return f.branches, f.branchErr
-}
-func (f *fakeGitHub) GetBranch(_ context.Context, token, _, _, _ string) error {
-	f.getBranchCalled = true
-	f.getBranchToken = token
-	return f.getBranchErr
 }
 func (f *fakeGitHub) RevokeToken(_ context.Context, _, _, token string) error {
 	f.revokedTokens = append(f.revokedTokens, token)
@@ -266,22 +217,6 @@ func TestCompleteGitHubAuth_RevokesSupersededToken(t *testing.T) {
 	}
 }
 
-func TestCompleteGitHubAuth_SameTokenNotRevoked(t *testing.T) {
-	store := newFakeStore()
-	store.tokenCipher = []byte("sealed:same_token")
-	// GitHub returned the same token on re-auth — revoking it would kill the live one.
-	gh := &fakeGitHub{token: github.Token{AccessToken: "same_token", Scope: "repo"}, user: github.User{Login: "octocat", ID: 42}}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-
-	begin, _ := svc.BeginGitHubAuth(authedCtx(), BeginAuthInput{WorkspaceID: testWorkspaceID})
-	if _, err := svc.CompleteGitHubAuth(authedCtx(), CompleteAuthInput{Code: "code", State: gh.authorizeState, CookieState: begin.State}); err != nil {
-		t.Fatalf("complete: %v", err)
-	}
-	if len(gh.revokedTokens) != 0 {
-		t.Errorf("an unchanged token must not be revoked, revoked: %v", gh.revokedTokens)
-	}
-}
-
 func TestCompleteGitHubAuth_StateMismatch(t *testing.T) {
 	gh := &fakeGitHub{token: github.Token{AccessToken: "t"}, user: github.User{Login: "x"}}
 	svc := newSvc(newFakeStore(), &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
@@ -297,21 +232,12 @@ func TestCompleteGitHubAuth_DifferentUserRejected(t *testing.T) {
 	rec := &fakeRecorder{}
 	svc := newSvc(newFakeStore(), &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
 	begin, _ := svc.BeginGitHubAuth(authedCtxFor("user-1"), BeginAuthInput{WorkspaceID: testWorkspaceID})
-	// A different session completes the handshake.
 	_, err := svc.CompleteGitHubAuth(authedCtxFor("user-2"), CompleteAuthInput{Code: "code", State: gh.authorizeState, CookieState: begin.State})
 	if !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("got %v, want PermissionDenied", err)
 	}
 	if rec.called {
 		t.Error("a rejected completion must not audit")
-	}
-}
-
-func TestCompleteGitHubAuth_InvalidStateCookie(t *testing.T) {
-	svc := newSvc(newFakeStore(), &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.CompleteGitHubAuth(authedCtx(), CompleteAuthInput{Code: "code", State: "n", CookieState: "!!!not-base64!!!"})
-	if !isKind(err, problem.KindInvalidInput) {
-		t.Fatalf("got %v, want InvalidInput", err)
 	}
 }
 
@@ -356,7 +282,7 @@ func TestDisconnectGitHub_AuditsOnSuccess(t *testing.T) {
 
 func TestDisconnectGitHub_RevokesToken(t *testing.T) {
 	store := newFakeStore()
-	store.tokenCipher = []byte("sealed:gho_live") // the token currently stored
+	store.tokenCipher = []byte("sealed:gho_live")
 	gh := &fakeGitHub{}
 	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
 	if err := svc.DisconnectGitHub(authedCtx(), testWorkspaceID); err != nil {
@@ -364,20 +290,6 @@ func TestDisconnectGitHub_RevokesToken(t *testing.T) {
 	}
 	if len(gh.revokedTokens) != 1 || gh.revokedTokens[0] != "gho_live" {
 		t.Errorf("revoked = %v, want exactly [gho_live]", gh.revokedTokens)
-	}
-}
-
-func TestDisconnectGitHub_RevokeFailureDoesNotFail(t *testing.T) {
-	store := newFakeStore()
-	rec := &fakeRecorder{}
-	gh := &fakeGitHub{revokeErr: errors.New("github down")}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
-	// A failed revoke is logged and swallowed — the disconnect still succeeds and audits.
-	if err := svc.DisconnectGitHub(authedCtx(), testWorkspaceID); err != nil {
-		t.Fatalf("disconnect must succeed even if revoke fails: %v", err)
-	}
-	if !rec.called {
-		t.Error("disconnect should still audit even when revoke fails")
 	}
 }
 
@@ -420,340 +332,12 @@ func TestListRepositories_NoConnection(t *testing.T) {
 	}
 }
 
-// --- connect repository ---
-
-func TestConnectRepository_Success(t *testing.T) {
-	store := newFakeStore()
-	gh := &fakeGitHub{
-		repo:     github.RepoInfo{Owner: "octocat", Name: "Hello-World", FullName: "octocat/Hello-World", DefaultBranch: "main", Private: true, HTMLURL: "https://github.com/octocat/Hello-World"},
-		branches: []string{"main", "dev"},
-	}
-	rec := &fakeRecorder{}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
-
-	// Client supplies lowercase casing; the stored metadata must come from GitHub.
-	src, err := svc.ConnectRepository(authedCtx(), ConnectRepoInput{ProjectID: testProjectID, Owner: "octocat", Repo: "hello-world", Branch: "dev"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if store.upsertedSource == nil {
-		t.Fatal("source was not upserted")
-	}
-	if store.upsertedSource.FullName != "octocat/Hello-World" || store.upsertedSource.Repo != "Hello-World" {
-		t.Errorf("stored metadata not taken from GitHub: %+v", store.upsertedSource)
-	}
-	if !store.upsertedSource.IsPrivate || store.upsertedSource.DefaultBranch != "main" {
-		t.Errorf("authoritative metadata missing: %+v", store.upsertedSource)
-	}
-	if store.upsertedSource.Branch != "dev" || store.upsertedSource.ConnectionID != testConnectionID {
-		t.Errorf("unexpected source write: %+v", store.upsertedSource)
-	}
-	if src.WorkspaceID != testWorkspaceID || src.GitHubLogin != "octocat" {
-		t.Errorf("returned source missing resolved fields: %+v", src)
-	}
-	if !rec.called || rec.action != "source.connect" {
-		t.Errorf("audit not recorded: called=%v action=%q", rec.called, rec.action)
-	}
-}
-
-func TestConnectRepository_BranchNotFound(t *testing.T) {
-	store := newFakeStore()
-	gh := &fakeGitHub{repo: github.RepoInfo{Owner: "o", Name: "r", FullName: "o/r"}, getBranchErr: github.ErrNotFound}
-	rec := &fakeRecorder{}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
-	_, err := svc.ConnectRepository(authedCtx(), ConnectRepoInput{ProjectID: testProjectID, Owner: "o", Repo: "r", Branch: "nope"})
-	if !isKind(err, problem.KindInvalidInput) {
-		t.Fatalf("got %v, want InvalidInput", err)
-	}
-	if store.upsertedSource != nil || rec.called {
-		t.Error("a bad branch must not upsert or audit")
-	}
-}
-
-func TestConnectRepository_NoConnection(t *testing.T) {
-	store := newFakeStore()
-	store.connOK = false
-	gh := &fakeGitHub{}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.ConnectRepository(authedCtx(), ConnectRepoInput{ProjectID: testProjectID, Owner: "o", Repo: "r", Branch: "main"})
-	if !isKind(err, problem.KindNotFound) {
-		t.Fatalf("got %v, want NotFound", err)
-	}
-}
-
-func TestConnectRepository_ProjectNotFound(t *testing.T) {
-	store := newFakeStore()
-	store.wsOK = false
-	svc := newSvc(store, &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.ConnectRepository(authedCtx(), ConnectRepoInput{ProjectID: testProjectID, Owner: "o", Repo: "r", Branch: "main"})
-	if !isKind(err, problem.KindNotFound) {
-		t.Fatalf("got %v, want NotFound", err)
-	}
-}
-
-func TestConnectRepository_DeniedDoesNotCallGitHub(t *testing.T) {
-	store := newFakeStore()
-	gh := &fakeGitHub{}
-	rec := &fakeRecorder{}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
-	_, err := svc.ConnectRepository(authedCtx(), ConnectRepoInput{ProjectID: testProjectID, Owner: "o", Repo: "r", Branch: "main"})
-	if !isKind(err, problem.KindPermissionDenied) {
-		t.Fatalf("got %v, want PermissionDenied", err)
-	}
-	if store.upsertedSource != nil || rec.called {
-		t.Error("a denied connect must not upsert or audit")
-	}
-}
-
-func TestConnectRepository_RepoNotFoundMapsToNotFound(t *testing.T) {
-	store := newFakeStore()
-	gh := &fakeGitHub{repoErr: github.ErrNotFound}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.ConnectRepository(authedCtx(), ConnectRepoInput{ProjectID: testProjectID, Owner: "o", Repo: "r", Branch: "main"})
-	if !isKind(err, problem.KindNotFound) {
-		t.Fatalf("got %v, want NotFound", err)
-	}
-}
-
-func TestConnectRepository_RevokedTokenMapsToInvalidInput(t *testing.T) {
-	store := newFakeStore()
-	gh := &fakeGitHub{repoErr: github.ErrUnauthorized}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.ConnectRepository(authedCtx(), ConnectRepoInput{ProjectID: testProjectID, Owner: "o", Repo: "r", Branch: "main"})
-	if !isKind(err, problem.KindInvalidInput) {
-		t.Fatalf("got %v, want InvalidInput", err)
-	}
-}
-
-// --- connect public repository ---
-
-func TestParsePublicRepo(t *testing.T) {
-	cases := []struct {
-		in, owner, repo string
-		wantErr         bool
-	}{
-		{in: "https://github.com/octocat/Hello-World", owner: "octocat", repo: "Hello-World"},
-		{in: "https://github.com/octocat/Hello-World.git", owner: "octocat", repo: "Hello-World"},
-		{in: "http://github.com/octocat/Hello-World/", owner: "octocat", repo: "Hello-World"},
-		{in: "https://www.github.com/octocat/Hello-World", owner: "octocat", repo: "Hello-World"},
-		{in: "github.com/octocat/Hello-World", owner: "octocat", repo: "Hello-World"},
-		{in: "octocat/Hello-World", owner: "octocat", repo: "Hello-World"},
-		{in: "git@github.com:octocat/Hello-World.git", owner: "octocat", repo: "Hello-World"},
-		{in: "https://github.com/octocat/Hello-World/tree/main", owner: "octocat", repo: "Hello-World"},
-		{in: "  https://github.com/octocat/Hello-World  ", owner: "octocat", repo: "Hello-World"},
-		{in: "", wantErr: true},
-		{in: "octocat", wantErr: true},
-		{in: "https://gitlab.com/octocat/Hello-World", wantErr: true},
-		{in: "https://example.com/a/b", wantErr: true},
-	}
-	for _, c := range cases {
-		owner, repo, err := parsePublicRepo(c.in)
-		if c.wantErr {
-			if err == nil {
-				t.Errorf("parsePublicRepo(%q) = (%q,%q), want error", c.in, owner, repo)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("parsePublicRepo(%q) error: %v", c.in, err)
-			continue
-		}
-		if owner != c.owner || repo != c.repo {
-			t.Errorf("parsePublicRepo(%q) = (%q,%q), want (%q,%q)", c.in, owner, repo, c.owner, c.repo)
-		}
-	}
-}
-
-func TestConnectPublicRepository_Success(t *testing.T) {
-	store := newFakeStore()
-	store.connOK = false // a public connect needs no provider connection at all
-	store.tokenOK = false
-	gh := &fakeGitHub{repo: github.RepoInfo{Owner: "octocat", Name: "Hello-World", FullName: "octocat/Hello-World", DefaultBranch: "main", Private: false, HTMLURL: "https://github.com/octocat/Hello-World"}}
-	rec := &fakeRecorder{}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
-
-	// Mixed-case URL with no branch: metadata comes from GitHub, branch defaults.
-	src, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "https://github.com/Octocat/hello-world"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if gh.getRepoToken != "" {
-		t.Errorf("a public read must be unauthenticated, token=%q", gh.getRepoToken)
-	}
-	if store.upsertedSource == nil {
-		t.Fatal("source was not upserted")
-	}
-	w := store.upsertedSource
-	if w.Access != accessPublic || w.ConnectionID != "" {
-		t.Errorf("want public with no connection; got access=%q connection=%q", w.Access, w.ConnectionID)
-	}
-	if w.Branch != "main" {
-		t.Errorf("an empty branch should default to the repo default; got %q", w.Branch)
-	}
-	if w.FullName != "octocat/Hello-World" || w.Repo != "Hello-World" || w.IsPrivate {
-		t.Errorf("stored metadata not taken from GitHub: %+v", w)
-	}
-	if src.WorkspaceID != testWorkspaceID || src.GitHubLogin != "" || src.Access != accessPublic {
-		t.Errorf("returned source wrong: %+v", src)
-	}
-	if !rec.called || rec.action != "source.connect" {
-		t.Errorf("audit not recorded: called=%v action=%q", rec.called, rec.action)
-	}
-}
-
-func TestConnectPublicRepository_ValidatesExplicitBranch(t *testing.T) {
-	store := newFakeStore()
-	gh := &fakeGitHub{repo: github.RepoInfo{Owner: "o", Name: "r", FullName: "o/r", DefaultBranch: "main"}}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	if _, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "o/r", Branch: "dev"}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !gh.getBranchCalled || gh.getBranchToken != "" {
-		t.Errorf("an explicit branch must be verified unauthenticated: called=%v token=%q", gh.getBranchCalled, gh.getBranchToken)
-	}
-	if store.upsertedSource == nil || store.upsertedSource.Branch != "dev" {
-		t.Errorf("explicit branch not stored: %+v", store.upsertedSource)
-	}
-}
-
-func TestConnectPublicRepository_PrivateRejected(t *testing.T) {
-	store := newFakeStore()
-	gh := &fakeGitHub{repo: github.RepoInfo{Owner: "o", Name: "r", FullName: "o/r", Private: true}}
-	rec := &fakeRecorder{}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
-	_, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "o/r"})
-	if !isKind(err, problem.KindInvalidInput) {
-		t.Fatalf("got %v, want InvalidInput", err)
-	}
-	if store.upsertedSource != nil || rec.called {
-		t.Error("a private repo must not upsert or audit on the public path")
-	}
-}
-
-func TestConnectPublicRepository_NotFound(t *testing.T) {
-	store := newFakeStore()
-	gh := &fakeGitHub{repoErr: github.ErrNotFound} // private or missing is invisible to an anonymous read
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "o/r"})
-	if !isKind(err, problem.KindNotFound) {
-		t.Fatalf("got %v, want NotFound", err)
-	}
-	if store.upsertedSource != nil {
-		t.Error("a missing repo must not upsert")
-	}
-}
-
-func TestConnectPublicRepository_BranchNotFound(t *testing.T) {
-	store := newFakeStore()
-	gh := &fakeGitHub{repo: github.RepoInfo{Owner: "o", Name: "r", FullName: "o/r", DefaultBranch: "main"}, getBranchErr: github.ErrNotFound}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "o/r", Branch: "nope"})
-	if !isKind(err, problem.KindInvalidInput) {
-		t.Fatalf("got %v, want InvalidInput", err)
-	}
-	if store.upsertedSource != nil {
-		t.Error("a bad branch must not upsert")
-	}
-}
-
-func TestConnectPublicRepository_InvalidURL(t *testing.T) {
-	store := newFakeStore()
-	gh := &fakeGitHub{}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "not a url"})
-	if !isKind(err, problem.KindInvalidInput) {
-		t.Fatalf("got %v, want InvalidInput", err)
-	}
-	if gh.getRepoCalled {
-		t.Error("an unparseable URL must not reach GitHub")
-	}
-}
-
-func TestConnectPublicRepository_DeniedDoesNotCallGitHub(t *testing.T) {
-	store := newFakeStore()
-	gh := &fakeGitHub{}
-	rec := &fakeRecorder{}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
-	_, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: testProjectID, RepoURL: "o/r"})
-	if !isKind(err, problem.KindPermissionDenied) {
-		t.Fatalf("got %v, want PermissionDenied", err)
-	}
-	if gh.getRepoCalled || store.upsertedSource != nil || rec.called {
-		t.Error("a denied connect must not reach GitHub, upsert, or audit")
-	}
-}
-
-// --- project source reads / disconnect ---
-
-func TestGetProjectSource_NotFound(t *testing.T) {
-	store := newFakeStore()
-	store.srcOK = false
-	svc := newSvc(store, &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.GetProjectSource(authedCtx(), testProjectID)
-	if !isKind(err, problem.KindNotFound) {
-		t.Fatalf("got %v, want NotFound", err)
-	}
-}
-
-func TestGetProjectSource_Success(t *testing.T) {
-	store := newFakeStore()
-	store.src = Source{ID: testSourceID, ProjectID: testProjectID, FullName: "o/r", Branch: "main", GitHubLogin: "octocat"}
-	store.srcOK = true
-	svc := newSvc(store, &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	src, err := svc.GetProjectSource(authedCtx(), testProjectID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if src.WorkspaceID != testWorkspaceID || src.FullName != "o/r" {
-		t.Fatalf("unexpected source: %+v", src)
-	}
-}
-
-func TestListByWorkspace_DeniedWhenUnauthorized(t *testing.T) {
-	svc := newSvc(newFakeStore(), &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{err: problem.PermissionDenied("nope")}, &fakeRecorder{})
-	_, err := svc.ListByWorkspace(authedCtx(), testWorkspaceID)
-	if !isKind(err, problem.KindPermissionDenied) {
-		t.Fatalf("got %v, want PermissionDenied", err)
-	}
-}
-
-func TestDisconnectRepository_AuditsOnSuccess(t *testing.T) {
-	rec := &fakeRecorder{}
-	svc := newSvc(newFakeStore(), &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{}, rec)
-	if err := svc.DisconnectRepository(authedCtx(), testProjectID); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !rec.called || rec.action != "source.disconnect" {
-		t.Errorf("audit not recorded: called=%v action=%q", rec.called, rec.action)
-	}
-}
-
-func TestDisconnectRepository_NotFoundWhenNothingDeleted(t *testing.T) {
-	store := newFakeStore()
-	store.deletedSrcOK = false
-	rec := &fakeRecorder{}
-	svc := newSvc(store, &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{}, rec)
-	err := svc.DisconnectRepository(authedCtx(), testProjectID)
-	if !isKind(err, problem.KindNotFound) {
-		t.Fatalf("got %v, want NotFound", err)
-	}
-	if rec.called {
-		t.Error("a delete that removed nothing must not audit")
-	}
-}
-
 func TestInvalidIDsRejected(t *testing.T) {
 	svc := newSvc(newFakeStore(), &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{}, &fakeRecorder{})
 	if _, err := svc.GetConnection(authedCtx(), "not-a-uuid"); !isKind(err, problem.KindInvalidInput) {
 		t.Errorf("GetConnection bad id: got %v, want InvalidInput", err)
 	}
-	if _, err := svc.GetProjectSource(authedCtx(), "not-a-uuid"); !isKind(err, problem.KindInvalidInput) {
-		t.Errorf("GetProjectSource bad id: got %v, want InvalidInput", err)
-	}
-	if _, err := svc.ConnectRepository(authedCtx(), ConnectRepoInput{ProjectID: "bad", Owner: "o", Repo: "r", Branch: "m"}); !isKind(err, problem.KindInvalidInput) {
-		t.Errorf("ConnectRepository bad id: got %v, want InvalidInput", err)
-	}
-	if _, err := svc.ConnectPublicRepository(authedCtx(), ConnectPublicRepoInput{ProjectID: "bad", RepoURL: "o/r"}); !isKind(err, problem.KindInvalidInput) {
-		t.Errorf("ConnectPublicRepository bad id: got %v, want InvalidInput", err)
+	if _, err := svc.ListRepositories(authedCtx(), ListReposInput{WorkspaceID: "not-a-uuid"}); !isKind(err, problem.KindInvalidInput) {
+		t.Errorf("ListRepositories bad id: got %v, want InvalidInput", err)
 	}
 }

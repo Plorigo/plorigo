@@ -14,9 +14,9 @@ import (
 )
 
 const (
-	testEnvironmentID = "22222222-2222-2222-2222-222222222222"
-	testEnvVarID      = "11111111-1111-1111-1111-111111111111"
-	testWorkspace     = "ws-1"
+	testServiceID = "22222222-2222-2222-2222-222222222222"
+	testEnvVarID  = "11111111-1111-1111-1111-111111111111"
+	testWorkspace = "ws-1"
 )
 
 type fakeStore struct {
@@ -31,9 +31,9 @@ type fakeStore struct {
 	wsErr     error
 }
 
-// newFakeStore resolves testEnvironmentID to testWorkspace and deletes successfully
-// by default, so the workspace-resolution and delete steps succeed unless a test
-// overrides them.
+// newFakeStore resolves testServiceID to testWorkspace and deletes successfully by
+// default, so the workspace-resolution and delete steps succeed unless a test overrides
+// them.
 func newFakeStore() *fakeStore {
 	return &fakeStore{wsID: testWorkspace, wsOK: true, deletedOK: true, deletedID: testEnvVarID}
 }
@@ -46,13 +46,13 @@ func (f *fakeStore) UpsertEnvVar(_ context.Context, _ database.Tx, e EnvVar) (En
 	f.upserted = e
 	return e, nil
 }
-func (f *fakeStore) ListByEnvironment(_ context.Context, _ string) ([]EnvVar, error) {
+func (f *fakeStore) ListByService(_ context.Context, _ string) ([]EnvVar, error) {
 	return f.list, nil
 }
 func (f *fakeStore) DeleteEnvVar(_ context.Context, _ database.Tx, _, _ string) (string, bool, error) {
 	return f.deletedID, f.deletedOK, f.deleteErr
 }
-func (f *fakeStore) WorkspaceIDForEnvironment(_ context.Context, _ string) (string, bool, error) {
+func (f *fakeStore) WorkspaceIDForService(_ context.Context, _ string) (string, bool, error) {
 	return f.wsID, f.wsOK, f.wsErr
 }
 
@@ -92,7 +92,7 @@ func TestSet_WritesEnvVarAndAudit(t *testing.T) {
 	rec := &fakeRecorder{}
 	svc := newSvc(store, fakeAuthz{}, rec)
 
-	ev, err := svc.Set(authedCtx(), SetInput{EnvironmentID: testEnvironmentID, Key: "DATABASE_URL", Value: "postgres://x"})
+	ev, err := svc.Set(authedCtx(), SetInput{ServiceID: testServiceID, Key: "DATABASE_URL", Value: "postgres://x"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestSet_WritesEnvVarAndAudit(t *testing.T) {
 func TestSet_TrimsKey(t *testing.T) {
 	store := newFakeStore()
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	ev, err := svc.Set(authedCtx(), SetInput{EnvironmentID: testEnvironmentID, Key: "  PORT  ", Value: "8080"})
+	ev, err := svc.Set(authedCtx(), SetInput{ServiceID: testServiceID, Key: "  PORT  ", Value: "8080"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestSet_RejectsInvalidKey(t *testing.T) {
 	cases := []string{"", "  ", "bad-key", "1ABC", "lower", "WITH SPACE", strings.Repeat("A", maxKeyLen+1)}
 	for _, key := range cases {
 		svc := newSvc(newFakeStore(), fakeAuthz{}, &fakeRecorder{})
-		_, err := svc.Set(authedCtx(), SetInput{EnvironmentID: testEnvironmentID, Key: key, Value: "v"})
+		_, err := svc.Set(authedCtx(), SetInput{ServiceID: testServiceID, Key: key, Value: "v"})
 		var pe *problem.Error
 		if !errors.As(err, &pe) || pe.Kind != problem.KindInvalidInput {
 			t.Errorf("key %q: got %v, want InvalidInput", key, err)
@@ -139,7 +139,7 @@ func TestSet_RejectsInvalidKey(t *testing.T) {
 
 func TestSet_AllowsEmptyValue(t *testing.T) {
 	svc := newSvc(newFakeStore(), fakeAuthz{}, &fakeRecorder{})
-	ev, err := svc.Set(authedCtx(), SetInput{EnvironmentID: testEnvironmentID, Key: "EMPTY", Value: ""})
+	ev, err := svc.Set(authedCtx(), SetInput{ServiceID: testServiceID, Key: "EMPTY", Value: ""})
 	if err != nil {
 		t.Fatalf("empty value should be allowed, got: %v", err)
 	}
@@ -150,27 +150,27 @@ func TestSet_AllowsEmptyValue(t *testing.T) {
 
 func TestSet_RejectsTooLongValue(t *testing.T) {
 	svc := newSvc(newFakeStore(), fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.Set(authedCtx(), SetInput{EnvironmentID: testEnvironmentID, Key: "BIG", Value: strings.Repeat("a", maxValueLen+1)})
+	_, err := svc.Set(authedCtx(), SetInput{ServiceID: testServiceID, Key: "BIG", Value: strings.Repeat("a", maxValueLen+1)})
 	var pe *problem.Error
 	if !errors.As(err, &pe) || pe.Kind != problem.KindInvalidInput {
 		t.Errorf("got %v, want InvalidInput", err)
 	}
 }
 
-func TestSet_RequiresValidEnvironmentID(t *testing.T) {
+func TestSet_RequiresValidServiceID(t *testing.T) {
 	svc := newSvc(newFakeStore(), fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.Set(authedCtx(), SetInput{EnvironmentID: "not-a-uuid", Key: "K", Value: "v"})
+	_, err := svc.Set(authedCtx(), SetInput{ServiceID: "not-a-uuid", Key: "K", Value: "v"})
 	var pe *problem.Error
 	if !errors.As(err, &pe) || pe.Kind != problem.KindInvalidInput {
 		t.Errorf("got %v, want InvalidInput", err)
 	}
 }
 
-func TestSet_EnvironmentNotFound(t *testing.T) {
+func TestSet_ServiceNotFound(t *testing.T) {
 	store := newFakeStore()
-	store.wsOK = false // the parent environment does not exist
+	store.wsOK = false // the parent service does not exist
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.Set(authedCtx(), SetInput{EnvironmentID: testEnvironmentID, Key: "K", Value: "v"})
+	_, err := svc.Set(authedCtx(), SetInput{ServiceID: testServiceID, Key: "K", Value: "v"})
 	var pe *problem.Error
 	if !errors.As(err, &pe) || pe.Kind != problem.KindNotFound {
 		t.Errorf("got %v, want NotFound", err)
@@ -181,7 +181,7 @@ func TestSet_DeniedWhenUnauthorized(t *testing.T) {
 	store := newFakeStore()
 	rec := &fakeRecorder{}
 	svc := newSvc(store, fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
-	_, err := svc.Set(authedCtx(), SetInput{EnvironmentID: testEnvironmentID, Key: "K", Value: "v"})
+	_, err := svc.Set(authedCtx(), SetInput{ServiceID: testServiceID, Key: "K", Value: "v"})
 	var pe *problem.Error
 	if !errors.As(err, &pe) || pe.Kind != problem.KindPermissionDenied {
 		t.Errorf("got %v, want PermissionDenied", err)
@@ -196,7 +196,7 @@ func TestSet_DeniedWhenUnauthorized(t *testing.T) {
 
 func TestSet_AuditFailurePropagates(t *testing.T) {
 	svc := newSvc(newFakeStore(), fakeAuthz{}, &fakeRecorder{recordErr: errors.New("boom")})
-	if _, err := svc.Set(authedCtx(), SetInput{EnvironmentID: testEnvironmentID, Key: "K", Value: "v"}); err == nil {
+	if _, err := svc.Set(authedCtx(), SetInput{ServiceID: testServiceID, Key: "K", Value: "v"}); err == nil {
 		t.Error("expected error when audit recording fails (tx must not commit)")
 	}
 }
@@ -205,7 +205,7 @@ func TestSet_WrapsStoreErrorAsInternal(t *testing.T) {
 	store := newFakeStore()
 	store.upsertErr = errors.New("db down")
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.Set(authedCtx(), SetInput{EnvironmentID: testEnvironmentID, Key: "K", Value: "v"})
+	_, err := svc.Set(authedCtx(), SetInput{ServiceID: testServiceID, Key: "K", Value: "v"})
 	var pe *problem.Error
 	if !errors.As(err, &pe) || pe.Kind != problem.KindInternal {
 		t.Errorf("got %v, want Internal", err)
@@ -214,9 +214,9 @@ func TestSet_WrapsStoreErrorAsInternal(t *testing.T) {
 
 func TestList_AuthorizesAndReturns(t *testing.T) {
 	store := newFakeStore()
-	store.list = []EnvVar{{ID: testEnvVarID, EnvironmentID: testEnvironmentID, Key: "A", Value: "1"}}
+	store.list = []EnvVar{{ID: testEnvVarID, ServiceID: testServiceID, Key: "A", Value: "1"}}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	vars, err := svc.List(authedCtx(), testEnvironmentID)
+	vars, err := svc.List(authedCtx(), testServiceID)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -230,18 +230,18 @@ func TestList_AuthorizesAndReturns(t *testing.T) {
 
 func TestList_DeniedWhenUnauthorized(t *testing.T) {
 	svc := newSvc(newFakeStore(), fakeAuthz{err: problem.PermissionDenied("nope")}, &fakeRecorder{})
-	_, err := svc.List(authedCtx(), testEnvironmentID)
+	_, err := svc.List(authedCtx(), testServiceID)
 	var pe *problem.Error
 	if !errors.As(err, &pe) || pe.Kind != problem.KindPermissionDenied {
 		t.Errorf("got %v, want PermissionDenied", err)
 	}
 }
 
-func TestList_EnvironmentNotFound(t *testing.T) {
+func TestList_ServiceNotFound(t *testing.T) {
 	store := newFakeStore()
 	store.wsOK = false
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.List(authedCtx(), testEnvironmentID)
+	_, err := svc.List(authedCtx(), testServiceID)
 	var pe *problem.Error
 	if !errors.As(err, &pe) || pe.Kind != problem.KindNotFound {
 		t.Errorf("got %v, want NotFound", err)
@@ -260,7 +260,7 @@ func TestList_InvalidID(t *testing.T) {
 func TestDelete_AuditsOnSuccess(t *testing.T) {
 	rec := &fakeRecorder{}
 	svc := newSvc(newFakeStore(), fakeAuthz{}, rec)
-	if err := svc.Delete(authedCtx(), DeleteInput{EnvironmentID: testEnvironmentID, Key: "DATABASE_URL"}); err != nil {
+	if err := svc.Delete(authedCtx(), DeleteInput{ServiceID: testServiceID, Key: "DATABASE_URL"}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !rec.called || rec.action != "env_var.delete" {
@@ -274,7 +274,7 @@ func TestDelete_NotFoundWhenNothingDeleted(t *testing.T) {
 	store.deletedID = ""
 	rec := &fakeRecorder{}
 	svc := newSvc(store, fakeAuthz{}, rec)
-	err := svc.Delete(authedCtx(), DeleteInput{EnvironmentID: testEnvironmentID, Key: "MISSING"})
+	err := svc.Delete(authedCtx(), DeleteInput{ServiceID: testServiceID, Key: "MISSING"})
 	var pe *problem.Error
 	if !errors.As(err, &pe) || pe.Kind != problem.KindNotFound {
 		t.Errorf("got %v, want NotFound", err)
@@ -287,7 +287,7 @@ func TestDelete_NotFoundWhenNothingDeleted(t *testing.T) {
 func TestDelete_DeniedWhenUnauthorized(t *testing.T) {
 	rec := &fakeRecorder{}
 	svc := newSvc(newFakeStore(), fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
-	err := svc.Delete(authedCtx(), DeleteInput{EnvironmentID: testEnvironmentID, Key: "DATABASE_URL"})
+	err := svc.Delete(authedCtx(), DeleteInput{ServiceID: testServiceID, Key: "DATABASE_URL"})
 	var pe *problem.Error
 	if !errors.As(err, &pe) || pe.Kind != problem.KindPermissionDenied {
 		t.Errorf("got %v, want PermissionDenied", err)
@@ -299,19 +299,19 @@ func TestDelete_DeniedWhenUnauthorized(t *testing.T) {
 
 func TestDelete_InvalidInput(t *testing.T) {
 	svc := newSvc(newFakeStore(), fakeAuthz{}, &fakeRecorder{})
-	if err := svc.Delete(authedCtx(), DeleteInput{EnvironmentID: "not-a-uuid", Key: "K"}); !isInvalid(err) {
-		t.Errorf("bad environment id: got %v, want InvalidInput", err)
+	if err := svc.Delete(authedCtx(), DeleteInput{ServiceID: "not-a-uuid", Key: "K"}); !isInvalid(err) {
+		t.Errorf("bad service id: got %v, want InvalidInput", err)
 	}
-	if err := svc.Delete(authedCtx(), DeleteInput{EnvironmentID: testEnvironmentID, Key: "bad-key"}); !isInvalid(err) {
+	if err := svc.Delete(authedCtx(), DeleteInput{ServiceID: testServiceID, Key: "bad-key"}); !isInvalid(err) {
 		t.Errorf("bad key: got %v, want InvalidInput", err)
 	}
 }
 
-func TestDelete_EnvironmentNotFound(t *testing.T) {
+func TestDelete_ServiceNotFound(t *testing.T) {
 	store := newFakeStore()
 	store.wsOK = false
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	err := svc.Delete(authedCtx(), DeleteInput{EnvironmentID: testEnvironmentID, Key: "K"})
+	err := svc.Delete(authedCtx(), DeleteInput{ServiceID: testServiceID, Key: "K"})
 	var pe *problem.Error
 	if !errors.As(err, &pe) || pe.Kind != problem.KindNotFound {
 		t.Errorf("got %v, want NotFound", err)

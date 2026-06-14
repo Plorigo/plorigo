@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ConnectError } from "@connectrpc/connect";
+import { Code, ConnectError } from "@connectrpc/connect";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import {
   ArrowLeft,
+  Boxes,
+  ChevronDown,
   Container,
   FlaskConical,
   FolderGit2,
@@ -13,7 +15,6 @@ import {
   Layers,
   Lock,
   Network,
-  Rocket,
   Search,
   Server,
   Sparkles,
@@ -22,8 +23,15 @@ import {
 import { toast } from "sonner";
 
 import { Badge, Button, EmptyState, Input, Panel, PanelHeader, Select, Skeleton } from "@/components/ui";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { slugify } from "@/features/services/serviceData";
 import { cn } from "@/lib/cn";
-import { deploymentClient, sourceClient } from "@/lib/clients";
+import { serviceClient } from "@/lib/clients";
 import {
   useAgents,
   useBranches,
@@ -56,12 +64,16 @@ function templateVisual(t: DeployTemplate) {
   return TEMPLATE_ICONS[t.id] ?? CATEGORY_ICONS[t.category];
 }
 
-// NewDeploymentPage is the full-page "what do you want to deploy?" picker (Vercel's New
-// Project, adapted for BYOS). A "Deploy to" bar fixes the target (project + environment +
-// server); below it a quick image/URL box and two columns — Import Git Repository (the
-// connected account's repos) and Templates — each item carrying its own Deploy/Connect
-// action. Public images and public Git repos build-and-deploy now; a connected-account
-// (OAuth) repo connects as the project's source (building it needs the GitHub App, later).
+type Visibility = "public" | "private";
+
+// NewDeploymentPage is the full-page "add a service" picker (Vercel's New Project, adapted
+// for BYOS). A "Deploy to" bar fixes the target (project + environment + server) plus the
+// new service's name and visibility; below it a quick image/URL box and two columns —
+// Import Git Repository (the connected account's repos) and Templates — each item carrying
+// its own action. Every lane creates a SERVICE via ServiceService.createService with
+// deployNow: a public image / public Git repo / template builds-and-deploys now and lands
+// on the deployment; a connected-account (OAuth) repo creates the service but can't build
+// yet (no agent credential this slice), so it lands on the service detail page.
 // An optional ?project= preselects the target and scopes "Back".
 export function NewDeploymentPage() {
   const queryClient = useQueryClient();
@@ -85,8 +97,15 @@ export function NewDeploymentPage() {
   // computed default" (derived below from freshly loaded data); the Select onChange records an
   // explicit user choice. Deriving keeps defaults correct without syncing through effects.
   const [projectOverride, setProjectOverride] = useState("");
-  const [environmentOverride, setEnvironmentOverride] = useState("");
+  // Environments are MULTI-select: the same service config can be created in several
+  // environments at once (e.g. staging + production). An empty selection follows the default
+  // (the project's first environment); toggling records an explicit choice.
+  const [selectedEnvIds, setSelectedEnvIds] = useState<string[]>([]);
   const [serverOverride, setServerOverride] = useState("");
+  // The new service's identity. An empty name auto-derives from the source (image/repo) per
+  // lane; visibility defaults to public (reachable on the internet via Caddy).
+  const [name, setName] = useState("");
+  const [visibility, setVisibility] = useState<Visibility>("public");
   // Quick deploy (a public image, or a public Git URL).
   const [quickValue, setQuickValue] = useState("");
   const [quickPort, setQuickPort] = useState("80");
@@ -139,12 +158,28 @@ export function NewDeploymentPage() {
     window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
   }, [queryClient]);
 
-  // Keep the environment valid for the chosen project (default to its first).
+  // Keep the environment selection valid for the chosen project. Drop ids that aren't in the
+  // current project's environments; when nothing valid is left, default to the first one so
+  // there's always exactly one target until the user picks more. Derived during render (no
+  // effect) so a project switch re-defaults cleanly.
   const envs = environments.data;
-  const environmentId =
-    envs?.length
-      ? (environmentOverride && envs.some((e) => e.id === environmentOverride) ? environmentOverride : envs[0].id)
-      : "";
+  const envList = envs ?? [];
+  const validSelected = selectedEnvIds.filter((id) => envList.some((e) => e.id === id));
+  const environmentIds = validSelected.length ? validSelected : envList[0] ? [envList[0].id] : [];
+  const envName = (id: string) => envList.find((e) => e.id === id)?.name ?? id;
+
+  // Toggle an environment in/out of the target set, keeping at least one selected (so a
+  // deselect of the last one is a no-op rather than snapping to a different environment).
+  function toggleEnv(id: string) {
+    setError("");
+    const current = environmentIds;
+    if (current.includes(id)) {
+      if (current.length === 1) return;
+      setSelectedEnvIds(current.filter((x) => x !== id));
+    } else {
+      setSelectedEnvIds([...current, id]);
+    }
+  }
 
   // Default the server to a ready one (then any online, then the first server).
   const serverId = serverOverride || pickDefaultServer(servers.data, agents.data)?.id || "";
@@ -226,12 +261,12 @@ export function NewDeploymentPage() {
   const noServers = !servers.isLoading && (servers.data?.length ?? 0) === 0;
   const noEnvironments = projectId.length > 0 && !environments.isLoading && (environments.data?.length ?? 0) === 0;
   const projectName = (projects.data ?? []).find((p) => p.id === projectId)?.name ?? "this project";
-  // An image deploy needs a full target; connecting a repo just needs a project.
-  const canDeploy = Boolean(projectId) && Boolean(environmentId) && Boolean(serverId) && !noServers;
-  const canConnect = Boolean(projectId);
+  // Creating a service needs a full target (project + at least one environment + server).
+  const canDeploy = Boolean(projectId) && environmentIds.length > 0 && Boolean(serverId) && !noServers;
+  const slugPreview = slugify(name);
 
   function startConnect() {
-    // Return to this import flow after GitHub authorizes — the OAuth handler defaults to
+    // Return to this add-service flow after GitHub authorizes — the OAuth handler defaults to
     // /projects otherwise. The server's safeReturnPath strips any query, so we send a clean
     // path; the page re-resolves the target project from the active scope on return.
     const returnTo = encodeURIComponent("/deployments/new");
@@ -240,104 +275,153 @@ export function NewDeploymentPage() {
     );
   }
 
-  async function invalidateSource() {
-    await queryClient.invalidateQueries({ queryKey: ["projectSource", projectId] });
-    await queryClient.invalidateQueries({ queryKey: ["sources", workspaceId] });
+  // After creating a service: a build that enqueued lands on the deployment; otherwise (an
+  // OAuth/private git service that can't build yet) lands on the new service detail page.
+  function onCreated(serviceId: string, deploymentId: string) {
+    void queryClient.invalidateQueries({ queryKey: ["services"] });
+    void queryClient.invalidateQueries({ queryKey: ["deployments"] });
+    if (deploymentId) {
+      void navigate({ to: "/deployments/$deploymentId", params: { deploymentId } });
+    } else {
+      void navigate({
+        to: "/projects/$projectId/services/$serviceId",
+        params: { projectId, serviceId },
+      });
+    }
   }
 
-  // Run a pre-built image as a container under the chosen environment + server.
-  async function deployImage(imageRef: string, port: number, key: string) {
+  // Format a createService failure for one environment: a duplicate name there
+  // (AlreadyExists) gets a precise message; everything else uses the connect message.
+  function formatErr(err: unknown, envLabel: string, serviceName: string, fallback: string): string {
+    if (err instanceof ConnectError && err.code === Code.AlreadyExists) {
+      return `${envLabel}: a service named "${serviceName}" already exists there`;
+    }
+    if (err instanceof ConnectError) return `${envLabel}: ${err.message}`;
+    return `${envLabel}: ${fallback}`;
+  }
+
+  // Shared target guard for every lane.
+  function guardTarget(): boolean {
     setError("");
-    if (!projectId) return setError("Pick a project to deploy to");
-    if (!environmentId) return setError("Pick an environment (add one on the project first)");
-    if (!serverId) return setError("Pick a connected server");
+    if (!projectId) return Boolean(setError("Pick a project to deploy to"));
+    if (environmentIds.length === 0) return Boolean(setError("Pick at least one environment (add one on the project first)"));
+    if (!serverId) return Boolean(setError("Pick a connected server"));
+    return true;
+  }
+
+  // The createService source shape shared by every lane (everything except the per-call
+  // environment + the shared visibility/server/deployNow).
+  type ServiceSource = Pick<
+    Parameters<typeof serviceClient.createService>[0],
+    "name" | "sourceKind" | "imageRef" | "repoUrl" | "owner" | "repo" | "branch" | "containerPort"
+  >;
+
+  // runCreate creates the SAME service in EVERY selected environment (each environment gets
+  // its own service + first deployment). One environment behaves like before — it lands on the
+  // deployment, or the service detail page for an OAuth source that can't build yet. Several
+  // environments report the spread and return to the project, where all the new services are
+  // listed. Partial failure (e.g. a duplicate name in one environment) is surfaced without
+  // discarding the environments that succeeded.
+  async function runCreate(source: ServiceSource, key: string, fallback: string) {
+    if (!guardTarget()) return;
+    setBusyKey(key);
+    setError("");
+    const serviceName = source.name ?? "service";
+    const created: { serviceId: string; deploymentId: string }[] = [];
+    const failures: string[] = [];
+    for (const envId of environmentIds) {
+      try {
+        const { service, deploymentId } = await serviceClient.createService({
+          ...source,
+          environmentId: envId,
+          visibility,
+          serverId,
+          deployNow: true,
+        });
+        if (service) created.push({ serviceId: service.id, deploymentId });
+        else failures.push(formatErr(new Error(fallback), envName(envId), serviceName, fallback));
+      } catch (err) {
+        failures.push(formatErr(err, envName(envId), serviceName, fallback));
+      }
+    }
+    setBusyKey(null);
+    if (created.length === 0) {
+      setError(failures.join(" · ") || fallback);
+      return;
+    }
+    void queryClient.invalidateQueries({ queryKey: ["services"] });
+    void queryClient.invalidateQueries({ queryKey: ["deployments"] });
+    if (failures.length) toast.error(failures.join(" · "));
+    if (created.length === 1) {
+      onCreated(created[0].serviceId, created[0].deploymentId);
+      return;
+    }
+    toast.success(`Created "${serviceName}" in ${created.length} environments`);
+    void navigate({ to: "/projects/$projectId", params: { projectId } });
+  }
+
+  // Create a service from a pre-built image and deploy it now.
+  function createImageService(imageRef: string, port: number, key: string, fallbackName: string) {
+    setError("");
     const ref = imageRef.trim();
     if (!ref) return setError("Enter an image reference, e.g. traefik/whoami");
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
       return setError("Container port must be between 1 and 65535");
     }
-    setBusyKey(key);
-    try {
-      const { deployment } = await deploymentClient.createDeployment({
-        environmentId,
-        serverId,
-        imageRef: ref,
-        containerPort: port,
-      });
-      if (!deployment) throw new Error("the deployment was not created");
-      await queryClient.invalidateQueries({ queryKey: ["deployments"] });
-      void navigate({ to: "/deployments/$deploymentId", params: { deploymentId: deployment.id } });
-    } catch (err) {
-      setError(err instanceof ConnectError ? err.message : "Could not start the deployment");
-      setBusyKey(null);
-    }
+    void runCreate(
+      { name: name.trim() || fallbackName, sourceKind: "image", imageRef: ref, containerPort: port },
+      key,
+      "Could not create the service",
+    );
   }
 
-  // Connect a connected-account (OAuth) repository as the project's source. Building from a
-  // private/OAuth repo isn't supported yet (the agent gets no credential this slice), so this
-  // stays connect-only; public repos build-and-deploy via deployPublicSource below.
-  async function connectOAuthRepo(owner: string, repo: string, branch: string, key: string) {
+  // Create a service from a PUBLIC git repo (URL) and deploy it now. The agent clones the
+  // repo, builds its Dockerfile, and runs it. port 0 means "auto-detect from EXPOSE".
+  function createPublicGitService(repoUrl: string, branch: string, port: number, key: string, fallbackName: string) {
     setError("");
-    if (!projectId) return setError("Pick a project to connect to");
-    setBusyKey(key);
-    try {
-      await sourceClient.connectRepository({ projectId, owner, repo, branch });
-      await invalidateSource();
-      toast.success("Repository connected as the project's source");
-      void navigate({ to: "/projects/$projectId", params: { projectId } });
-    } catch (err) {
-      setError(err instanceof ConnectError ? err.message : "Could not connect the repository");
-      setBusyKey(null);
-    }
-  }
-
-  // Build-and-deploy a PUBLIC repository: connect it as the project's source, then trigger a
-  // source deployment. The agent clones the repo, builds its Dockerfile, and runs it. No
-  // credential is involved (public repos only); private repos use the connect-only path above.
-  // port 0 means "auto-detect from the Dockerfile's EXPOSE on the agent".
-  async function deployPublicSource(repoUrl: string, branch: string, port: number, key: string) {
-    setError("");
-    if (!projectId) return setError("Pick a project to deploy to");
-    if (!environmentId) return setError("Pick an environment (add one on the project first)");
-    if (!serverId) return setError("Pick a connected server");
     const url = repoUrl.trim();
     if (!url) return setError("Enter a repository URL");
     if (port !== 0 && (!Number.isInteger(port) || port < 1 || port > 65535)) {
       return setError("Container port must be between 1 and 65535, or blank to auto-detect");
     }
-    setBusyKey(key);
-    try {
-      await sourceClient.connectPublicRepository({ projectId, repoUrl: url, branch: branch.trim() });
-      await invalidateSource();
-      const { deployment } = await deploymentClient.createDeploymentFromSource({
-        environmentId,
-        serverId,
-        containerPort: port,
-        gitRef: branch.trim(),
-      });
-      if (!deployment) throw new Error("the deployment was not created");
-      await queryClient.invalidateQueries({ queryKey: ["deployments"] });
-      void navigate({ to: "/deployments/$deploymentId", params: { deploymentId: deployment.id } });
-    } catch (err) {
-      setError(err instanceof ConnectError ? err.message : "Could not build and deploy the repository");
-      setBusyKey(null);
-    }
+    void runCreate(
+      { name: name.trim() || fallbackName, sourceKind: "git", repoUrl: url, branch: branch.trim(), containerPort: port },
+      key,
+      "Could not create and deploy the repository",
+    );
   }
 
-  // The quick box deploys an image unless it clearly looks like a Git URL — in which case it
-  // builds and deploys a PUBLIC repo. Both need a full target (project + env + server). An
-  // image needs a port; a repo auto-detects it from the Dockerfile when the field is blank
-  // (quickIsRepo is derived above, where it also drives the port-field default).
+  // Create a service from a connected-account (OAuth) repository. Building an OAuth repo isn't
+  // supported yet (the agent gets no credential this slice), so deployNow can't enqueue a
+  // build — each service is created and (for one environment) the user lands on its detail page.
+  function createOAuthGitService(owner: string, repo: string, branch: string, key: string) {
+    void runCreate(
+      { name: name.trim() || repo, sourceKind: "git", owner, repo, branch: branch.trim() },
+      key,
+      "Could not create the service",
+    );
+  }
+
+  // The quick box creates an image service unless it clearly looks like a Git URL — in which
+  // case it builds and deploys a PUBLIC repo service. Both need a full target. An image needs
+  // a port; a repo auto-detects from the Dockerfile when blank (quickIsRepo is derived above).
   const quickReady =
     quickValue.trim().length > 0 && canDeploy && (quickIsRepo || Number(quickPort) >= 1);
   function runQuick() {
-    if (quickIsRepo) void deployPublicSource(quickValue, "", quickPort.trim() ? Number(quickPort) : 0, "quick");
-    else void deployImage(quickValue, Number(quickPort), "quick");
+    if (quickIsRepo) {
+      const gh = parseGitHubRepo(quickValue);
+      void createPublicGitService(quickValue, "", quickPort.trim() ? Number(quickPort) : 0, "quick", gh?.repo ?? "service");
+    } else {
+      void createImageService(quickValue, Number(quickPort), "quick", imageNameHint(quickValue));
+    }
   }
 
   function runTemplate(t: DeployTemplate) {
-    if (templateSourceKind(t) === "image") void deployImage(t.imageRef ?? "", t.containerPort, `tpl:${t.id}`);
-    else void deployPublicSource(t.repoUrl ?? "", t.defaultBranch ?? "", t.containerPort, `tpl:${t.id}`);
+    if (templateSourceKind(t) === "image") {
+      void createImageService(t.imageRef ?? "", t.containerPort, `tpl:${t.id}`, t.id);
+    } else {
+      void createPublicGitService(t.repoUrl ?? "", t.defaultBranch ?? "", t.containerPort, `tpl:${t.id}`, t.id);
+    }
   }
 
   return (
@@ -356,13 +440,13 @@ export function NewDeploymentPage() {
 
       <div className="flex items-start gap-3">
         <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-border bg-card text-foreground shadow-sm">
-          <Rocket className="h-6 w-6" aria-hidden="true" />
+          <Boxes className="h-6 w-6" aria-hidden="true" />
         </span>
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Deploy something new</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Add a service</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Run a public image, or build and deploy a public Git repo (its Dockerfile builds on your server). Pick
-            where it lands, then choose what to deploy.
+            A service is a deployable component — a public image, a public Git repo (its Dockerfile builds on your
+            server), or a connected repository. Name it, choose where it lands, then pick what to deploy.
           </p>
         </div>
       </div>
@@ -370,7 +454,7 @@ export function NewDeploymentPage() {
       {!workspaceId ? (
         <EmptyState
           title="Select a workspace first"
-          body="Choose a workspace to deploy under, then come back to start a deployment."
+          body="Choose a workspace to deploy under, then come back to add a service."
         />
       ) : (
         <div className="space-y-6">
@@ -380,11 +464,11 @@ export function NewDeploymentPage() {
             </p>
           )}
 
-          {/* Deploy target — where everything below lands. */}
+          {/* Deploy target — where everything below lands, plus the new service's identity. */}
           <Panel>
             <PanelHeader
               title="Deploy to"
-              description="Where everything below lands. Public images and public Git repos deploy here; importing a connected-account repo just sets it as the project's source."
+              description="Where the service lands, what it's called, and whether it's reachable on the internet."
             />
             <div className="grid gap-4 p-4 sm:grid-cols-3">
               <Field label="Project" icon={FolderGit2}>
@@ -407,19 +491,45 @@ export function NewDeploymentPage() {
                 )}
               </Field>
               <Field label="Environment" icon={Layers}>
-                <Select
-                  value={environmentId}
-                  onChange={(e) => setEnvironmentOverride(e.target.value)}
-                  disabled={!environments.data?.length}
-                >
-                  {(environments.data ?? []).map((env) => (
-                    <option key={env.id} value={env.id}>
-                      {env.name} ({env.type})
-                    </option>
-                  ))}
-                </Select>
-                {noEnvironments && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      disabled={!envList.length}
+                      className="flex h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-card px-3 text-sm text-foreground shadow-sm outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-50 data-[state=open]:border-ring data-[state=open]:ring-2 data-[state=open]:ring-ring/25"
+                    >
+                      <span className="truncate text-left">
+                        {environmentIds.length === 0
+                          ? "Select environments"
+                          : environmentIds.length === 1
+                            ? envName(environmentIds[0])
+                            : `${environmentIds.length} environments`}
+                      </span>
+                      <ChevronDown className="h-4 w-4 shrink-0 opacity-60" aria-hidden="true" />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="max-h-64 w-[var(--radix-dropdown-menu-trigger-width)] min-w-48 overflow-y-auto">
+                    {envList.map((env) => (
+                      <DropdownMenuCheckboxItem
+                        key={env.id}
+                        checked={environmentIds.includes(env.id)}
+                        onCheckedChange={() => toggleEnv(env.id)}
+                        onSelect={(e) => e.preventDefault()}
+                      >
+                        {env.name}
+                        <span className="ml-1.5 text-xs text-muted-foreground">{env.type}</span>
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                {noEnvironments ? (
                   <p className="mt-1 text-xs text-muted-foreground">No environments yet — add one on the project page.</p>
+                ) : (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {environmentIds.length > 1
+                      ? `Same service created in all ${environmentIds.length} selected environments.`
+                      : "Pick one or more — the same service is created in each."}
+                  </p>
                 )}
               </Field>
               <Field label="Server" icon={Server}>
@@ -439,6 +549,51 @@ export function NewDeploymentPage() {
                     .
                   </p>
                 )}
+              </Field>
+              <Field label="Service name" icon={Boxes}>
+                <Input
+                  value={name}
+                  onChange={(e) => {
+                    setError("");
+                    setName(e.target.value);
+                  }}
+                  placeholder="Leave blank to derive from the source"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                />
+                <p className="mt-1 truncate text-xs text-muted-foreground">
+                  {slugPreview ? (
+                    <>
+                      URL slug: <span className="font-mono text-foreground">{slugPreview}</span>
+                    </>
+                  ) : (
+                    "A short name, unique within the environment."
+                  )}
+                </p>
+              </Field>
+              <Field label="Visibility" icon={visibility === "public" ? Globe : Lock}>
+                <div className="inline-flex rounded-md border border-input bg-muted/30 p-0.5">
+                  {(["public", "private"] as const).map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setVisibility(v)}
+                      className={cn(
+                        "rounded px-3 py-1.5 text-sm transition-colors",
+                        visibility === v
+                          ? "bg-background font-medium text-foreground shadow-sm"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {v === "public" ? "Public" : "Private"}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {visibility === "public"
+                    ? "Routed on the internet via Caddy with a public URL."
+                    : "Reachable only by sibling services at its internal host."}
+                </p>
               </Field>
             </div>
           </Panel>
@@ -475,15 +630,15 @@ export function NewDeploymentPage() {
                 />
               </div>
               <Button onClick={runQuick} disabled={busy || !quickReady}>
-                {quickIsRepo ? <GitFork className="h-4 w-4" aria-hidden="true" /> : <Rocket className="h-4 w-4" aria-hidden="true" />}
-                {busyKey === "quick" ? "Working…" : "Deploy"}
+                {quickIsRepo ? <GitFork className="h-4 w-4" aria-hidden="true" /> : <Boxes className="h-4 w-4" aria-hidden="true" />}
+                {busyKey === "quick" ? "Working…" : "Add service"}
               </Button>
             </div>
             {quickValue.trim() && (
               <p className="mt-2 text-xs text-muted-foreground">
                 {quickIsRepo
-                  ? `Looks like a public Git repository — builds its Dockerfile and deploys to ${projectName}.`
-                  : `Deploys this image to ${projectName} on port ${quickPort || "…"}.`}
+                  ? `Looks like a public Git repository — builds its Dockerfile and deploys a service to ${projectName}.`
+                  : `Adds an image service to ${projectName} on port ${quickPort || "…"}.`}
               </p>
             )}
             {quickIsRepo && quickValue.trim() && portHint && (
@@ -563,7 +718,7 @@ export function NewDeploymentPage() {
                             <Button
                               size="sm"
                               variant="secondary"
-                              disabled={busy || !canConnect}
+                              disabled={busy || !canDeploy}
                               onClick={() => {
                                 setError("");
                                 setSelectedRepoFullName(r.fullName);
@@ -588,10 +743,10 @@ export function NewDeploymentPage() {
                             </div>
                             <Button
                               size="sm"
-                              disabled={busy || !canConnect || !repoBranch}
-                              onClick={() => connectOAuthRepo(r.owner, r.name, repoBranch, `repo:${r.fullName}`)}
+                              disabled={busy || !canDeploy || !repoBranch}
+                              onClick={() => createOAuthGitService(r.owner, r.name, repoBranch, `repo:${r.fullName}`)}
                             >
-                              {busyKey === `repo:${r.fullName}` ? "Connecting…" : "Connect"}
+                              {busyKey === `repo:${r.fullName}` ? "Adding…" : "Add service"}
                             </Button>
                           </div>
                         )}
@@ -655,7 +810,7 @@ export function NewDeploymentPage() {
                             disabled={busy || !canDeploy}
                             onClick={() => runTemplate(t)}
                           >
-                            {busyKey === key ? (isImg ? "Starting…" : "Building…") : "Deploy"}
+                            {busyKey === key ? (isImg ? "Starting…" : "Building…") : "Add service"}
                           </Button>
                         </div>
                       );
@@ -674,11 +829,19 @@ export function NewDeploymentPage() {
 const BACK_LINK_CLS =
   "inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground";
 
-// looksLikeGitUrl decides whether the quick box should connect a repo (a clear Git URL)
-// rather than deploy an image. A bare "owner/name" stays an image (the common quick path),
-// and so do registry refs like ghcr.io/org/img; only an explicit scheme or a GitHub host
-// counts as a repo. The GitHub match is anchored to the start with a trailing slash so a
-// lookalike host (github.com.evil.com) or a smuggled mid-string "github.com" can't slip
+// imageNameHint derives a friendly default service name from an image ref: the final path
+// segment, minus any tag/digest (e.g. ghcr.io/org/api:1.2 → "api").
+function imageNameHint(imageRef: string): string {
+  const path = imageRef.trim().split("/").pop() ?? "";
+  const name = path.split("@")[0].split(":")[0];
+  return name || "service";
+}
+
+// looksLikeGitUrl decides whether the quick box should create a git service (a clear Git
+// URL) rather than an image service. A bare "owner/name" stays an image (the common quick
+// path), and so do registry refs like ghcr.io/org/img; only an explicit scheme or a GitHub
+// host counts as a repo. The GitHub match is anchored to the start with a trailing slash so
+// a lookalike host (github.com.evil.com) or a smuggled mid-string "github.com" can't slip
 // through — this is a routing hint, not a security gate, but the substring form is fragile.
 function looksLikeGitUrl(raw: string): boolean {
   const s = raw.trim().toLowerCase();

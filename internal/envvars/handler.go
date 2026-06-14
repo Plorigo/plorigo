@@ -21,9 +21,9 @@ var _ controlplanev1connect.EnvVarServiceHandler = (*handler)(nil)
 
 func (h *handler) SetEnvVar(ctx context.Context, req *connect.Request[controlplanev1.SetEnvVarRequest]) (*connect.Response[controlplanev1.SetEnvVarResponse], error) {
 	ev, err := h.svc.Set(ctx, SetInput{
-		EnvironmentID: req.Msg.GetEnvironmentId(),
-		Key:           req.Msg.GetKey(),
-		Value:         req.Msg.GetValue(),
+		ServiceID: req.Msg.GetServiceId(),
+		Key:       req.Msg.GetKey(),
+		Value:     req.Msg.GetValue(),
 	})
 	if err != nil {
 		return nil, problem.ToConnect(err)
@@ -32,7 +32,7 @@ func (h *handler) SetEnvVar(ctx context.Context, req *connect.Request[controlpla
 }
 
 func (h *handler) ListEnvVars(ctx context.Context, req *connect.Request[controlplanev1.ListEnvVarsRequest]) (*connect.Response[controlplanev1.ListEnvVarsResponse], error) {
-	evs, err := h.svc.List(ctx, req.Msg.GetEnvironmentId())
+	evs, err := h.svc.List(ctx, req.Msg.GetServiceId())
 	if err != nil {
 		return nil, problem.ToConnect(err)
 	}
@@ -45,8 +45,8 @@ func (h *handler) ListEnvVars(ctx context.Context, req *connect.Request[controlp
 
 func (h *handler) DeleteEnvVar(ctx context.Context, req *connect.Request[controlplanev1.DeleteEnvVarRequest]) (*connect.Response[controlplanev1.DeleteEnvVarResponse], error) {
 	if err := h.svc.Delete(ctx, DeleteInput{
-		EnvironmentID: req.Msg.GetEnvironmentId(),
-		Key:           req.Msg.GetKey(),
+		ServiceID: req.Msg.GetServiceId(),
+		Key:       req.Msg.GetKey(),
 	}); err != nil {
 		return nil, problem.ToConnect(err)
 	}
@@ -55,11 +55,11 @@ func (h *handler) DeleteEnvVar(ctx context.Context, req *connect.Request[control
 
 func toProto(e EnvVar) *controlplanev1.EnvVar {
 	return &controlplanev1.EnvVar{
-		Id:            e.ID,
-		EnvironmentId: e.EnvironmentID,
-		Key:           e.Key,
-		Value:         e.Value,
-		CreatedAt:     e.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:     e.UpdatedAt.UTC().Format(time.RFC3339),
+		Id:        e.ID,
+		ServiceId: e.ServiceID,
+		Key:       e.Key,
+		Value:     e.Value,
+		CreatedAt: e.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt: e.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 }

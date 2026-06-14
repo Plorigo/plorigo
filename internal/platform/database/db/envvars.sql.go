@@ -11,49 +11,45 @@ import (
 
 const deleteEnvVar = `-- name: DeleteEnvVar :one
 DELETE FROM env_vars
-WHERE environment_id = $1 AND key = $2
+WHERE service_id = $1 AND key = $2
 RETURNING id
 `
 
 type DeleteEnvVarParams struct {
-	EnvironmentID string
-	Key           string
+	ServiceID string
+	Key       string
 }
 
 // RETURNING id lets the caller tell a real delete from a no-op (no row -> ErrNoRows
 // -> NotFound), so a delete that removed nothing is never audited as a change.
 func (q *Queries) DeleteEnvVar(ctx context.Context, arg DeleteEnvVarParams) (string, error) {
-	row := q.db.QueryRow(ctx, deleteEnvVar, arg.EnvironmentID, arg.Key)
+	row := q.db.QueryRow(ctx, deleteEnvVar, arg.ServiceID, arg.Key)
 	var id string
 	err := row.Scan(&id)
 	return id, err
 }
 
-const getEnvironmentWorkspaceID = `-- name: GetEnvironmentWorkspaceID :one
-SELECT p.workspace_id
-FROM environments e
-JOIN projects p ON p.id = e.project_id
-WHERE e.id = $1
+const getServiceWorkspaceID = `-- name: GetServiceWorkspaceID :one
+SELECT workspace_id FROM services WHERE id = $1
 `
 
-// Resolves an environment's owning workspace through its parent project, so this
-// environment-scoped module can authorize and audit against the workspace.
-func (q *Queries) GetEnvironmentWorkspaceID(ctx context.Context, id string) (string, error) {
-	row := q.db.QueryRow(ctx, getEnvironmentWorkspaceID, id)
+// Resolves a service's owning workspace (denormalized onto the service row), so this
+// service-scoped module can authorize and audit against the workspace.
+func (q *Queries) GetServiceWorkspaceID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, getServiceWorkspaceID, id)
 	var workspace_id string
 	err := row.Scan(&workspace_id)
 	return workspace_id, err
 }
 
-const listEnvVarsByEnvironment = `-- name: ListEnvVarsByEnvironment :many
-SELECT id, environment_id, key, value, created_at, updated_at
-FROM env_vars
-WHERE environment_id = $1
+const listEnvVarsByService = `-- name: ListEnvVarsByService :many
+SELECT id, key, value, created_at, updated_at, service_id FROM env_vars
+WHERE service_id = $1
 ORDER BY key
 `
 
-func (q *Queries) ListEnvVarsByEnvironment(ctx context.Context, environmentID string) ([]EnvVar, error) {
-	rows, err := q.db.Query(ctx, listEnvVarsByEnvironment, environmentID)
+func (q *Queries) ListEnvVarsByService(ctx context.Context, serviceID string) ([]EnvVar, error) {
+	rows, err := q.db.Query(ctx, listEnvVarsByService, serviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -63,11 +59,11 @@ func (q *Queries) ListEnvVarsByEnvironment(ctx context.Context, environmentID st
 		var i EnvVar
 		if err := rows.Scan(
 			&i.ID,
-			&i.EnvironmentID,
 			&i.Key,
 			&i.Value,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ServiceID,
 		); err != nil {
 			return nil, err
 		}
@@ -80,32 +76,32 @@ func (q *Queries) ListEnvVarsByEnvironment(ctx context.Context, environmentID st
 }
 
 const upsertEnvVar = `-- name: UpsertEnvVar :one
-INSERT INTO env_vars (environment_id, key, value)
+INSERT INTO env_vars (service_id, key, value)
 VALUES ($1, $2, $3)
-ON CONFLICT (environment_id, key)
+ON CONFLICT (service_id, key)
 DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-RETURNING id, environment_id, key, value, created_at, updated_at
+RETURNING id, key, value, created_at, updated_at, service_id
 `
 
 type UpsertEnvVarParams struct {
-	EnvironmentID string
-	Key           string
-	Value         string
+	ServiceID string
+	Key       string
+	Value     string
 }
 
-// Create-or-update by (environment_id, key). The conflict is the success path (env
-// vars are mutable config), so callers never see an AlreadyExists error. RETURNING
-// yields the row id on both the insert and the update path, for the audit target.
+// Create-or-update by (service_id, key). The conflict is the success path (env vars are
+// mutable config), so callers never see an AlreadyExists error. RETURNING yields the row id
+// on both the insert and the update path, for the audit target.
 func (q *Queries) UpsertEnvVar(ctx context.Context, arg UpsertEnvVarParams) (EnvVar, error) {
-	row := q.db.QueryRow(ctx, upsertEnvVar, arg.EnvironmentID, arg.Key, arg.Value)
+	row := q.db.QueryRow(ctx, upsertEnvVar, arg.ServiceID, arg.Key, arg.Value)
 	var i EnvVar
 	err := row.Scan(
 		&i.ID,
-		&i.EnvironmentID,
 		&i.Key,
 		&i.Value,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ServiceID,
 	)
 	return i, err
 }

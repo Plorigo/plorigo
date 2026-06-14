@@ -426,8 +426,8 @@ func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *test
 		containerID: "new-container",
 		hostPort:    32768,
 		routes: []managedRoute{
-			{EnvironmentID: "env-0", DeploymentID: "dep-0", ContainerID: "other-container", HostPort: 32767},
-			{EnvironmentID: "env-1", DeploymentID: "old-dep", ContainerID: "old-container", HostPort: 32766},
+			{ServiceID: "env-0", DeploymentID: "dep-0", ContainerID: "other-container", HostPort: 32767},
+			{ServiceID: "env-1", DeploymentID: "old-dep", ContainerID: "old-container", HostPort: 32766},
 		},
 	}
 	runHealthCheck = func(_ context.Context, _ int32) error {
@@ -451,8 +451,8 @@ func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *test
 		t.Fatalf("ops = %v, want %v", runtime.ops, wantOps)
 	}
 	if !reflect.DeepEqual(router.routes, []managedRoute{
-		{EnvironmentID: "env-0", DeploymentID: "dep-0", ContainerID: "other-container", HostPort: 32767},
-		{EnvironmentID: "env-1", DeploymentID: "dep-1", ContainerID: "new-container", HostPort: 32768},
+		{ServiceID: "env-0", DeploymentID: "dep-0", ContainerID: "other-container", HostPort: 32767},
+		{ServiceID: "env-1", DeploymentID: "dep-1", ContainerID: "new-container", HostPort: 32768},
 	}) {
 		t.Fatalf("routes = %+v, want old env-1 excluded and new container included", router.routes)
 	}

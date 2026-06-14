@@ -92,13 +92,17 @@ image; for a **git** deployment it instead **clones** the repo (an anonymous sha
 go-git — public repos only, no credential) and **builds its Dockerfile with BuildKit**
 (`docker build`, `DOCKER_BUILDKIT=1`) into a local image tag, reporting `cloning → building`
 with the build output as logs and recording the `commit_sha` and `built_image_ref`. Both kinds
-then converge: the agent creates and starts the new container with the requested port published
-to an ephemeral host port — and when a git deployment **requests no port**, the agent
-**auto-detects** it from the built image's `EXPOSE` (`docker image inspect`, lowest TCP port;
-failing clearly if the image exposes none) — **health-checks** the published port, **validates
-and reloads Caddy** so the app is reachable through a route derived from the environment id,
-then replaces any previous container for that environment (matched by a `plorigo.environment`
-label). It reports `… → starting → routing → running` (or `failed`) plus the relevant logs. The
+then converge: the agent creates and starts the new container, joining it to its
+**per-environment Docker network** (`plorigo-{environment-id}`) under a `--network-alias` equal
+to the service's **slug** so siblings reach it at `http://{slug}:{port}`. For a **public**
+service it additionally publishes the requested port to an ephemeral host port — and when a git
+deployment **requests no port**, the agent **auto-detects** it from the built image's `EXPOSE`
+(`docker image inspect`, lowest TCP port; failing clearly if the image exposes none) —
+**health-checks** the published port and **validates and reloads Caddy** so the app is reachable
+through a route derived from the **service id**; a **private** service publishes nothing and
+gets no route. Either way it then replaces any previous container **for that service** (matched
+by a `plorigo.service` label). It reports `… → starting → routing → running` (or `failed`) plus
+the relevant logs. The
 clone/build runs in a per-deploy `0700` temp dir that is always removed afterward. The agent
 manages Docker through the Engine API (the moby SDK) for run/replace/logs, shells out to the
 **`docker` CLI** for the BuildKit build, and shells out to the **`caddy` CLI** for config
@@ -125,8 +129,9 @@ The agent owns Caddy's desired state on its server. The loop is:
 3. Reload Caddy through its admin API, or start it with the validated config if no instance is running.
 4. Report success/failure to the control plane.
 
-The first route shape is HTTP-only and derives a host from the environment id under the agent's
-configured base domain. If validation or reload fails, the previous route remains active, the
+The first route shape is HTTP-only and derives a host from the **service id** (carried as the
+job's `app_label`) under the agent's configured base domain, so two services in one environment
+don't collide; only **public** services get a route. If validation or reload fails, the previous route remains active, the
 new container is cleaned up, and the deployment timeline records the Caddy failure. This is also
 how traffic is switched during a deploy or rollback — see [deployment-engine.md](./deployment-engine.md).
 

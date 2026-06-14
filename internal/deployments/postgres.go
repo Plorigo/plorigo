@@ -34,6 +34,17 @@ func (s *postgresStore) WorkspaceAndProjectForEnvironment(ctx context.Context, e
 	return row.WorkspaceID, row.ProjectID, true, nil
 }
 
+func (s *postgresStore) WorkspaceAndProjectForService(ctx context.Context, serviceID string) (string, string, bool, error) {
+	row, err := db.New(s.pool).GetServiceWorkspaceAndProject(ctx, serviceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", "", false, nil
+		}
+		return "", "", false, err
+	}
+	return row.WorkspaceID, row.ProjectID, true, nil
+}
+
 func (s *postgresStore) WorkspaceForServer(ctx context.Context, serverID string) (string, bool, error) {
 	workspaceID, err := db.New(s.pool).GetServerWorkspace(ctx, serverID)
 	if err != nil {
@@ -67,8 +78,8 @@ func (s *postgresStore) AgentServerByCredential(ctx context.Context, credentialH
 	return row.ID, row.ServerID, true, nil
 }
 
-func (s *postgresStore) EnvVarsForEnvironment(ctx context.Context, environmentID string) (map[string]string, error) {
-	rows, err := db.New(s.pool).ListEnvVarsByEnvironment(ctx, environmentID)
+func (s *postgresStore) EnvVarsForService(ctx context.Context, serviceID string) (map[string]string, error) {
+	rows, err := db.New(s.pool).ListEnvVarsByService(ctx, serviceID)
 	if err != nil {
 		return nil, err
 	}
@@ -79,26 +90,44 @@ func (s *postgresStore) EnvVarsForEnvironment(ctx context.Context, environmentID
 	return out, nil
 }
 
-func (s *postgresStore) SourceForProject(ctx context.Context, projectID string) (Source, bool, error) {
-	row, err := db.New(s.pool).GetProjectSourceForDeploy(ctx, projectID)
+func (s *postgresStore) ServiceForDeploy(ctx context.Context, serviceID string) (ServiceForDeploy, bool, error) {
+	return s.serviceForDeploy(ctx, s.pool, serviceID)
+}
+
+func (s *postgresStore) ServiceForDeployTx(ctx context.Context, tx database.Tx, serviceID string) (ServiceForDeploy, bool, error) {
+	return s.serviceForDeploy(ctx, tx, serviceID)
+}
+
+// serviceForDeploy resolves a service's source + routing facts from the services table
+// through q (the pool for a committed read, or a tx to see a same-transaction insert).
+func (s *postgresStore) serviceForDeploy(ctx context.Context, q db.DBTX, serviceID string) (ServiceForDeploy, bool, error) {
+	row, err := db.New(q).GetServiceForDeploy(ctx, serviceID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Source{}, false, nil
+			return ServiceForDeploy{}, false, nil
 		}
-		return Source{}, false, err
+		return ServiceForDeploy{}, false, err
 	}
-	return Source{
-		// Provider is GitHub-only today (project_sources.provider CHECK); construct the
-		// standard clone URL from owner/repo.
-		CloneURL:      "https://github.com/" + row.Owner + "/" + row.Repo + ".git",
+	return ServiceForDeploy{
+		EnvironmentID: row.EnvironmentID,
+		ProjectID:     row.ProjectID,
+		WorkspaceID:   row.WorkspaceID,
+		SourceKind:    row.SourceKind,
+		ImageRef:      row.ImageRef,
+		SourceAccess:  row.SourceAccess,
+		Owner:         row.Owner,
+		Repo:          row.Repo,
 		Branch:        row.Branch,
 		DefaultBranch: row.DefaultBranch,
-		Access:        row.Access,
+		ContainerPort: row.ContainerPort,
+		Visibility:    row.Visibility,
+		Slug:          row.Slug,
 	}, true, nil
 }
 
 func (s *postgresStore) InsertDeployment(ctx context.Context, tx database.Tx, d NewDeployment) (Deployment, error) {
 	row, err := db.New(tx).CreateDeployment(ctx, db.CreateDeploymentParams{
+		ServiceID:     d.ServiceID,
 		EnvironmentID: d.EnvironmentID,
 		ProjectID:     d.ProjectID,
 		WorkspaceID:   d.WorkspaceID,
@@ -114,6 +143,7 @@ func (s *postgresStore) InsertDeployment(ctx context.Context, tx database.Tx, d 
 
 func (s *postgresStore) InsertDeploymentFromGit(ctx context.Context, tx database.Tx, d NewDeploymentFromGit) (Deployment, error) {
 	row, err := db.New(tx).CreateDeploymentFromGit(ctx, db.CreateDeploymentFromGitParams{
+		ServiceID:     d.ServiceID,
 		EnvironmentID: d.EnvironmentID,
 		ProjectID:     d.ProjectID,
 		WorkspaceID:   d.WorkspaceID,
@@ -138,6 +168,14 @@ func (s *postgresStore) GetDeployment(ctx context.Context, deploymentID string) 
 		return Deployment{}, false, err
 	}
 	return deploymentFromRow(row), true, nil
+}
+
+func (s *postgresStore) ListByService(ctx context.Context, serviceID string) ([]Deployment, error) {
+	rows, err := db.New(s.pool).ListDeploymentsByService(ctx, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	return deploymentsFromRows(rows), nil
 }
 
 func (s *postgresStore) ListByEnvironment(ctx context.Context, environmentID string) ([]Deployment, error) {
@@ -204,11 +242,18 @@ func (s *postgresStore) UpdateStatus(ctx context.Context, tx database.Tx, u Stat
 	return err
 }
 
-func (s *postgresStore) SupersedePreviousRunning(ctx context.Context, tx database.Tx, environmentID, serverID, deploymentID string) error {
+func (s *postgresStore) SupersedePreviousRunning(ctx context.Context, tx database.Tx, serviceID, serverID, deploymentID string) error {
 	return db.New(tx).SupersedePreviousRunning(ctx, db.SupersedePreviousRunningParams{
-		EnvironmentID: environmentID,
-		ServerID:      serverID,
-		ID:            deploymentID,
+		ServiceID: serviceID,
+		ServerID:  serverID,
+		ID:        deploymentID,
+	})
+}
+
+func (s *postgresStore) UpdateServiceRouteURL(ctx context.Context, tx database.Tx, serviceID, routeURL string) error {
+	return db.New(tx).UpdateServiceRouteURL(ctx, db.UpdateServiceRouteURLParams{
+		ID:       serviceID,
+		RouteUrl: routeURL,
 	})
 }
 
@@ -234,6 +279,7 @@ func deploymentsFromRows(rows []db.Deployment) []Deployment {
 func deploymentFromRow(r db.Deployment) Deployment {
 	return Deployment{
 		ID:            r.ID,
+		ServiceID:     r.ServiceID,
 		EnvironmentID: r.EnvironmentID,
 		ProjectID:     r.ProjectID,
 		WorkspaceID:   r.WorkspaceID,

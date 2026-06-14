@@ -18,22 +18,6 @@ type ConnectionWrite struct {
 	ConnectedBy     *string
 }
 
-// ProjectSourceWrite is the data UpsertProjectSource persists. ConnectionID is empty for
-// a public source (no connection); Access records how the source is reached.
-type ProjectSourceWrite struct {
-	ProjectID     string
-	ConnectionID  string
-	Provider      string
-	Owner         string
-	Repo          string
-	FullName      string
-	Branch        string
-	DefaultBranch string
-	IsPrivate     bool
-	HTMLURL       string
-	Access        string
-}
-
 // Store is the repository port the service needs. Implemented by postgres.go, faked in
 // tests. Mutations take a database.Tx so they commit with the audit row. The store only
 // ever sees the sealed token — the service seals before calling it and opens after
@@ -48,20 +32,10 @@ type Store interface {
 	GetConnectionToken(ctx context.Context, workspaceID, provider string) (ciphertext []byte, ok bool, err error)
 	// DeleteConnection removes the workspace's connection. ok is false when no row matched.
 	DeleteConnection(ctx context.Context, tx database.Tx, workspaceID, provider string) (deletedID string, ok bool, err error)
-	// CountProjectSourcesByConnection guards DisconnectGitHub.
-	CountProjectSourcesByConnection(ctx context.Context, connectionID string) (int64, error)
-
-	UpsertProjectSource(ctx context.Context, tx database.Tx, s ProjectSourceWrite) (Source, error)
-	// GetProjectSource returns a project's source. ok is false when none is connected.
-	GetProjectSource(ctx context.Context, projectID string) (Source, bool, error)
-	ListByWorkspace(ctx context.Context, workspaceID string) ([]Source, error)
-	// DeleteProjectSource removes a project's source. ok is false when no row matched.
-	DeleteProjectSource(ctx context.Context, tx database.Tx, projectID string) (deletedID string, ok bool, err error)
-
-	// WorkspaceIDForProject resolves a project's owning workspace, so this
-	// project-scoped module can authorize and audit against the workspace. ok is false
-	// (nil error) when the project does not exist.
-	WorkspaceIDForProject(ctx context.Context, projectID string) (workspaceID string, ok bool, err error)
+	// CountServicesByConnection guards DisconnectGitHub: a connection still used by services
+	// (which fold the OAuth source onto their row) must not be removed. Reads the services
+	// table as a sibling-table read (modules.md Rule 2).
+	CountServicesByConnection(ctx context.Context, connectionID string) (int64, error)
 }
 
 // TxRunner runs fn inside one transaction. Implemented by *database.DB; declared here as
@@ -94,9 +68,7 @@ type GitHubClient interface {
 	AuthorizeURL(clientID, redirectURI, scopes, state string) string
 	ExchangeCode(ctx context.Context, clientID, clientSecret, code, redirectURI string) (github.Token, error)
 	GetAuthenticatedUser(ctx context.Context, token string) (github.User, error)
-	GetRepository(ctx context.Context, token, owner, repo string) (github.RepoInfo, error)
 	ListUserRepos(ctx context.Context, token string, opts github.ListReposOptions) ([]github.RepoInfo, error)
 	ListBranches(ctx context.Context, token, owner, repo string) ([]string, error)
-	GetBranch(ctx context.Context, token, owner, repo, branch string) error
 	RevokeToken(ctx context.Context, clientID, clientSecret, token string) error
 }

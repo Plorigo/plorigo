@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package controlplane.v1;
 
-// A Deployment is one attempt to run an app in an environment on a connected server.
+// A Deployment is one attempt to run a SERVICE in an environment on a connected server.
 // The control plane records it as `queued`; the server's agent claims it and reports
 // progress. There are two source kinds: an `image` deployment pulls a PRE-BUILT image;
 // a `git` deployment clones a repo and builds its Dockerfile on the server first. See
@@ -10,7 +10,7 @@ package controlplane.v1;
 message Deployment {
   string id = 1;
   string environment_id = 2;
-  string project_id = 3;   // derived via environment -> project (not stored)
+  string project_id = 3;   // denormalized from the service (not re-resolved)
   string workspace_id = 4;
   string server_id = 5;
   string image_ref = 6;    // the pre-built image (image deployments); empty for git
@@ -29,7 +29,8 @@ message Deployment {
   string git_ref = 16;       // the branch/tag built (git deployments)
   string commit_sha = 17;    // the exact commit the agent built
   string built_image_ref = 18; // the local image tag the agent produced
-  string route_url = 19;      // the real deployment URL (e.g. http://{env-id}.localhost:8083)
+  string route_url = 19;      // the real deployment URL (public services only; empty for private)
+  string service_id = 20;     // the owning service (its source, port, and visibility)
 }
 
 // A DeploymentEvent is one entry in a deployment's timeline: either a status
@@ -49,33 +50,29 @@ message DeploymentEvent {
   string stream = 8;
 }
 
-message CreateDeploymentRequest {
-  string environment_id = 1;
+// CreateDeploymentForService deploys (or redeploys) an existing service: the control plane
+// resolves the service's source server-side — a pre-built image, or a PUBLIC git repo it
+// clones and builds — so a caller can't smuggle a private URL through. container_port and
+// git_ref are optional overrides; empty/0 means use the service's configured port and
+// branch. Non-secret env vars are NOT passed here: the agent injects the service's
+// configured env_vars at run time (see agent.v1.DeployService.PollDeployment).
+message CreateDeploymentForServiceRequest {
+  string service_id = 1;
   string server_id = 2;
-  string image_ref = 3;
-  int32 container_port = 4;
-  // Non-secret env vars are NOT passed here: the agent injects the environment's
-  // configured env_vars at run time (see agent.v1.DeployService.PollDeployment).
+  int32 container_port = 3; // optional override; 0 = the service's configured port
+  string git_ref = 4;       // optional branch/tag; empty = the service's branch/default
 }
 
-message CreateDeploymentResponse {
+message CreateDeploymentForServiceResponse {
   Deployment deployment = 1;
 }
 
-// CreateDeploymentFromSource triggers a build-and-deploy of the project's connected
-// repository. It deliberately carries NO repo URL: the control plane resolves the
-// project's source server-side (and only allows PUBLIC repos this slice), so a caller
-// can't smuggle a private URL through. git_ref is optional — empty means the source's
-// default branch.
-message CreateDeploymentFromSourceRequest {
-  string environment_id = 1;
-  string server_id = 2;
-  int32 container_port = 3;
-  string git_ref = 4; // optional branch/tag; empty = the source's default branch
+message ListDeploymentsByServiceRequest {
+  string service_id = 1;
 }
 
-message CreateDeploymentFromSourceResponse {
-  Deployment deployment = 1;
+message ListDeploymentsByServiceResponse {
+  repeated Deployment deployments = 1;
 }
 
 message GetDeploymentRequest {
@@ -119,14 +116,16 @@ message ListDeploymentEventsResponse {
   repeated DeploymentEvent events = 1;
 }
 
-// DeploymentService is the dashboard-facing API: trigger a deployment, read its
-// status and timeline, and list deployments by environment, project, or workspace.
-// Every RPC is session/token-authenticated and policy-authorized (the agent-facing
-// claim/report side is agent.v1.DeployService).
+// DeploymentService is the dashboard-facing API: trigger a deployment of a service, read
+// its status and timeline, and list deployments by service, environment, project, or
+// workspace. Every RPC is session/token-authenticated and policy-authorized (the
+// agent-facing claim/report side is agent.v1.DeployService). The first deploy of a brand
+// new service is enqueued by ServiceService.CreateService (deploy_now); this RPC is for
+// redeploying an existing service.
 service DeploymentService {
-  rpc CreateDeployment(CreateDeploymentRequest) returns (CreateDeploymentResponse);
-  rpc CreateDeploymentFromSource(CreateDeploymentFromSourceRequest) returns (CreateDeploymentFromSourceResponse);
+  rpc CreateDeploymentForService(CreateDeploymentForServiceRequest) returns (CreateDeploymentForServiceResponse);
   rpc GetDeployment(GetDeploymentRequest) returns (GetDeploymentResponse);
+  rpc ListDeploymentsByService(ListDeploymentsByServiceRequest) returns (ListDeploymentsByServiceResponse);
   rpc ListDeploymentsByEnvironment(ListDeploymentsByEnvironmentRequest) returns (ListDeploymentsByEnvironmentResponse);
   rpc ListDeploymentsByProject(ListDeploymentsByProjectRequest) returns (ListDeploymentsByProjectResponse);
   rpc ListDeploymentsByWorkspace(ListDeploymentsByWorkspaceRequest) returns (ListDeploymentsByWorkspaceResponse);

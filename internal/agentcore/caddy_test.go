@@ -15,8 +15,8 @@ func TestCaddyRender_StableSortedRoutes(t *testing.T) {
 	m := testCaddyManager(t)
 
 	got, err := m.render([]managedRoute{
-		{EnvironmentID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", DeploymentID: "dep-b", ContainerID: "c-b", HostPort: 3002},
-		{EnvironmentID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", DeploymentID: "dep-a", ContainerID: "c-a", HostPort: 3001},
+		{ServiceID: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", DeploymentID: "dep-b", ContainerID: "c-b", HostPort: 3002},
+		{ServiceID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", DeploymentID: "dep-a", ContainerID: "c-a", HostPort: 3001},
 	})
 	if err != nil {
 		t.Fatalf("render: %v", err)
@@ -36,7 +36,7 @@ func TestCaddyRender_StableSortedRoutes(t *testing.T) {
 
 func TestCaddyRender_RejectsUnsafeHostParts(t *testing.T) {
 	m := testCaddyManager(t)
-	if _, err := m.render([]managedRoute{{EnvironmentID: "bad label", DeploymentID: "dep", ContainerID: "c", HostPort: 3000}}); err == nil {
+	if _, err := m.render([]managedRoute{{ServiceID: "bad label", DeploymentID: "dep", ContainerID: "c", HostPort: 3000}}); err == nil {
 		t.Fatal("render accepted an unsafe environment label")
 	}
 	if _, err := newCaddyManager(Options{DataDir: t.TempDir(), CaddyBaseDomain: "https://example.com"}); err == nil {
@@ -55,7 +55,7 @@ func TestCaddyApply_ValidatesBeforeReloadAndCapturesOutput(t *testing.T) {
 		return []byte("reloaded\n"), nil
 	}
 
-	logs, err := m.apply(context.Background(), []managedRoute{{EnvironmentID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", DeploymentID: "dep", ContainerID: "c", HostPort: 3000}})
+	logs, err := m.apply(context.Background(), []managedRoute{{ServiceID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", DeploymentID: "dep", ContainerID: "c", HostPort: 3000}})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestCaddyApply_ReloadFailureRestoresPreviousConfig(t *testing.T) {
 		return nil, nil
 	}
 
-	logs, err := m.apply(context.Background(), []managedRoute{{EnvironmentID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", DeploymentID: "dep", ContainerID: "c", HostPort: 3000}})
+	logs, err := m.apply(context.Background(), []managedRoute{{ServiceID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", DeploymentID: "dep", ContainerID: "c", HostPort: 3000}})
 	if err == nil || !strings.Contains(err.Error(), "reload Caddy config") {
 		t.Fatalf("apply err = %v, want reload failure", err)
 	}
@@ -120,7 +120,7 @@ func TestCaddyApply_ReloadFailureStartsCaddy(t *testing.T) {
 		return nil, nil
 	}
 
-	logs, err := m.apply(context.Background(), []managedRoute{{EnvironmentID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", DeploymentID: "dep", ContainerID: "c", HostPort: 3000}})
+	logs, err := m.apply(context.Background(), []managedRoute{{ServiceID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", DeploymentID: "dep", ContainerID: "c", HostPort: 3000}})
 	if err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestCaddyApply_RefusesNonPlorigoConfig(t *testing.T) {
 	if err := os.WriteFile(m.configPath, []byte("localhost {\n\treverse_proxy 127.0.0.1:8080\n}\n"), 0o600); err != nil {
 		t.Fatalf("write existing config: %v", err)
 	}
-	if _, err := m.apply(context.Background(), []managedRoute{{EnvironmentID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", DeploymentID: "dep", ContainerID: "c", HostPort: 3000}}); err == nil {
+	if _, err := m.apply(context.Background(), []managedRoute{{ServiceID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", DeploymentID: "dep", ContainerID: "c", HostPort: 3000}}); err == nil {
 		t.Fatal("apply overwrote a non-Plorigo Caddyfile")
 	}
 }

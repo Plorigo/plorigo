@@ -41,6 +41,10 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionSourceConnect:     true,
 		authz.ActionSourceRead:        true,
 		authz.ActionSourceDisconnect:  true,
+		authz.ActionServiceCreate:     true,
+		authz.ActionServiceRead:       true,
+		authz.ActionServiceUpdate:     true,
+		authz.ActionServiceDelete:     true,
 	},
 	authz.RoleAdmin: {
 		authz.ActionMemberInvite:      true,
@@ -67,6 +71,10 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionSourceConnect:     true,
 		authz.ActionSourceRead:        true,
 		authz.ActionSourceDisconnect:  true,
+		authz.ActionServiceCreate:     true,
+		authz.ActionServiceRead:       true,
+		authz.ActionServiceUpdate:     true,
+		authz.ActionServiceDelete:     true,
 	},
 	authz.RoleMember: {
 		authz.ActionMemberList:        true,
@@ -89,6 +97,10 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionSourceConnect:     true,
 		authz.ActionSourceRead:        true,
 		authz.ActionSourceDisconnect:  true,
+		authz.ActionServiceCreate:     true,
+		authz.ActionServiceRead:       true,
+		authz.ActionServiceUpdate:     true,
+		authz.ActionServiceDelete:     true,
 	},
 	authz.RoleViewer: {
 		authz.ActionMemberList:      true,
@@ -104,6 +116,8 @@ var permissions = map[string]map[authz.Action]bool{
 		// A viewer may see the connected repository metadata but not connect, list
 		// repositories (which uses the token), or disconnect.
 		authz.ActionSourceRead: true,
+		// A viewer may see services but not create, update, or delete them.
+		authz.ActionServiceRead: true,
 	},
 }
 

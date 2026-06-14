@@ -18,11 +18,12 @@ import (
 )
 
 // Labels the agent stamps on every container it manages, so it can find and replace the
-// previous container for an environment on a redeploy and recognize its own containers.
+// previous container for a SERVICE on a redeploy and recognize its own containers. The
+// label value is the service id (carried as the job's app_label).
 const (
-	labelManaged     = "plorigo.managed"
-	labelEnvironment = "plorigo.environment"
-	labelDeployment  = "plorigo.deployment"
+	labelManaged    = "plorigo.managed"
+	labelService    = "plorigo.service"
+	labelDeployment = "plorigo.deployment"
 )
 
 const (
@@ -70,7 +71,10 @@ func (d *dockerClient) serverVersion(ctx context.Context) (string, error) {
 	return v.Version, nil
 }
 
-// runInput is everything needed to run one deployment's container.
+// runInput is everything needed to run one deployment's container. public controls whether
+// the container publishes a host port (so Caddy can route it); a private service publishes
+// nothing to the host and is reached only by siblings over networkName (its DNS alias is
+// networkAlias, the service slug).
 type runInput struct {
 	name          string
 	imageRef      string
@@ -78,6 +82,9 @@ type runInput struct {
 	containerPort int32
 	appLabel      string
 	deploymentID  string
+	public        bool
+	networkName   string
+	networkAlias  string
 }
 
 // pull pulls imageRef, surfacing distinct progress status lines through emit. It returns
@@ -105,13 +112,13 @@ func (d *dockerClient) pull(ctx context.Context, imageRef string, emit func(stri
 }
 
 // replacePreviousExcept stops and removes any older container created for this app
-// label (the environment), keeping the newly healthy container by id. This runs only
+// label (the service), keeping the newly healthy container by id. This runs only
 // after the replacement passes health checks, so a bad redeploy leaves the previous
 // release running.
 func (d *dockerClient) replacePreviousExcept(ctx context.Context, appLabel, keepID string, emit func(string)) error {
 	list, err := d.cli.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
-		Filters: client.Filters{}.Add("label", labelEnvironment+"="+appLabel),
+		Filters: client.Filters{}.Add("label", labelService+"="+appLabel),
 	})
 	if err != nil {
 		return err
@@ -141,14 +148,41 @@ func (d *dockerClient) removeContainer(ctx context.Context, containerID string, 
 	return nil
 }
 
-// run creates and starts the container, publishing containerPort to an ephemeral host
-// port, and returns the container id and the chosen host port. The container id is
-// returned even on a start/port error so the caller can still record and clean it up.
+// run creates and starts the container and returns its id and host port. A PUBLIC service
+// publishes containerPort to an ephemeral host port (so Caddy can route it), discovered and
+// returned; a PRIVATE service publishes nothing and returns host port 0 (it is reached only
+// over the per-environment network). Every service joins networkName with networkAlias (its
+// slug) so siblings resolve it by name. The container id is returned even on a start/port
+// error so the caller can still record and clean it up.
 func (d *dockerClient) run(ctx context.Context, in runInput) (string, int32, error) {
 	port, err := network.ParsePort(fmt.Sprintf("%d/tcp", in.containerPort))
 	if err != nil {
 		return "", 0, err
 	}
+
+	hostConfig := &container.HostConfig{
+		RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
+	}
+	if in.public {
+		// Let Docker pick a free host port; discovered below.
+		hostConfig.PortBindings = network.PortMap{port: []network.PortBinding{{
+			HostIP:   netip.IPv4Unspecified(),
+			HostPort: "0",
+		}}}
+	}
+
+	// Attach the container to the per-environment network with its slug as a DNS alias, so a
+	// sibling reaches it at http://{alias}:{containerPort}. The network is created lazily.
+	var netConfig *network.NetworkingConfig
+	if in.networkName != "" {
+		if err := d.ensureNetwork(ctx, in.networkName); err != nil {
+			return "", 0, err
+		}
+		netConfig = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
+			in.networkName: {Aliases: aliasList(in.networkAlias)},
+		}}
+	}
+
 	created, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name: in.name,
 		Config: &container.Config{
@@ -156,18 +190,13 @@ func (d *dockerClient) run(ctx context.Context, in runInput) (string, int32, err
 			Env:          in.env,
 			ExposedPorts: network.PortSet{port: struct{}{}},
 			Labels: map[string]string{
-				labelManaged:     "true",
-				labelEnvironment: in.appLabel,
-				labelDeployment:  in.deploymentID,
+				labelManaged:    "true",
+				labelService:    in.appLabel,
+				labelDeployment: in.deploymentID,
 			},
 		},
-		HostConfig: &container.HostConfig{
-			PortBindings: network.PortMap{port: []network.PortBinding{{
-				HostIP:   netip.IPv4Unspecified(),
-				HostPort: "0", // let Docker pick a free host port; discovered below
-			}}},
-			RestartPolicy: container.RestartPolicy{Name: container.RestartPolicyUnlessStopped},
-		},
+		HostConfig:       hostConfig,
+		NetworkingConfig: netConfig,
 	})
 	if err != nil {
 		return "", 0, err
@@ -175,11 +204,41 @@ func (d *dockerClient) run(ctx context.Context, in runInput) (string, int32, err
 	if _, err := d.cli.ContainerStart(ctx, created.ID, client.ContainerStartOptions{}); err != nil {
 		return created.ID, 0, err
 	}
+	// A private service publishes no host port — there is nothing to discover.
+	if !in.public {
+		return created.ID, 0, nil
+	}
 	hostPort, err := d.publishedPort(ctx, created.ID, uint16(in.containerPort))
 	if err != nil {
 		return created.ID, 0, err
 	}
 	return created.ID, hostPort, nil
+}
+
+// ensureNetwork makes sure the per-environment bridge network exists, creating it if not.
+// It tolerates a concurrent create (re-inspecting to confirm) so two parallel deploys into
+// the same environment don't fail.
+func (d *dockerClient) ensureNetwork(ctx context.Context, name string) error {
+	if _, err := d.cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{}); err == nil {
+		return nil
+	}
+	if _, err := d.cli.NetworkCreate(ctx, name, client.NetworkCreateOptions{Driver: "bridge"}); err != nil {
+		// A concurrent create may have won the race; if the network now exists, that's fine.
+		if _, ierr := d.cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{}); ierr == nil {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// aliasList returns the network aliases for a container (the service slug), or none when the
+// alias is empty.
+func aliasList(alias string) []string {
+	if alias == "" {
+		return nil
+	}
+	return []string{alias}
 }
 
 // publishedPort polls the container list for the host port mapped to privatePort. The
@@ -259,17 +318,19 @@ func (d *dockerClient) listManagedRoutes(ctx context.Context) ([]managedRoute, e
 	}
 	out := make([]managedRoute, 0, len(list.Items))
 	for _, c := range list.Items {
-		envID := c.Labels[labelEnvironment]
+		serviceID := c.Labels[labelService]
 		depID := c.Labels[labelDeployment]
 		hostPort := firstPublishedTCPPort(c.Ports)
-		if envID == "" || depID == "" || hostPort == 0 {
+		// A private service publishes no host port, so firstPublishedTCPPort is 0 and it is
+		// naturally excluded here — Caddy only ever routes public services.
+		if serviceID == "" || depID == "" || hostPort == 0 {
 			continue
 		}
 		out = append(out, managedRoute{
-			EnvironmentID: envID,
-			DeploymentID:  depID,
-			ContainerID:   c.ID,
-			HostPort:      hostPort,
+			ServiceID:    serviceID,
+			DeploymentID: depID,
+			ContainerID:  c.ID,
+			HostPort:     hostPort,
 		})
 	}
 	return out, nil

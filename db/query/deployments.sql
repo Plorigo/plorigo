@@ -15,8 +15,8 @@ WHERE e.id = $1;
 SELECT id, server_id FROM agents WHERE credential_hash = $1;
 
 -- name: CreateDeployment :one
-INSERT INTO deployments (environment_id, project_id, workspace_id, server_id, image_ref, container_port)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO deployments (service_id, environment_id, project_id, workspace_id, server_id, image_ref, container_port)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
 -- CreateDeploymentFromGit records a queued deployment whose source is a repo+ref to clone
@@ -24,18 +24,11 @@ RETURNING *;
 -- docs/architecture/deployment-engine.md.
 -- name: CreateDeploymentFromGit :one
 INSERT INTO deployments (
-    environment_id, project_id, workspace_id, server_id,
+    service_id, environment_id, project_id, workspace_id, server_id,
     container_port, source_kind, source_access, clone_url, git_ref
 )
-VALUES ($1, $2, $3, $4, $5, 'git', $6, $7, $8)
+VALUES ($1, $2, $3, $4, $5, $6, 'git', $7, $8, $9)
 RETURNING *;
-
--- GetProjectSourceForDeploy reads a project's connected repository so a git deployment can
--- resolve its clone URL and access kind, without importing the sources module (a sibling-
--- table read, which modules.md Rule 2 permits from a module's postgres.go).
--- name: GetProjectSourceForDeploy :one
-SELECT owner, repo, branch, default_branch, access, html_url
-FROM project_sources WHERE project_id = $1;
 
 -- name: GetDeployment :one
 SELECT * FROM deployments WHERE id = $1;
@@ -45,6 +38,9 @@ SELECT * FROM deployments WHERE environment_id = $1 ORDER BY created_at DESC;
 
 -- name: ListDeploymentsByProject :many
 SELECT * FROM deployments WHERE project_id = $1 ORDER BY created_at DESC;
+
+-- name: ListDeploymentsByService :many
+SELECT * FROM deployments WHERE service_id = $1 ORDER BY created_at DESC;
 
 -- name: ListDeploymentsByWorkspace :many
 SELECT * FROM deployments WHERE workspace_id = $1 ORDER BY created_at DESC;
@@ -83,12 +79,14 @@ SET status = sqlc.arg(status),
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
--- SupersedePreviousRunning marks the environment's prior running deployment on this
--- server as superseded once a newer one reaches 'running', so "current" is unambiguous.
+-- SupersedePreviousRunning marks the SERVICE's prior running deployment on this server as
+-- superseded once a newer one reaches 'running', so "current" is unambiguous. Keyed by
+-- service (not environment) so deploying one service never supersedes a sibling service
+-- running in the same environment.
 -- name: SupersedePreviousRunning :exec
 UPDATE deployments
 SET status = 'superseded', updated_at = now()
-WHERE environment_id = $1 AND server_id = $2 AND status = 'running' AND id <> $3;
+WHERE service_id = $1 AND server_id = $2 AND status = 'running' AND id <> $3;
 
 -- name: AppendDeploymentEvent :one
 INSERT INTO deployment_events (deployment_id, kind, status, message, stream)

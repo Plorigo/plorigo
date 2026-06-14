@@ -190,6 +190,9 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 
 	reportBuild(statusStarting, 0, "", "starting container", prepLogs)
 	appLabel := job.GetAppLabel()
+	// A public service publishes a host port + gets a Caddy route; a private service is
+	// reachable only by siblings over the per-environment network (no host port, no route).
+	public := job.GetVisibility() != "private"
 	containerID, hostPort, err := runtime.run(ctx, runInput{
 		name:          containerName(depID),
 		imageRef:      imageRef,
@@ -197,6 +200,9 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 		containerPort: containerPort,
 		appLabel:      appLabel,
 		deploymentID:  depID,
+		public:        public,
+		networkName:   job.GetNetworkName(),
+		networkAlias:  job.GetNetworkAlias(),
 	})
 	if err != nil {
 		reportBuild(statusFailed, hostPort, containerID, "could not start container: "+err.Error(), nil)
@@ -204,59 +210,73 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 		return
 	}
 
-	if err := runHealthCheck(ctx, hostPort); err != nil {
-		reportRuntime(statusFailed, hostPort, containerID, "health check failed: "+err.Error(), runtime.recentLogs(ctx, containerID, maxReportLogLines))
-		cleanupFailedContainer(ctx, out, runtime, containerID)
-		return
-	}
-
-	routeURL, err = router.routeURL(appLabel)
-	if err != nil {
-		reportBuild(statusFailed, hostPort, containerID, "could not derive Caddy route: "+err.Error(), nil)
-		cleanupFailedContainer(ctx, out, runtime, containerID)
-		return
-	}
-	reportBuild(statusRouting, hostPort, containerID, "routing traffic to "+routeURL, nil)
-	routes, err := runtime.listManagedRoutes(ctx)
-	if err != nil {
-		reportBuild(statusFailed, hostPort, containerID, "could not inspect running containers for Caddy routes: "+err.Error(), nil)
-		cleanupFailedContainer(ctx, out, runtime, containerID)
-		return
-	}
-	routes = routesForDeployment(routes, managedRoute{
-		EnvironmentID: appLabel,
-		DeploymentID:  depID,
-		ContainerID:   containerID,
-		HostPort:      hostPort,
-	})
-	if logs, err := router.apply(ctx, routes); err != nil {
-		if len(logs) == 0 {
-			logs = []string{err.Error()}
+	// A public service must answer on its published host port before we route to it. A
+	// private service publishes no host port (nothing to probe from the host), so it reaches
+	// running once the container has started and joined the network with its alias.
+	if public {
+		if err := runHealthCheck(ctx, hostPort); err != nil {
+			reportRuntime(statusFailed, hostPort, containerID, "health check failed: "+err.Error(), runtime.recentLogs(ctx, containerID, maxReportLogLines))
+			cleanupFailedContainer(ctx, out, runtime, containerID)
+			return
 		}
-		reportBuild(statusFailed, hostPort, containerID, "Caddy routing failed: "+err.Error(), logs)
-		cleanupFailedContainer(ctx, out, runtime, containerID)
-		return
+
+		routeURL, err = router.routeURL(appLabel)
+		if err != nil {
+			reportBuild(statusFailed, hostPort, containerID, "could not derive Caddy route: "+err.Error(), nil)
+			cleanupFailedContainer(ctx, out, runtime, containerID)
+			return
+		}
+		reportBuild(statusRouting, hostPort, containerID, "routing traffic to "+routeURL, nil)
+		routes, err := runtime.listManagedRoutes(ctx)
+		if err != nil {
+			reportBuild(statusFailed, hostPort, containerID, "could not inspect running containers for Caddy routes: "+err.Error(), nil)
+			cleanupFailedContainer(ctx, out, runtime, containerID)
+			return
+		}
+		routes = routesForDeployment(routes, managedRoute{
+			ServiceID:    appLabel,
+			DeploymentID: depID,
+			ContainerID:  containerID,
+			HostPort:     hostPort,
+		})
+		if logs, err := router.apply(ctx, routes); err != nil {
+			if len(logs) == 0 {
+				logs = []string{err.Error()}
+			}
+			reportBuild(statusFailed, hostPort, containerID, "Caddy routing failed: "+err.Error(), logs)
+			cleanupFailedContainer(ctx, out, runtime, containerID)
+			return
+		}
 	}
 
-	message := fmt.Sprintf("running at %s (internal host port %d)", routeURL, hostPort)
+	message := runningMessage(public, routeURL, job.GetNetworkAlias(), containerPort, hostPort)
 	if err := runtime.replacePreviousExcept(ctx, appLabel, containerID, func(l string) { fmt.Fprintln(out, l) }); err != nil {
-		message = fmt.Sprintf("running at %s (internal host port %d); could not remove previous container: %v", routeURL, hostPort, err)
+		message += "; could not remove previous container: " + err.Error()
 		fmt.Fprintf(out, "warning: could not remove previous container for deployment %s: %v\n", depID, err)
 	}
 
 	reportRuntime(statusRunning, hostPort, containerID, message, runtime.recentLogs(ctx, containerID, maxReportLogLines))
-	fmt.Fprintf(out, "deployment %s running at %s (internal host port %d)\n", depID, routeURL, hostPort)
+	fmt.Fprintf(out, "deployment %s %s\n", depID, message)
 }
 
 func routesForDeployment(existing []managedRoute, current managedRoute) []managedRoute {
 	out := make([]managedRoute, 0, len(existing)+1)
 	for _, r := range existing {
-		if r.EnvironmentID == current.EnvironmentID || r.ContainerID == current.ContainerID {
+		if r.ServiceID == current.ServiceID || r.ContainerID == current.ContainerID {
 			continue
 		}
 		out = append(out, r)
 	}
 	return append(out, current)
+}
+
+// runningMessage describes a running deployment: a public service shows its URL + host port;
+// a private service shows the internal address siblings reach it at.
+func runningMessage(public bool, routeURL, alias string, containerPort, hostPort int32) string {
+	if public {
+		return fmt.Sprintf("running at %s (internal host port %d)", routeURL, hostPort)
+	}
+	return fmt.Sprintf("running (private; reachable at http://%s:%d inside the environment)", alias, containerPort)
 }
 
 // buildFromSource clones the job's repo and builds its Dockerfile into a local image tag,

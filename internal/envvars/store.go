@@ -10,16 +10,15 @@ import (
 // in tests. Mutations take a database.Tx so they commit with the audit row.
 type Store interface {
 	UpsertEnvVar(ctx context.Context, tx database.Tx, e EnvVar) (EnvVar, error)
-	ListByEnvironment(ctx context.Context, environmentID string) ([]EnvVar, error)
-	// DeleteEnvVar removes the (environment, key) row. ok is false (with a nil error)
-	// when no row matched, so a delete that removed nothing is reported as NotFound
-	// rather than audited as a change. deletedID is the removed row's id.
-	DeleteEnvVar(ctx context.Context, tx database.Tx, environmentID, key string) (deletedID string, ok bool, err error)
-	// WorkspaceIDForEnvironment resolves an environment's owning workspace (through its
-	// parent project), so this environment-scoped module can authorize and audit
-	// against the workspace. ok is false (with a nil error) when the environment does
-	// not exist.
-	WorkspaceIDForEnvironment(ctx context.Context, environmentID string) (workspaceID string, ok bool, err error)
+	ListByService(ctx context.Context, serviceID string) ([]EnvVar, error)
+	// DeleteEnvVar removes the (service, key) row. ok is false (with a nil error) when no
+	// row matched, so a delete that removed nothing is reported as NotFound rather than
+	// audited as a change. deletedID is the removed row's id.
+	DeleteEnvVar(ctx context.Context, tx database.Tx, serviceID, key string) (deletedID string, ok bool, err error)
+	// WorkspaceIDForService resolves a service's owning workspace (denormalized onto the
+	// service row), so this service-scoped module can authorize and audit against the
+	// workspace. ok is false (with a nil error) when the service does not exist.
+	WorkspaceIDForService(ctx context.Context, serviceID string) (workspaceID string, ok bool, err error)
 }
 
 // TxRunner runs fn inside one transaction. Implemented by *database.DB; declared here

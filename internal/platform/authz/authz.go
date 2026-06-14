@@ -55,6 +55,13 @@ const (
 	ActionSourceConnect    Action = "source.connect"
 	ActionSourceRead       Action = "source.read"
 	ActionSourceDisconnect Action = "source.disconnect"
+	// Service actions cover creating a service (its source plus an optional first deploy),
+	// reading it, updating its source/visibility, and deleting it. Like deployment actions,
+	// the agent-facing Poll/Report RPCs are not user-scoped and have no Action here.
+	ActionServiceCreate Action = "service.create"
+	ActionServiceRead   Action = "service.read"
+	ActionServiceUpdate Action = "service.update"
+	ActionServiceDelete Action = "service.delete"
 )
 
 // Workspace roles, most privileged first. Stored in workspace_members.role and
