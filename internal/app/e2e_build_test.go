@@ -168,6 +168,15 @@ func TestE2EBuildDeploy(t *testing.T) {
 	// The timeline went through the build phases.
 	assertReachedStatuses(t, ownerCtx, a.deployments.Service(), dep.ID, deployments.StatusCloning, deployments.StatusBuilding, deployments.StatusRunning)
 
+	// Logs are attributed to the right stream: the clone/build output is build, the
+	// container's own output is runtime (PLO-13).
+	assertHasStreamLogs(t, ownerCtx, a.deployments.Service(), dep.ID)
+
+	// Runtime logs keep flowing AFTER the deploy: the agent's tail loop streams the running
+	// container's output, not just the snapshot taken at startup. Drive a little traffic,
+	// then assert a runtime log lands beyond that snapshot.
+	assertRuntimeLogsAccumulate(t, ownerCtx, a.deployments.Service(), dep.ID, got.HostPort)
+
 	// --- Failure: a repo with no Dockerfile fails with a clear message. ---
 	noDockerProj, _ := a.projects.Service().Create(ownerCtx, projects.CreateInput{WorkspaceID: ws.ID, Name: "No Dockerfile"})
 	noDockerEnv, _ := a.environments.Service().Create(ownerCtx, environments.CreateInput{ProjectID: noDockerProj.ID, Name: "Prod"})
@@ -236,6 +245,72 @@ func assertReachedStatuses(t *testing.T, ctx context.Context, svc deployments.Se
 			t.Fatalf("timeline did not reach %q; statuses seen: %v", w, seen)
 		}
 	}
+}
+
+// assertHasStreamLogs checks both log streams are attributed: build output from the
+// clone/build phase, and runtime output from the container's deploy-time snapshot.
+func assertHasStreamLogs(t *testing.T, ctx context.Context, svc deployments.Service, depID string) {
+	t.Helper()
+	events, err := svc.ListEvents(ctx, depID, 0)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	var build, runtime int
+	for _, e := range events {
+		if e.Kind != deployments.KindLog {
+			continue
+		}
+		switch e.Stream {
+		case deployments.StreamBuild:
+			build++
+		case deployments.StreamRuntime:
+			runtime++
+		}
+	}
+	if build == 0 {
+		t.Fatalf("no build-stream log events; want the clone/build output tagged %q", deployments.StreamBuild)
+	}
+	if runtime == 0 {
+		t.Fatalf("no runtime-stream log events; want the container output tagged %q", deployments.StreamRuntime)
+	}
+}
+
+// assertRuntimeLogsAccumulate proves the agent keeps tailing the RUNNING container, not just
+// the snapshot taken at startup: it records the newest runtime-log seq now, drives some HTTP
+// traffic so the app logs, and waits for a runtime-log event beyond that seq to appear.
+func assertRuntimeLogsAccumulate(t *testing.T, ctx context.Context, svc deployments.Service, depID string, hostPort int32) {
+	t.Helper()
+	base := maxRuntimeLogSeq(t, ctx, svc, depID)
+	addr := fmt.Sprintf("http://127.0.0.1:%d/", hostPort)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		// Generate output — most servers log each request to stdout/stderr.
+		if resp, err := http.Get(addr); err == nil { //nolint:gosec // loopback test traffic
+			_ = resp.Body.Close()
+		}
+		if maxRuntimeLogSeq(t, ctx, svc, depID) > base {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no new runtime-stream log after the startup snapshot (seq still <= %d): the tail loop isn't streaming the running container's output. If the test image is too quiet, override PLORIGO_E2E_BUILD_* with one that logs per request.", base)
+		}
+		time.Sleep(2 * time.Second)
+	}
+}
+
+func maxRuntimeLogSeq(t *testing.T, ctx context.Context, svc deployments.Service, depID string) int64 {
+	t.Helper()
+	events, err := svc.ListEvents(ctx, depID, 0)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	var maxSeq int64
+	for _, e := range events {
+		if e.Kind == deployments.KindLog && e.Stream == deployments.StreamRuntime && e.Seq > maxSeq {
+			maxSeq = e.Seq
+		}
+	}
+	return maxSeq
 }
 
 func assertServes(t *testing.T, hostPort int32) {
