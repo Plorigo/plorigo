@@ -31,8 +31,9 @@ modules under `internal/`:
 | `audit` | The append-only audit trail of sensitive actions |
 | `projects` | Projects and the workspace aggregate: workspaces, membership/roles, and invitations (**writes**) |
 | `membership` | Read-only role lookup over workspace membership — the port `policy` consumes (provider-only, like `audit`) |
-| `environments` | Environments (preview / staging / production) |
-| `deployments` | Deployment records and orchestration — see [deployment-engine.md](./deployment-engine.md) |
+| `environments` | Environments (preview / staging / production) — each holds one or more services |
+| `services` | A project's deployable components: each service lives in one environment and owns its source (image / public git / template), container port, visibility, env vars, and deployment history — see [deployment-engine.md](./deployment-engine.md) |
+| `deployments` | Deployment records and orchestration — one deploy of a service — see [deployment-engine.md](./deployment-engine.md) |
 | `servers` | Connected servers and their metadata |
 | `agents` | Agent registration, keys, and the job gateway — see [agent.md](./agent.md) |
 | `builders` | Build detection and image builds |
