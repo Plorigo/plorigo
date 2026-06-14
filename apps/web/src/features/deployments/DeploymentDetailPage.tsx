@@ -1,6 +1,6 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Link, useParams } from "@tanstack/react-router";
-import { ArrowLeft, Terminal } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 
 import { FailureSummary } from "@/components/FailureSummary";
 import { Timeline } from "@/components/Timeline";
@@ -155,6 +155,7 @@ export function DeploymentDetailPage() {
             <TabsContent value="runtime">
               <LogStream
                 logs={runtimeLogs}
+                newestFirst
                 emptyTitle="No runtime logs yet"
                 emptyBody={
                   live
@@ -172,22 +173,34 @@ export function DeploymentDetailPage() {
 
 function LogStream({
   logs,
+  newestFirst = false,
   emptyTitle,
   emptyBody,
 }: {
   logs: DeploymentEvent[];
+  newestFirst?: boolean;
   emptyTitle: string;
   emptyBody: string;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const atBottomRef = useRef(true);
+  const atFollowEdgeRef = useRef(true);
+  const visibleLogs = useMemo(() => {
+    if (!newestFirst) return logs;
 
-  // Follow new lines to the bottom, but only while the user is already there — scrolling up
-  // to read earlier output must not be yanked back down by incoming logs.
+    return [...logs].sort((a, b) => {
+      if (a.seq === b.seq) return 0;
+      return a.seq > b.seq ? -1 : 1;
+    });
+  }, [logs, newestFirst]);
+
+  // Follow new lines only while the user is already at the live edge: bottom for
+  // chronological build logs, top for newest-first runtime logs.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
-  }, [logs]);
+    if (!el || !atFollowEdgeRef.current) return;
+
+    el.scrollTop = newestFirst ? 0 : el.scrollHeight;
+  }, [visibleLogs, newestFirst]);
 
   if (logs.length === 0) {
     return (
@@ -202,24 +215,32 @@ function LogStream({
       ref={scrollRef}
       onScroll={(e) => {
         const el = e.currentTarget;
-        atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+        atFollowEdgeRef.current = newestFirst
+          ? el.scrollTop < 24
+          : el.scrollHeight - el.scrollTop - el.clientHeight < 24;
       }}
-      className="mt-3 max-h-96 space-y-2 overflow-y-auto"
+      className="mt-3 max-h-[32rem] overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 py-1 font-mono text-xs leading-5 text-zinc-100 shadow-inner"
     >
-      {logs.map((line) => (
+      {visibleLogs.map((line) => (
         <div
           key={String(line.seq)}
-          className="grid gap-2 rounded-md bg-zinc-950 px-3 py-2 text-xs text-zinc-100 sm:grid-cols-[64px_minmax(0,1fr)]"
+          className="grid gap-0.5 border-b border-white/5 px-3 py-1.5 last:border-b-0 hover:bg-white/[0.04] sm:grid-cols-[72px_minmax(0,1fr)] sm:gap-3"
         >
-          <span className="font-mono text-zinc-400">{new Date(line.createdAt).toLocaleTimeString()}</span>
-          <span className="inline-flex min-w-0 items-start gap-1.5 break-words font-mono">
-            <Terminal className="mt-0.5 h-3 w-3 shrink-0 text-emerald-300" aria-hidden="true" />
-            <span className="min-w-0 break-words">{line.message}</span>
-          </span>
+          <span className="whitespace-nowrap text-zinc-500">{formatLogTime(line.createdAt)}</span>
+          <span className="min-w-0 whitespace-pre-wrap break-words text-zinc-100">{line.message}</span>
         </div>
       ))}
     </div>
   );
+}
+
+function formatLogTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "--:--:--";
+
+  return [date.getHours(), date.getMinutes(), date.getSeconds()]
+    .map((part) => String(part).padStart(2, "0"))
+    .join(":");
 }
 
 function Row({ label, value }: { label: string; value: ReactNode }) {
