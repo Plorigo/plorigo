@@ -50,6 +50,21 @@ type deploymentRuntime interface {
 	replacePreviousExcept(ctx context.Context, appLabel, keepID string, emit func(string)) error
 	removeContainer(ctx context.Context, containerID string, emit func(string)) error
 	recentLogs(ctx context.Context, containerID string, limit int) []string
+	// listManagedRunning returns the agent's currently-running managed containers, each
+	// paired with the deployment id it was started for, so the runtime-log loop knows what
+	// to tail and where to attach the lines.
+	listManagedRunning(ctx context.Context) ([]managedContainer, error)
+	// logsSince returns a container's new stdout+stderr lines produced after the `since`
+	// cursor (empty = from now on), demuxed and timestamp-stripped, plus the cursor to pass
+	// next time. It returns at most limit lines.
+	logsSince(ctx context.Context, containerID, since string, limit int) (lines []string, nextSince string, err error)
+}
+
+// managedContainer is a running container the agent manages, paired with the deployment
+// it belongs to (read from its plorigo.deployment label).
+type managedContainer struct {
+	ID           string
+	DeploymentID string
 }
 
 var runHealthCheck = healthCheck
@@ -252,4 +267,95 @@ func appendCapped(s []string, line string, limit int) []string {
 		return s
 	}
 	return append(s, line)
+}
+
+// defaultRuntimeLogInterval is how often the agent tails each running container for new
+// output. Short enough that the dashboard's runtime logs feel live, but each tick also
+// caps the lines it forwards (maxReportLogLines) so a chatty app can't flood the timeline.
+const defaultRuntimeLogInterval = 3 * time.Second
+
+// runtimeLogLoop continuously tails the stdout/stderr of every running container the agent
+// manages and streams new lines to the control plane as runtime-stream log events, so a
+// running app's logs are visible in the dashboard without SSH. It runs beside
+// heartbeatLoop/deployLoop until ctx is cancelled, reading the identity fresh each report
+// so it follows a runtime re-registration.
+//
+// Per-container cursors live in memory only. A container first seen this process run is
+// tailed from "now" forward (seeded on first sight, fetched from the next tick on). That
+// both avoids re-sending the deploy-time snapshot the deploy loop already captured and
+// avoids duplicating history after an agent restart — at the cost of a small gap for any
+// lines emitted between container start (or agent restart) and the first tick.
+func runtimeLogLoop(ctx context.Context, out io.Writer, deploy agentv1connect.DeployServiceClient, ident *identity, runtime deploymentRuntime, interval time.Duration) error {
+	if runtime == nil {
+		// No Docker: nothing to tail. Stay alive like the sibling loops so Run() doesn't
+		// treat this as a fatal early return and cancel the others.
+		<-ctx.Done()
+		return nil
+	}
+	if interval <= 0 {
+		interval = defaultRuntimeLogInterval
+	}
+	cursors := map[string]string{} // container id -> next `since` cursor
+	for {
+		if !sleep(ctx, interval) {
+			return nil
+		}
+		running, err := runtime.listManagedRunning(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			fmt.Fprintf(out, "runtime log: could not list containers: %v\n", err)
+			continue
+		}
+		seen := make(map[string]struct{}, len(running))
+		for _, c := range running {
+			seen[c.ID] = struct{}{}
+			since, known := cursors[c.ID]
+			if !known {
+				// First sight: start from now so we don't replay the container's history.
+				cursors[c.ID] = nowCursor()
+				continue
+			}
+			lines, next, err := runtime.logsSince(ctx, c.ID, since, maxReportLogLines)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				fmt.Fprintf(out, "runtime log: could not tail %s: %v\n", shortID(c.ID), err)
+				continue
+			}
+			cursors[c.ID] = next
+			if len(lines) == 0 {
+				continue
+			}
+			st := ident.get()
+			if _, err := deploy.ReportDeployment(ctx, connect.NewRequest(&agentv1.ReportDeploymentRequest{
+				AgentId:      st.AgentID,
+				Credential:   st.Credential,
+				DeploymentId: c.DeploymentID,
+				Status:       statusRunning,
+				LogLines:     lines,
+				LogStream:    streamRuntime,
+			})); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				fmt.Fprintf(out, "runtime log: report for deployment %s failed: %v\n", c.DeploymentID, err)
+			}
+		}
+		// Drop cursors for containers that are gone (stopped, removed, or superseded), so a
+		// reused id starts fresh and the map can't grow without bound.
+		for id := range cursors {
+			if _, ok := seen[id]; !ok {
+				delete(cursors, id)
+			}
+		}
+	}
+}
+
+// nowCursor is the `since` cursor seeding value: the current time, which logsSince uses to
+// fetch only lines produced from here on. The agent shares the Docker host's clock.
+func nowCursor() string {
+	return time.Now().UTC().Format(time.RFC3339Nano)
 }

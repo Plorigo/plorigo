@@ -227,6 +227,95 @@ func (d *dockerClient) recentLogs(ctx context.Context, containerID string, limit
 	return tailLines(combined.String(), limit)
 }
 
+// listManagedRunning returns the agent's currently-running managed containers, each with
+// the deployment id it was started for (its plorigo.deployment label). Stopped containers
+// are excluded (All:false) — the runtime-log loop only tails live ones.
+func (d *dockerClient) listManagedRunning(ctx context.Context) ([]managedContainer, error) {
+	list, err := d.cli.ContainerList(ctx, client.ContainerListOptions{
+		All:     false,
+		Filters: client.Filters{}.Add("label", labelManaged+"=true"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]managedContainer, 0, len(list.Items))
+	for _, c := range list.Items {
+		depID := c.Labels[labelDeployment]
+		if depID == "" {
+			continue // not one of ours, or pre-dates the deployment label
+		}
+		out = append(out, managedContainer{ID: c.ID, DeploymentID: depID})
+	}
+	return out, nil
+}
+
+// logsSince returns a container's stdout+stderr lines produced after the `since` cursor
+// (empty = from now on), and the cursor to pass next time. It asks the daemon for
+// timestamped logs (Timestamps:true) and advances the cursor to just past the newest line,
+// so the next fetch — Since is inclusive — never re-emits a line already seen. The
+// timestamp prefix is stripped from each returned line.
+func (d *dockerClient) logsSince(ctx context.Context, containerID, since string, limit int) ([]string, string, error) {
+	opts := client.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Timestamps: true,
+	}
+	if since != "" {
+		opts.Since = since
+	}
+	r, err := d.cli.ContainerLogs(ctx, containerID, opts)
+	if err != nil {
+		return nil, since, err
+	}
+	defer func() { _ = r.Close() }()
+	var combined strings.Builder
+	// Non-TTY logs are multiplexed; demux both streams into one buffer to preserve rough
+	// ordering. A demux error still yields whatever was read (cf. recentLogs).
+	_, _ = stdcopy.StdCopy(&combined, &combined, r)
+	lines, next := splitTimestampedLines(combined.String(), since, limit)
+	return lines, next, nil
+}
+
+// splitTimestampedLines parses `docker logs --timestamps` output (each non-blank line is
+// "<RFC3339Nano> <message>"), returning the messages (timestamp stripped, capped to the
+// last limit) and the next cursor: one nanosecond past the newest parsed timestamp, or the
+// unchanged `since` when nothing parseable was produced. Lines without a parseable
+// timestamp are kept verbatim and don't move the cursor.
+func splitTimestampedLines(s, since string, limit int) ([]string, string) {
+	raw := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	lines := make([]string, 0, len(raw))
+	var maxTs time.Time
+	advanced := false
+	for _, l := range raw {
+		l = strings.TrimRight(l, "\r")
+		if strings.TrimSpace(l) == "" {
+			continue
+		}
+		ts, msg, ok := strings.Cut(l, " ")
+		if !ok {
+			lines = append(lines, l)
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, ts)
+		if err != nil {
+			lines = append(lines, l)
+			continue
+		}
+		lines = append(lines, msg)
+		if !advanced || t.After(maxTs) {
+			maxTs, advanced = t, true
+		}
+	}
+	if len(lines) > limit {
+		lines = lines[len(lines)-limit:]
+	}
+	next := since
+	if advanced {
+		next = maxTs.Add(time.Nanosecond).UTC().Format(time.RFC3339Nano)
+	}
+	return lines, next
+}
+
 // healthCheck waits until something is listening on the published host port, or fails
 // after healthCheckTimeout. The agent runs on the same host, so it dials loopback.
 func healthCheck(ctx context.Context, hostPort int32) error {

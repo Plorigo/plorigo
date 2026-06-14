@@ -132,15 +132,21 @@ func Run(ctx context.Context, out io.Writer, opts Options) error {
 	}
 	defer dk.close()
 
-	// Run the heartbeat and deploy loops together. Both return only when their context
-	// ends, so if either returns, cancel the sibling and wait for both to unwind.
+	// The three loops below log concurrently to out, so serialize writes — a bare
+	// *strings.Builder (tests) or os.Stdout isn't safe for concurrent, interleaved writes.
+	out = &syncWriter{w: out}
+
+	// Run the heartbeat, deploy, and runtime-log loops together. Each returns only when its
+	// context ends, so if any returns, cancel the siblings and wait for all to unwind.
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	errc := make(chan error, 2)
+	errc := make(chan error, 3)
 	go func() { errc <- heartbeatLoop(loopCtx, out, client, ident, prober, opts) }()
 	go func() { errc <- deployLoop(loopCtx, out, deployClient, ident, runtime, opts.PollInterval) }()
+	go func() { errc <- runtimeLogLoop(loopCtx, out, deployClient, ident, runtime, defaultRuntimeLogInterval) }()
 	first := <-errc
 	cancel()
+	<-errc
 	<-errc
 	return first
 }
@@ -230,6 +236,19 @@ func heartbeatLoop(ctx context.Context, out io.Writer, client agentv1connect.Age
 			return nil
 		}
 	}
+}
+
+// syncWriter serializes concurrent writes to an io.Writer, so the heartbeat, deploy, and
+// runtime-log loops can log to the same destination without interleaving or racing.
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }
 
 // sleep waits for d or until ctx is done; it reports false when ctx ended.
