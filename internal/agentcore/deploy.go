@@ -28,6 +28,14 @@ const (
 // sourceGit is the source_kind for a build-from-Git deployment (vs. a pre-built image).
 const sourceGit = "git"
 
+// Log streams the agent tags its reports with, matching the control plane's
+// deployments.Stream* vocabulary. streamBuild is the agent's own clone/build/pull/start
+// output; streamRuntime is the container's stdout/stderr.
+const (
+	streamBuild   = "build"
+	streamRuntime = "runtime"
+)
+
 type deploymentRuntime interface {
 	pull(ctx context.Context, imageRef string, emit func(string)) error
 	// clone fetches the repo at gitRef into dir (shallow, anonymous — public repos only)
@@ -92,7 +100,7 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 	// commitSHA/builtImageRef are set for git deployments and reported on every transition
 	// after the build so the control plane records what was built.
 	var commitSHA, builtImageRef string
-	report := func(status string, hostPort int32, containerID, message string, logs []string) {
+	report := func(stream, status string, hostPort int32, containerID, message string, logs []string) {
 		st := ident.get()
 		_, err := deploy.ReportDeployment(ctx, connect.NewRequest(&agentv1.ReportDeploymentRequest{
 			AgentId:       st.AgentID,
@@ -103,6 +111,7 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 			ContainerId:   containerID,
 			Message:       message,
 			LogLines:      logs,
+			LogStream:     stream,
 			CommitSha:     commitSHA,
 			BuiltImageRef: builtImageRef,
 		}))
@@ -110,9 +119,17 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 			fmt.Fprintf(out, "report failed for deployment %s: %v\n", depID, err)
 		}
 	}
+	// reportBuild tags log lines as the agent's clone/build/pull/start output; reportRuntime
+	// tags them as the container's own stdout/stderr. Status-only reports (no logs) use build.
+	reportBuild := func(status string, hostPort int32, containerID, message string, logs []string) {
+		report(streamBuild, status, hostPort, containerID, message, logs)
+	}
+	reportRuntime := func(status string, hostPort int32, containerID, message string, logs []string) {
+		report(streamRuntime, status, hostPort, containerID, message, logs)
+	}
 
 	if runtime == nil {
-		report(statusFailed, 0, "", "Docker is not available on this server", nil)
+		reportBuild(statusFailed, 0, "", "Docker is not available on this server", nil)
 		return
 	}
 
@@ -122,7 +139,7 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 	containerPort := job.GetContainerPort()
 	var prepLogs []string
 	if job.GetSourceKind() == sourceGit {
-		built, logs, ok := buildFromSource(ctx, out, runtime, job, &commitSHA, report)
+		built, logs, ok := buildFromSource(ctx, out, runtime, job, &commitSHA, reportBuild)
 		if !ok {
 			return // buildFromSource already reported the failure
 		}
@@ -132,21 +149,21 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 		if containerPort == 0 {
 			port, err := runtime.detectPort(ctx, built)
 			if err != nil {
-				report(statusFailed, 0, "", "could not determine which port to publish — set a container port, or add an EXPOSE to the Dockerfile: "+err.Error(), prepLogs)
+				reportBuild(statusFailed, 0, "", "could not determine which port to publish — set a container port, or add an EXPOSE to the Dockerfile: "+err.Error(), prepLogs)
 				return
 			}
 			containerPort = port
 			fmt.Fprintf(out, "auto-detected container port %d for deployment %s\n", port, depID)
 		}
 	} else {
-		report(statusPulling, 0, "", "pulling image "+imageRef, nil)
+		reportBuild(statusPulling, 0, "", "pulling image "+imageRef, nil)
 		if err := runtime.pull(ctx, imageRef, func(l string) { prepLogs = appendCapped(prepLogs, l, 30) }); err != nil {
-			report(statusFailed, 0, "", "image pull failed: "+err.Error(), prepLogs)
+			reportBuild(statusFailed, 0, "", "image pull failed: "+err.Error(), prepLogs)
 			return
 		}
 	}
 
-	report(statusStarting, 0, "", "starting container", prepLogs)
+	reportBuild(statusStarting, 0, "", "starting container", prepLogs)
 	appLabel := job.GetAppLabel()
 	containerID, hostPort, err := runtime.run(ctx, runInput{
 		name:          containerName(depID),
@@ -157,13 +174,13 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 		deploymentID:  depID,
 	})
 	if err != nil {
-		report(statusFailed, hostPort, containerID, "could not start container: "+err.Error(), nil)
+		reportBuild(statusFailed, hostPort, containerID, "could not start container: "+err.Error(), nil)
 		cleanupFailedContainer(ctx, out, runtime, containerID)
 		return
 	}
 
 	if err := runHealthCheck(ctx, hostPort); err != nil {
-		report(statusFailed, hostPort, containerID, "health check failed: "+err.Error(), runtime.recentLogs(ctx, containerID, maxReportLogLines))
+		reportRuntime(statusFailed, hostPort, containerID, "health check failed: "+err.Error(), runtime.recentLogs(ctx, containerID, maxReportLogLines))
 		cleanupFailedContainer(ctx, out, runtime, containerID)
 		return
 	}
@@ -174,7 +191,7 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 		fmt.Fprintf(out, "warning: could not remove previous container for deployment %s: %v\n", depID, err)
 	}
 
-	report(statusRunning, hostPort, containerID, message, runtime.recentLogs(ctx, containerID, maxReportLogLines))
+	reportRuntime(statusRunning, hostPort, containerID, message, runtime.recentLogs(ctx, containerID, maxReportLogLines))
 	fmt.Fprintf(out, "deployment %s running on host port %d\n", depID, hostPort)
 }
 

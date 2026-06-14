@@ -357,8 +357,19 @@ func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *test
 	if len(runtime.removed) != 0 {
 		t.Fatalf("removed failed containers = %v, want none on success", runtime.removed)
 	}
-	if got := deploy.reports[len(deploy.reports)-1].GetStatus(); got != statusRunning {
-		t.Fatalf("last report status = %q, want %q", got, statusRunning)
+	last := deploy.reports[len(deploy.reports)-1]
+	if last.GetStatus() != statusRunning {
+		t.Fatalf("last report status = %q, want %q", last.GetStatus(), statusRunning)
+	}
+	// The running report carries the container's own logs, tagged as the runtime stream.
+	if last.GetLogStream() != streamRuntime {
+		t.Fatalf("running report log stream = %q, want %q", last.GetLogStream(), streamRuntime)
+	}
+	// The build/pull/start transitions on the way there are tagged as the build stream.
+	for _, r := range deploy.reports[:len(deploy.reports)-1] {
+		if r.GetLogStream() != streamBuild {
+			t.Fatalf("pre-running report (%s) log stream = %q, want %q", r.GetStatus(), r.GetLogStream(), streamBuild)
+		}
 	}
 }
 
@@ -434,6 +445,10 @@ func TestExecuteDeployment_GitBuildFailureReportsFailedBeforeRun(t *testing.T) {
 	last := deploy.reports[len(deploy.reports)-1]
 	if last.GetStatus() != statusFailed || !strings.Contains(last.GetMessage(), "build failed") {
 		t.Fatalf("last report = status %q message %q, want a build-failed report", last.GetStatus(), last.GetMessage())
+	}
+	// A build-phase failure carries the build output, tagged as the build stream.
+	if last.GetLogStream() != streamBuild {
+		t.Fatalf("build-failed report log stream = %q, want %q", last.GetLogStream(), streamBuild)
 	}
 }
 
