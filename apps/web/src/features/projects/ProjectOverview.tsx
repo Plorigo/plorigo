@@ -93,6 +93,8 @@ export function ProjectOverview({
 
   const rows = deployments.data ?? [];
   const latest = rows[0];
+  // Use the real deployment URL from the latest running deployment, falling back to the placeholder
+  const displayUrl = latest?.routeUrl || project.url;
   const envName = new Map((environments.data ?? []).map((e) => [e.id, `${e.name} · ${e.type}`]));
 
   return (
@@ -106,13 +108,25 @@ export function ProjectOverview({
             <Badge tone={frameworkTone(project.framework)}>{project.framework}</Badge>
             {latest && <StatusDot tone={statusTone(latest.status)} label={latest.status} />}
           </div>
-          <p className="mt-1.5 text-sm text-muted-foreground">{project.url}</p>
+          <p className="mt-1.5 text-sm text-muted-foreground">{displayUrl}</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={() => toast.info("Opening the live site is coming soon.")}>
-            <ExternalLink className="h-4 w-4" aria-hidden="true" />
-            Visit
-          </Button>
+          {latest?.routeUrl ? (
+            <a
+              href={latest.routeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-secondary px-3 text-sm font-medium text-secondary-foreground transition-colors hover:bg-secondary/80"
+            >
+              <ExternalLink className="h-4 w-4" aria-hidden="true" />
+              Visit
+            </a>
+          ) : (
+            <Button variant="secondary" size="sm" onClick={() => toast.info("Deploy to get a live URL.")}>
+              <ExternalLink className="h-4 w-4" aria-hidden="true" />
+              Visit
+            </Button>
+          )}
           <Button
             size="sm"
             disabled={!workspaceId}
@@ -172,7 +186,7 @@ export function ProjectOverview({
                   <TableHead>Deployment</TableHead>
                   <TableHead>Environment</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Host port</TableHead>
+                  <TableHead>Internal port</TableHead>
                   <TableHead>Created</TableHead>
                 </TableRow>
               </TableHeader>

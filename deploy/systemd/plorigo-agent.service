@@ -6,6 +6,10 @@
 #   PLORIGO_CONTROL_PLANE=https://cp.example.com
 #   PLORIGO_AGENT_TOKEN=<one-time registration token, first run only>
 #   PLORIGO_AGENT_DATA_DIR=/var/lib/plorigo-agent
+#   # Optional Caddy route settings:
+#   # PLORIGO_AGENT_CADDY_BASE_DOMAIN=apps.example.com
+#   # PLORIGO_AGENT_CADDY_CONFIG=/var/lib/plorigo-agent/Caddyfile
+#   # PLORIGO_AGENT_CADDY_ADMIN=localhost:2019
 #
 # Then: systemctl daemon-reload && systemctl enable --now plorigo-agent
 # See docs/architecture/agent.md. (scripts/install-agent.sh writes a unit like this for you.)

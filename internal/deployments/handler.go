@@ -136,6 +136,7 @@ func (h *gatewayHandler) ReportDeployment(ctx context.Context, req *connect.Requ
 		Message:       req.Msg.GetMessage(),
 		CommitSha:     req.Msg.GetCommitSha(),
 		BuiltImageRef: req.Msg.GetBuiltImageRef(),
+		RouteURL:      req.Msg.GetRouteUrl(),
 	}); err != nil {
 		return nil, problem.ToConnect(err)
 	}
@@ -170,6 +171,7 @@ func toProto(d Deployment) *controlplanev1.Deployment {
 		GitRef:        d.GitRef,
 		CommitSha:     d.CommitSha,
 		BuiltImageRef: d.BuiltImageRef,
+		RouteUrl:      d.RouteURL,
 	}
 }
 

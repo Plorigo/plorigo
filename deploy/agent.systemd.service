@@ -10,7 +10,7 @@ Restart=on-failure
 RestartSec=5
 User=plorigo
 Group=plorigo
-# The agent performs privileged operations (Docker/Caddy) once that work lands.
+# The agent performs privileged operations through Docker and Caddy.
 # Review docs/architecture/security.md before broadening its permissions.
 
 [Install]

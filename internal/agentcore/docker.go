@@ -249,6 +249,45 @@ func (d *dockerClient) listManagedRunning(ctx context.Context) ([]managedContain
 	return out, nil
 }
 
+func (d *dockerClient) listManagedRoutes(ctx context.Context) ([]managedRoute, error) {
+	list, err := d.cli.ContainerList(ctx, client.ContainerListOptions{
+		All:     false,
+		Filters: client.Filters{}.Add("label", labelManaged+"=true"),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]managedRoute, 0, len(list.Items))
+	for _, c := range list.Items {
+		envID := c.Labels[labelEnvironment]
+		depID := c.Labels[labelDeployment]
+		hostPort := firstPublishedTCPPort(c.Ports)
+		if envID == "" || depID == "" || hostPort == 0 {
+			continue
+		}
+		out = append(out, managedRoute{
+			EnvironmentID: envID,
+			DeploymentID:  depID,
+			ContainerID:   c.ID,
+			HostPort:      hostPort,
+		})
+	}
+	return out, nil
+}
+
+func firstPublishedTCPPort(ports []container.PortSummary) int32 {
+	var chosenPrivate, chosenPublic uint16
+	for _, p := range ports {
+		if p.Type != "tcp" || p.PublicPort == 0 {
+			continue
+		}
+		if chosenPrivate == 0 || p.PrivatePort < chosenPrivate {
+			chosenPrivate, chosenPublic = p.PrivatePort, p.PublicPort
+		}
+	}
+	return int32(chosenPublic)
+}
+
 // logsSince returns a container's stdout+stderr lines produced after the `since` cursor
 // (empty = from now on), and the cursor to pass next time. It asks the daemon for
 // timestamped logs (Timestamps:true) and advances the cursor to just past the newest line,

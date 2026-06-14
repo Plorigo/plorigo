@@ -3,7 +3,7 @@
 // exchanges a one-time registration token for a durable credential; thereafter it
 // sends periodic heartbeats over an OUTBOUND connection so the control plane can show
 // the server online. It persists its identity locally and reconnects after a restart
-// or network drop. It manages no Docker or Caddy yet — that is the next step (see
+// or network drop. It manages Docker containers and Caddy routes for deployments (see
 // docs/architecture/agent.md and docs/architecture/security.md).
 package agentcore
 
@@ -45,6 +45,11 @@ type Options struct {
 	DataDir           string        // where the agent persists its identity (created 0700)
 	HeartbeatInterval time.Duration // fallback when the control plane doesn't specify one
 	PollInterval      time.Duration // how often to poll for deployment work when idle
+	CaddyBin          string        // caddy executable path/name
+	CaddyConfig       string        // Plorigo-managed Caddyfile path (default: DataDir/Caddyfile)
+	CaddyBaseDomain   string        // base domain for per-environment routes
+	CaddyHTTPPort     int           // HTTP listener port for app routes
+	CaddyAdmin        string        // Caddy admin API address used by caddy reload
 }
 
 // state is the agent's persisted identity. The credential and private key are secret,
@@ -91,6 +96,10 @@ func Run(ctx context.Context, out io.Writer, opts Options) error {
 	}
 	if opts.DataDir == "" {
 		opts.DataDir = defaultDataDir()
+	}
+	router, err := newCaddyManager(opts)
+	if err != nil {
+		return fmt.Errorf("configure Caddy routing: %w", err)
 	}
 
 	client := agentv1connect.NewAgentServiceClient(http.DefaultClient, opts.ControlPlaneURL)
@@ -142,7 +151,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) error {
 	defer cancel()
 	errc := make(chan error, 3)
 	go func() { errc <- heartbeatLoop(loopCtx, out, client, ident, prober, opts) }()
-	go func() { errc <- deployLoop(loopCtx, out, deployClient, ident, runtime, opts.PollInterval) }()
+	go func() { errc <- deployLoop(loopCtx, out, deployClient, ident, runtime, router, opts.PollInterval) }()
 	go func() { errc <- runtimeLogLoop(loopCtx, out, deployClient, ident, runtime, defaultRuntimeLogInterval) }()
 	first := <-errc
 	cancel()

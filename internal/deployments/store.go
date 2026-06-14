@@ -85,7 +85,7 @@ type Source struct {
 }
 
 // StatusUpdate is an agent's reported transition for a deployment. A zero host port /
-// empty container id / commit / built image never clobbers a value already set.
+// empty container id / commit / built image / route_url never clobbers a value already set.
 type StatusUpdate struct {
 	DeploymentID  string
 	Status        string
@@ -94,6 +94,7 @@ type StatusUpdate struct {
 	ContainerID   string
 	CommitSha     string
 	BuiltImageRef string
+	RouteURL      string
 }
 
 // NewEvent is one timeline entry to append. Stream is set for KindLog events

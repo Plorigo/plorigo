@@ -3,13 +3,13 @@
 // End-to-end test for build-and-deploy from a Git source (PLO-12). It runs the REAL agent
 // binary as a host subprocess (with real Docker) against an in-process control plane, and
 // proves the full path: the agent claims a git deployment, CLONES a public repo, BUILDS its
-// Dockerfile with BuildKit, RUNS the image, and reports it running on a published host port.
+// Dockerfile with BuildKit, RUNS the image, routes it through Caddy, and reports it running.
 // A second deployment of a repo with no Dockerfile must surface as a clear build failure.
 //
 // Not part of `make test` or CI — run it with `make e2e-build`, which builds a native agent
-// binary and supplies Docker + a migrated Postgres. The agent runs on the host (not in a
-// container) so it uses the host's Docker daemon and `docker` CLI directly, and published
-// ports are reachable on loopback. It clones over the network, so it needs internet access.
+// binary and supplies Docker, Caddy, and a migrated Postgres. The agent runs on the host (not
+// in a container) so it uses the host's Docker daemon plus the `docker` and `caddy` CLIs
+// directly. It clones over the network, so it needs internet access.
 package app
 
 import (
@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -57,6 +58,10 @@ func TestE2EBuildDeploy(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("e2e: docker not found on PATH; run `make e2e-build`")
 	}
+	caddyBin, err := exec.LookPath("caddy")
+	if err != nil {
+		t.Skip("e2e: caddy not found on PATH; run `make e2e-build` on a host with Caddy installed")
+	}
 	agentBin := os.Getenv("PLORIGO_E2E_AGENT_BIN")
 	if fi, err := os.Stat(agentBin); err != nil || fi.IsDir() {
 		t.Skipf("e2e: native agent binary %q missing; run `make e2e-build`", agentBin)
@@ -86,6 +91,7 @@ func TestE2EBuildDeploy(t *testing.T) {
 		_ = srv.Shutdown(sctx)
 	})
 	cpURL := fmt.Sprintf("http://127.0.0.1:%d", ln.Addr().(*net.TCPAddr).Port)
+	caddyConfig, caddyHTTPPort, caddyAdmin := startE2ECaddy(t, caddyBin)
 
 	// Fixtures: owner + workspace + project + environment + server + registration token.
 	authSvc := a.auth.Service()
@@ -129,7 +135,12 @@ func TestE2EBuildDeploy(t *testing.T) {
 	actx, acancel := context.WithCancel(ctx)
 	defer acancel()
 	cmd := exec.CommandContext(actx, agentBin,
-		"--control-plane", cpURL, "--token", tok.Raw, "--data-dir", t.TempDir())
+		"--control-plane", cpURL, "--token", tok.Raw, "--data-dir", t.TempDir(),
+		"--caddy-bin", caddyBin,
+		"--caddy-config", caddyConfig,
+		"--caddy-base-domain", "localhost",
+		"--caddy-http-port", strconv.Itoa(caddyHTTPPort),
+		"--caddy-admin", caddyAdmin)
 	cmd.Stdout = &agentOut
 	cmd.Stderr = &agentOut
 	if err := cmd.Start(); err != nil {
@@ -162,11 +173,13 @@ func TestE2EBuildDeploy(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "plorigo-"+got.ID[:12]).Run() })
 
-	// The built app actually serves on the published host port.
+	// The built app actually serves through the Caddy route. The host port remains
+	// bound, but it is now the internal Caddy upstream target.
+	assertServesThroughCaddy(t, caddyHTTPPort, env.ID)
 	assertServes(t, got.HostPort)
 
 	// The timeline went through the build phases.
-	assertReachedStatuses(t, ownerCtx, a.deployments.Service(), dep.ID, deployments.StatusCloning, deployments.StatusBuilding, deployments.StatusRunning)
+	assertReachedStatuses(t, ownerCtx, a.deployments.Service(), dep.ID, deployments.StatusCloning, deployments.StatusBuilding, deployments.StatusRouting, deployments.StatusRunning)
 
 	// Logs are attributed to the right stream: the clone/build output is build, the
 	// container's own output is runtime (PLO-13).
@@ -311,6 +324,99 @@ func maxRuntimeLogSeq(t *testing.T, ctx context.Context, svc deployments.Service
 		}
 	}
 	return maxSeq
+}
+
+func startE2ECaddy(t *testing.T, caddyBin string) (managedConfig string, httpPort int, adminAddr string) {
+	t.Helper()
+	httpPort = freeTCPPort(t)
+	adminPort := freeTCPPort(t)
+	adminAddr = fmt.Sprintf("127.0.0.1:%d", adminPort)
+	dir := t.TempDir()
+	initialConfig := filepath.Join(dir, "initial.Caddyfile")
+	managedConfig = filepath.Join(dir, "managed.Caddyfile")
+	initial := fmt.Sprintf(`{
+	admin %s
+	auto_https off
+}
+
+http://localhost:%d {
+	respond "plorigo caddy ready"
+}
+`, adminAddr, httpPort)
+	if err := os.WriteFile(initialConfig, []byte(initial), 0o600); err != nil {
+		t.Fatalf("write initial Caddyfile: %v", err)
+	}
+	var out strings.Builder
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(ctx, caddyBin, "run", "--config", initialConfig, "--adapter", "caddyfile")
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Start(); err != nil {
+		cancel()
+		t.Fatalf("start caddy: %v", err)
+	}
+	t.Cleanup(func() {
+		cancel()
+		_ = cmd.Wait()
+	})
+	waitTCP(t, adminAddr, 15*time.Second, func() string { return out.String() })
+	return managedConfig, httpPort, adminAddr
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve tcp port: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+func waitTCP(t *testing.T, addr string, timeout time.Duration, logs func() string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("tcp %s not reachable within %s: %v\nlogs:\n%s", addr, timeout, err, logs())
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func assertServesThroughCaddy(t *testing.T, caddyPort int, environmentID string) {
+	t.Helper()
+	addr := fmt.Sprintf("http://127.0.0.1:%d/", caddyPort)
+	host := environmentID + ".localhost"
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	var lastStatus int
+	for {
+		req, err := http.NewRequest(http.MethodGet, addr, nil)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req) //nolint:gosec // loopback test traffic
+		if err == nil {
+			lastStatus = resp.StatusCode
+			_ = resp.Body.Close()
+			if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+				return
+			}
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("built app not reachable through Caddy at %s with Host %s within timeout: status=%d err=%v", addr, host, lastStatus, lastErr)
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 func assertServes(t *testing.T, hostPort int32) {

@@ -45,6 +45,7 @@ export function DeploymentDetailPage() {
   // distinction, so they fall back into the build view.
   const buildLogs = allLogs.filter((e) => e.stream === "build" || e.stream === "");
   const runtimeLogs = allLogs.filter((e) => e.stream === "runtime");
+  const failedBecauseCaddy = /caddy/i.test(d.message);
   // On failure, show the tail of whichever stream is relevant: a container/health failure
   // has runtime output; a build-phase failure has only build output.
   const failureTail = (runtimeLogs.length > 0 ? runtimeLogs : buildLogs).slice(-6).map((l) => l.message);
@@ -69,9 +70,11 @@ export function DeploymentDetailPage() {
         <FailureSummary
           headline={d.message || "The deployment failed."}
           suggestion={
-            isGit
-              ? "The build or container did not succeed. Check that the repo has a Dockerfile at its root and that the app listens on the container port you set, then deploy again — any previous running release is kept."
-              : "The container did not reach a healthy state. Check the image reference and that the app listens on the container port you set, then deploy again — any previous running release is kept."
+            failedBecauseCaddy
+              ? "The app built and started, but the agent could not update Caddy. Install Caddy on the server or set the agent's Caddy binary path, then deploy again — any previous running release is kept."
+              : isGit
+                ? "The build or container did not succeed. Check that the repo has a Dockerfile at its root and that the app listens on the container port you set, then deploy again — any previous running release is kept."
+                : "The container did not reach a healthy state or Caddy could not route traffic. Check the image reference, app port, and Caddy service, then deploy again — any previous running release is kept."
           }
           logs={failureTail}
         />
@@ -81,7 +84,7 @@ export function DeploymentDetailPage() {
         <Panel>
           <PanelHeader
             title="Timeline"
-            description={isGit ? "Clone → build → start → running." : "Pull → start → health check → running."}
+            description={isGit ? "Clone → build → start → route → running." : "Pull → start → health check → route → running."}
           />
           <div className="p-5">
             <Timeline steps={steps} />
@@ -126,8 +129,23 @@ export function DeploymentDetailPage() {
             <Row label="Created" value={<span className="text-muted-foreground">{new Date(d.createdAt).toLocaleString()}</span>} />
             {d.hostPort > 0 && (
               <p className="border-t border-border pt-3 text-xs text-muted-foreground">
-                Reachable at your server&apos;s address on port {d.hostPort}.
+                Container is published internally on host port {d.hostPort}; Caddy handles the public route.
               </p>
+            )}
+            {d.routeUrl && (
+              <Row
+                label="URL"
+                value={
+                  <a
+                    href={d.routeUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="truncate font-mono text-sm text-blue-400 hover:text-blue-300 hover:underline"
+                  >
+                    {d.routeUrl}
+                  </a>
+                }
+              />
             )}
           </div>
         </Panel>

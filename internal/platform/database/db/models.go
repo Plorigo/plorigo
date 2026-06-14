@@ -76,6 +76,7 @@ type Deployment struct {
 	GitRef        string
 	CommitSha     string
 	BuiltImageRef string
+	RouteUrl      string
 }
 
 type DeploymentEvent struct {

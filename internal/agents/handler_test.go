@@ -27,4 +27,9 @@ func TestInstallCommand(t *testing.T) {
 	if !strings.Contains(dev, "--control-plane http://localhost:8080") || !strings.Contains(dev, "--token plrt_tok") {
 		t.Errorf("dev command = %q, want control plane + token flags", dev)
 	}
+	if !strings.Contains(dev, "--caddy-config .context/plorigo-agent.Caddyfile") ||
+		!strings.Contains(dev, "--caddy-http-port 8083") ||
+		!strings.Contains(dev, "--caddy-admin 127.0.0.1:8084") {
+		t.Errorf("dev command = %q, want local Caddy config and non-privileged ports", dev)
+	}
 }

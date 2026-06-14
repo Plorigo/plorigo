@@ -92,23 +92,26 @@ image; for a **git** deployment it instead **clones** the repo (an anonymous sha
 go-git — public repos only, no credential) and **builds its Dockerfile with BuildKit**
 (`docker build`, `DOCKER_BUILDKIT=1`) into a local image tag, reporting `cloning → building`
 with the build output as logs and recording the `commit_sha` and `built_image_ref`. Both kinds
-then converge: the agent **replaces** any previous container for that environment (matched by a
-`plorigo.environment` label), creates and starts the new container with the requested port
-published to an ephemeral host port — and when a git deployment **requests no port**, the agent
+then converge: the agent creates and starts the new container with the requested port published
+to an ephemeral host port — and when a git deployment **requests no port**, the agent
 **auto-detects** it from the built image's `EXPOSE` (`docker image inspect`, lowest TCP port;
-failing clearly if the image exposes none) — **health-checks** the published port, and reports
-`… → starting → running` (or `failed`) plus the container's recent logs. The clone/build runs
-in a per-deploy `0700` temp dir that is always removed afterward. The agent manages Docker
-through the Engine API (the moby SDK) for run/replace/logs and shells out to the **`docker`
-CLI** for the BuildKit build, reaching the daemon via the standard environment (`DOCKER_HOST`).
+failing clearly if the image exposes none) — **health-checks** the published port, **validates
+and reloads Caddy** so the app is reachable through a route derived from the environment id,
+then replaces any previous container for that environment (matched by a `plorigo.environment`
+label). It reports `… → starting → routing → running` (or `failed`) plus the relevant logs. The
+clone/build runs in a per-deploy `0700` temp dir that is always removed afterward. The agent
+manages Docker through the Engine API (the moby SDK) for run/replace/logs, shells out to the
+**`docker` CLI** for the BuildKit build, and shells out to the **`caddy` CLI** for config
+validation/reload.
 
 > [!NOTE]
 > **Scope of this slice.** It deploys a **pre-built public image**, or **builds a public Git
-> repository's Dockerfile** and runs it, on a **published host port**. Build detection is
+> repository's Dockerfile** and runs it, then routes HTTP traffic to it through Caddy. The
+> container still binds an ephemeral host port, but that port is an internal Caddy target. Build detection is
 > **Dockerfile-only** (Compose/Nixpacks/static come later); **private repos aren't built yet**
 > — only `access = 'public'` sources are dispatched, so no credential is ever sent to the agent
-> (the private path is a GitHub App installation token, see [security.md](./security.md)). Caddy
-> routing/SSL is a later slice. Authentication is the agent credential plus per-agent server
+> (the private path is a GitHub App installation token, see [security.md](./security.md)). SSL,
+> custom domains, and preview URL policy are later slices. Authentication is the agent credential plus per-agent server
 > scoping; the **next hardening step** is full cryptographic job signing — the control plane
 > signs the job and the agent signs its poll with the ed25519 key it already persists. Logs are
 > delivered by **polling** (unary `ReportDeployment` / `ListDeploymentEvents`), not SSE.
@@ -117,13 +120,15 @@ CLI** for the BuildKit build, reaching the daemon via the standard environment (
 
 The agent owns Caddy's desired state on its server. The loop is:
 
-1. Generate the Caddy config from the platform's desired state.
+1. Generate the Plorigo-managed Caddy config from currently running managed containers.
 2. **Validate** the config.
-3. Reload Caddy.
+3. Reload Caddy through its admin API, or start it with the validated config if no instance is running.
 4. Report success/failure to the control plane.
 
-This is also how traffic is switched during a deploy or rollback — see
-[deployment-engine.md](./deployment-engine.md).
+The first route shape is HTTP-only and derives a host from the environment id under the agent's
+configured base domain. If validation or reload fails, the previous route remains active, the
+new container is cleaned up, and the deployment timeline records the Caddy failure. This is also
+how traffic is switched during a deploy or rollback — see [deployment-engine.md](./deployment-engine.md).
 
 ## Updates & reconnection
 

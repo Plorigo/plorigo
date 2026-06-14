@@ -29,8 +29,9 @@ side of Caddy and container management is in [agent.md](./agent.md).
 > [!NOTE]
 > **What's built so far.** A deployment has a **source kind**:
 > - **`image`** — a pre-built public image. The agent claims it (steps 1–3), pulls the image,
->   starts the container on a published **host port**, health-checks it, retains/replaces the
->   previous container, and reports status + logs (steps 6–11).
+>   starts the container on a published **host port**, health-checks it, validates/reloads a
+>   Caddy route to that host port, retains/replaces the previous container, and reports status
+>   + logs (steps 6–11).
 > - **`git`** — a **public** repository. The agent additionally **clones** the repo (step 3 —
 >   an anonymous shallow clone, no credential) and **builds its Dockerfile with BuildKit**
 >   (steps 4–5: `docker build` with `DOCKER_BUILDKIT=1`) into a local image, then runs that
@@ -44,10 +45,10 @@ side of Caddy and container management is in [agent.md](./agent.md).
 > Build detection is **Dockerfile-only** for now (a one-file check on the agent; the `builders`
 > module below is still deferred), and **private repos aren't built yet** — only `access =
 > 'public'` sources are dispatched, so no credential ever leaves the control plane (see
-> [security.md](./security.md)). Logs are delivered by **polling**, not SSE; the **Caddy** route
-> switch (step 8), SSL, Compose/Nixpacks/static builds, and one-click rollback are later slices.
-> The claim is atomic per server (a queued deployment is the unit of work; a general job queue
-> comes later).
+> [security.md](./security.md)). Logs are delivered by **polling**, not SSE; Caddy routing is
+> HTTP-only and derives a route from the environment id. SSL, custom domains, Compose/Nixpacks/
+> static builds, and one-click rollback are later slices. The claim is atomic per server (a
+> queued deployment is the unit of work; a general job queue comes later).
 
 ## Build priority
 

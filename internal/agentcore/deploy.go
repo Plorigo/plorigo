@@ -21,6 +21,7 @@ const (
 	statusBuilding = "building"
 	statusPulling  = "pulling"
 	statusStarting = "starting"
+	statusRouting  = "routing"
 	statusRunning  = "running"
 	statusFailed   = "failed"
 )
@@ -58,6 +59,9 @@ type deploymentRuntime interface {
 	// cursor (empty = from now on), demuxed and timestamp-stripped, plus the cursor to pass
 	// next time. It returns at most limit lines.
 	logsSince(ctx context.Context, containerID, since string, limit int) (lines []string, nextSince string, err error)
+	// listManagedRoutes returns the route-relevant details for currently-running managed
+	// containers, so the agent can rebuild Caddy's desired state from Docker truth.
+	listManagedRoutes(ctx context.Context) ([]managedRoute, error)
 }
 
 // managedContainer is a running container the agent manages, paired with the deployment
@@ -74,7 +78,7 @@ var runHealthCheck = healthCheck
 // it follows a runtime re-registration (see heartbeatLoop). Transport errors back off
 // and retry; a failed deployment (including Docker being unavailable) is reported,
 // never fatal.
-func deployLoop(ctx context.Context, out io.Writer, deploy agentv1connect.DeployServiceClient, ident *identity, runtime deploymentRuntime, interval time.Duration) error {
+func deployLoop(ctx context.Context, out io.Writer, deploy agentv1connect.DeployServiceClient, ident *identity, runtime deploymentRuntime, router deploymentRouter, interval time.Duration) error {
 	backoff := time.Second
 	for {
 		st := ident.get()
@@ -100,7 +104,7 @@ func deployLoop(ctx context.Context, out io.Writer, deploy agentv1connect.Deploy
 			}
 			continue
 		}
-		executeDeployment(ctx, out, deploy, ident, runtime, resp.Msg)
+		executeDeployment(ctx, out, deploy, ident, runtime, router, resp.Msg)
 		// Loop straight back to poll in case more work is queued; PollDeployment
 		// returns has_work=false quickly when the queue is empty.
 	}
@@ -108,13 +112,14 @@ func deployLoop(ctx context.Context, out io.Writer, deploy agentv1connect.Deploy
 
 // executeDeployment runs one claimed deployment end to end, reporting each transition
 // and the container's recent logs. An image deployment goes pulling -> starting ->
-// running; a git deployment clones and builds first (cloning -> building -> starting ->
-// running). Any step can fail.
-func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect.DeployServiceClient, ident *identity, runtime deploymentRuntime, job *agentv1.PollDeploymentResponse) {
+// routing -> running; a git deployment clones and builds first (cloning -> building ->
+// starting -> routing -> running). Any step can fail.
+func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect.DeployServiceClient, ident *identity, runtime deploymentRuntime, router deploymentRouter, job *agentv1.PollDeploymentResponse) {
 	depID := job.GetDeploymentId()
 	// commitSHA/builtImageRef are set for git deployments and reported on every transition
-	// after the build so the control plane records what was built.
-	var commitSHA, builtImageRef string
+	// after the build so the control plane records what was built. routeURL is set once the
+	// agent computes the Caddy route so the dashboard can display the real deployment URL.
+	var commitSHA, builtImageRef, routeURL string
 	report := func(stream, status string, hostPort int32, containerID, message string, logs []string) {
 		st := ident.get()
 		_, err := deploy.ReportDeployment(ctx, connect.NewRequest(&agentv1.ReportDeploymentRequest{
@@ -129,6 +134,7 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 			LogStream:     stream,
 			CommitSha:     commitSHA,
 			BuiltImageRef: builtImageRef,
+			RouteUrl:      routeURL,
 		}))
 		if err != nil {
 			fmt.Fprintf(out, "report failed for deployment %s: %v\n", depID, err)
@@ -145,6 +151,10 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 
 	if runtime == nil {
 		reportBuild(statusFailed, 0, "", "Docker is not available on this server", nil)
+		return
+	}
+	if router == nil {
+		reportBuild(statusFailed, 0, "", "Caddy routing is not configured on this server", nil)
 		return
 	}
 
@@ -200,14 +210,53 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 		return
 	}
 
-	message := fmt.Sprintf("running on host port %d", hostPort)
+	routeURL, err = router.routeURL(appLabel)
+	if err != nil {
+		reportBuild(statusFailed, hostPort, containerID, "could not derive Caddy route: "+err.Error(), nil)
+		cleanupFailedContainer(ctx, out, runtime, containerID)
+		return
+	}
+	reportBuild(statusRouting, hostPort, containerID, "routing traffic to "+routeURL, nil)
+	routes, err := runtime.listManagedRoutes(ctx)
+	if err != nil {
+		reportBuild(statusFailed, hostPort, containerID, "could not inspect running containers for Caddy routes: "+err.Error(), nil)
+		cleanupFailedContainer(ctx, out, runtime, containerID)
+		return
+	}
+	routes = routesForDeployment(routes, managedRoute{
+		EnvironmentID: appLabel,
+		DeploymentID:  depID,
+		ContainerID:   containerID,
+		HostPort:      hostPort,
+	})
+	if logs, err := router.apply(ctx, routes); err != nil {
+		if len(logs) == 0 {
+			logs = []string{err.Error()}
+		}
+		reportBuild(statusFailed, hostPort, containerID, "Caddy routing failed: "+err.Error(), logs)
+		cleanupFailedContainer(ctx, out, runtime, containerID)
+		return
+	}
+
+	message := fmt.Sprintf("running at %s (internal host port %d)", routeURL, hostPort)
 	if err := runtime.replacePreviousExcept(ctx, appLabel, containerID, func(l string) { fmt.Fprintln(out, l) }); err != nil {
-		message = fmt.Sprintf("running on host port %d; could not remove previous container: %v", hostPort, err)
+		message = fmt.Sprintf("running at %s (internal host port %d); could not remove previous container: %v", routeURL, hostPort, err)
 		fmt.Fprintf(out, "warning: could not remove previous container for deployment %s: %v\n", depID, err)
 	}
 
 	reportRuntime(statusRunning, hostPort, containerID, message, runtime.recentLogs(ctx, containerID, maxReportLogLines))
-	fmt.Fprintf(out, "deployment %s running on host port %d\n", depID, hostPort)
+	fmt.Fprintf(out, "deployment %s running at %s (internal host port %d)\n", depID, routeURL, hostPort)
+}
+
+func routesForDeployment(existing []managedRoute, current managedRoute) []managedRoute {
+	out := make([]managedRoute, 0, len(existing)+1)
+	for _, r := range existing {
+		if r.EnvironmentID == current.EnvironmentID || r.ContainerID == current.ContainerID {
+			continue
+		}
+		out = append(out, r)
+	}
+	return append(out, current)
 }
 
 // buildFromSource clones the job's repo and builds its Dockerfile into a local image tag,

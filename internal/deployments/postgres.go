@@ -199,6 +199,7 @@ func (s *postgresStore) UpdateStatus(ctx context.Context, tx database.Tx, u Stat
 		ContainerID:   u.ContainerID,
 		CommitSha:     u.CommitSha,
 		BuiltImageRef: u.BuiltImageRef,
+		RouteUrl:      u.RouteURL,
 	})
 	return err
 }
@@ -251,6 +252,7 @@ func deploymentFromRow(r db.Deployment) Deployment {
 		GitRef:        r.GitRef,
 		CommitSha:     r.CommitSha,
 		BuiltImageRef: r.BuiltImageRef,
+		RouteURL:      r.RouteUrl,
 	}
 }
 

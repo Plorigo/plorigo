@@ -301,6 +301,9 @@ type fakeRuntime struct {
 	managed     []managedContainer
 	logsSinceFn func(id, since string) (lines []string, next string)
 	sinceSeen   []string // the `since` cursors logsSince() was called with, in order
+
+	routes    []managedRoute
+	routesErr error
 }
 
 func (f *fakeRuntime) pull(_ context.Context, _ string, emit func(string)) error {
@@ -378,11 +381,55 @@ func (f *fakeRuntime) logsSince(_ context.Context, id, since string, _ int) ([]s
 	return nil, since, nil
 }
 
+func (f *fakeRuntime) listManagedRoutes(_ context.Context) ([]managedRoute, error) {
+	f.ops = append(f.ops, "routes")
+	return f.routes, f.routesErr
+}
+
+type fakeRouter struct {
+	runtime *fakeRuntime
+	url     string
+	logs    []string
+	err     error
+	routes  []managedRoute
+}
+
+func (f *fakeRouter) routeURL(string) (string, error) {
+	if f.url == "" {
+		return "http://env-1.localhost", nil
+	}
+	return f.url, nil
+}
+
+func (f *fakeRouter) apply(_ context.Context, routes []managedRoute) ([]string, error) {
+	if f.runtime != nil {
+		f.runtime.ops = append(f.runtime.ops, "route")
+	}
+	f.routes = append([]managedRoute(nil), routes...)
+	return f.logs, f.err
+}
+
+func hasReportStatus(reports []*agentv1.ReportDeploymentRequest, status string) bool {
+	for _, r := range reports {
+		if r.GetStatus() == status {
+			return true
+		}
+	}
+	return false
+}
+
 func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *testing.T) {
 	oldHealthCheck := runHealthCheck
 	defer func() { runHealthCheck = oldHealthCheck }()
 
-	runtime := &fakeRuntime{containerID: "new-container", hostPort: 32768}
+	runtime := &fakeRuntime{
+		containerID: "new-container",
+		hostPort:    32768,
+		routes: []managedRoute{
+			{EnvironmentID: "env-0", DeploymentID: "dep-0", ContainerID: "other-container", HostPort: 32767},
+			{EnvironmentID: "env-1", DeploymentID: "old-dep", ContainerID: "old-container", HostPort: 32766},
+		},
+	}
 	runHealthCheck = func(_ context.Context, _ int32) error {
 		runtime.ops = append(runtime.ops, "health")
 		return nil
@@ -390,7 +437,8 @@ func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *test
 	deploy := &fakeDeployClient{}
 	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
 
-	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+	router := &fakeRouter{runtime: runtime}
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, router, &agentv1.PollDeploymentResponse{
 		HasWork:       true,
 		DeploymentId:  "dep-1",
 		ImageRef:      "traefik/whoami:latest",
@@ -398,9 +446,15 @@ func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *test
 		AppLabel:      "env-1",
 	})
 
-	wantOps := []string{"pull", "run", "health", "replace", "logs"}
+	wantOps := []string{"pull", "run", "health", "routes", "route", "replace", "logs"}
 	if !reflect.DeepEqual(runtime.ops, wantOps) {
 		t.Fatalf("ops = %v, want %v", runtime.ops, wantOps)
+	}
+	if !reflect.DeepEqual(router.routes, []managedRoute{
+		{EnvironmentID: "env-0", DeploymentID: "dep-0", ContainerID: "other-container", HostPort: 32767},
+		{EnvironmentID: "env-1", DeploymentID: "dep-1", ContainerID: "new-container", HostPort: 32768},
+	}) {
+		t.Fatalf("routes = %+v, want old env-1 excluded and new container included", router.routes)
 	}
 	if runtime.replaceKeep != "new-container" {
 		t.Fatalf("replace kept %q, want new container", runtime.replaceKeep)
@@ -416,7 +470,10 @@ func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *test
 	if last.GetLogStream() != streamRuntime {
 		t.Fatalf("running report log stream = %q, want %q", last.GetLogStream(), streamRuntime)
 	}
-	// The build/pull/start transitions on the way there are tagged as the build stream.
+	if !hasReportStatus(deploy.reports, statusRouting) {
+		t.Fatalf("reports = %+v, want a routing transition before running", deploy.reports)
+	}
+	// The build/pull/start/routing transitions on the way there are tagged as the build stream.
 	for _, r := range deploy.reports[:len(deploy.reports)-1] {
 		if r.GetLogStream() != streamBuild {
 			t.Fatalf("pre-running report (%s) log stream = %q, want %q", r.GetStatus(), r.GetLogStream(), streamBuild)
@@ -436,7 +493,7 @@ func TestExecuteDeployment_GitClonesAndBuildsThenRunsBuiltImage(t *testing.T) {
 	deploy := &fakeDeployClient{}
 	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
 
-	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &fakeRouter{runtime: runtime}, &agentv1.PollDeploymentResponse{
 		HasWork:       true,
 		DeploymentId:  "dep-1",
 		ContainerPort: 80,
@@ -448,7 +505,7 @@ func TestExecuteDeployment_GitClonesAndBuildsThenRunsBuiltImage(t *testing.T) {
 	})
 
 	// Git path clones and builds first, then runs the built image — and never pulls.
-	wantOps := []string{"clone", "build", "run", "health", "replace", "logs"}
+	wantOps := []string{"clone", "build", "run", "health", "routes", "route", "replace", "logs"}
 	if !reflect.DeepEqual(runtime.ops, wantOps) {
 		t.Fatalf("ops = %v, want %v (clone+build, no pull)", runtime.ops, wantOps)
 	}
@@ -466,7 +523,7 @@ func TestExecuteDeployment_GitCloneFailureReportsFailedBeforeBuild(t *testing.T)
 	deploy := &fakeDeployClient{}
 	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
 
-	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &fakeRouter{runtime: runtime}, &agentv1.PollDeploymentResponse{
 		HasWork: true, DeploymentId: "dep-1", ContainerPort: 80, AppLabel: "env-1",
 		SourceKind: "git", CloneUrl: "https://github.com/o/missing.git", GitRef: "main", BuiltImageTag: "plorigo-build:dep-1",
 	})
@@ -485,7 +542,7 @@ func TestExecuteDeployment_GitBuildFailureReportsFailedBeforeRun(t *testing.T) {
 	deploy := &fakeDeployClient{}
 	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
 
-	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &fakeRouter{runtime: runtime}, &agentv1.PollDeploymentResponse{
 		HasWork: true, DeploymentId: "dep-1", ContainerPort: 80, AppLabel: "env-1",
 		SourceKind: "git", CloneUrl: "https://github.com/o/r.git", GitRef: "main", BuiltImageTag: "plorigo-build:dep-1",
 	})
@@ -515,13 +572,13 @@ func TestExecuteDeployment_GitAutoDetectsPortWhenUnset(t *testing.T) {
 	deploy := &fakeDeployClient{}
 	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
 
-	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &fakeRouter{runtime: runtime}, &agentv1.PollDeploymentResponse{
 		HasWork: true, DeploymentId: "dep-1", ContainerPort: 0, AppLabel: "env-1",
 		SourceKind: "git", CloneUrl: "https://github.com/o/r.git", GitRef: "main", BuiltImageTag: "plorigo-build:dep-1",
 	})
 
 	// With no port set, the agent detects it from the built image before running.
-	wantOps := []string{"clone", "build", "detect", "run", "health", "replace", "logs"}
+	wantOps := []string{"clone", "build", "detect", "run", "health", "routes", "route", "replace", "logs"}
 	if !reflect.DeepEqual(runtime.ops, wantOps) {
 		t.Fatalf("ops = %v, want %v (detect between build and run)", runtime.ops, wantOps)
 	}
@@ -542,13 +599,13 @@ func TestExecuteDeployment_GitExplicitPortSkipsDetect(t *testing.T) {
 	deploy := &fakeDeployClient{}
 	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
 
-	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &fakeRouter{runtime: runtime}, &agentv1.PollDeploymentResponse{
 		HasWork: true, DeploymentId: "dep-1", ContainerPort: 5000, AppLabel: "env-1",
 		SourceKind: "git", CloneUrl: "https://github.com/o/r.git", GitRef: "main", BuiltImageTag: "plorigo-build:dep-1",
 	})
 
 	// An explicit port is honored as-is — no detection.
-	wantOps := []string{"clone", "build", "run", "health", "replace", "logs"}
+	wantOps := []string{"clone", "build", "run", "health", "routes", "route", "replace", "logs"}
 	if !reflect.DeepEqual(runtime.ops, wantOps) {
 		t.Fatalf("ops = %v, want %v (no detect when a port is set)", runtime.ops, wantOps)
 	}
@@ -562,7 +619,7 @@ func TestExecuteDeployment_GitPortDetectFailureReportsFailed(t *testing.T) {
 	deploy := &fakeDeployClient{}
 	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
 
-	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &fakeRouter{runtime: runtime}, &agentv1.PollDeploymentResponse{
 		HasWork: true, DeploymentId: "dep-1", ContainerPort: 0, AppLabel: "env-1",
 		SourceKind: "git", CloneUrl: "https://github.com/o/r.git", GitRef: "main", BuiltImageTag: "plorigo-build:dep-1",
 	})
@@ -588,7 +645,7 @@ func TestExecuteDeployment_HealthFailureDoesNotRetirePreviousContainer(t *testin
 	deploy := &fakeDeployClient{}
 	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
 
-	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &fakeRouter{runtime: runtime}, &agentv1.PollDeploymentResponse{
 		HasWork:       true,
 		DeploymentId:  "dep-1",
 		ImageRef:      "traefik/whoami:latest",
@@ -612,6 +669,45 @@ func TestExecuteDeployment_HealthFailureDoesNotRetirePreviousContainer(t *testin
 	}
 }
 
+func TestExecuteDeployment_RoutingFailureDoesNotRetirePreviousContainer(t *testing.T) {
+	oldHealthCheck := runHealthCheck
+	defer func() { runHealthCheck = oldHealthCheck }()
+
+	runtime := &fakeRuntime{containerID: "new-container", hostPort: 32768}
+	runHealthCheck = func(_ context.Context, _ int32) error {
+		runtime.ops = append(runtime.ops, "health")
+		return nil
+	}
+	deploy := &fakeDeployClient{}
+	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
+
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &fakeRouter{runtime: runtime, logs: []string{"caddy reload: connection refused"}, err: errors.New("reload failed")}, &agentv1.PollDeploymentResponse{
+		HasWork:       true,
+		DeploymentId:  "dep-1",
+		ImageRef:      "traefik/whoami:latest",
+		ContainerPort: 80,
+		AppLabel:      "env-1",
+	})
+
+	wantOps := []string{"pull", "run", "health", "routes", "route", "remove"}
+	if !reflect.DeepEqual(runtime.ops, wantOps) {
+		t.Fatalf("ops = %v, want %v", runtime.ops, wantOps)
+	}
+	if runtime.replaceKeep != "" {
+		t.Fatalf("replace should not run on failed Caddy route; kept %q", runtime.replaceKeep)
+	}
+	if !reflect.DeepEqual(runtime.removed, []string{"new-container"}) {
+		t.Fatalf("removed = %v, want failed new container only", runtime.removed)
+	}
+	last := deploy.reports[len(deploy.reports)-1]
+	if last.GetStatus() != statusFailed || !strings.Contains(last.GetMessage(), "Caddy routing failed") {
+		t.Fatalf("last report = status %q message %q, want failed Caddy report", last.GetStatus(), last.GetMessage())
+	}
+	if !reflect.DeepEqual(last.GetLogLines(), []string{"caddy reload: connection refused"}) {
+		t.Fatalf("failure logs = %v, want Caddy output", last.GetLogLines())
+	}
+}
+
 func TestExecuteDeployment_RetirePreviousFailureKeepsHealthyReplacement(t *testing.T) {
 	oldHealthCheck := runHealthCheck
 	defer func() { runHealthCheck = oldHealthCheck }()
@@ -624,7 +720,7 @@ func TestExecuteDeployment_RetirePreviousFailureKeepsHealthyReplacement(t *testi
 	deploy := &fakeDeployClient{}
 	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
 
-	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &fakeRouter{runtime: runtime}, &agentv1.PollDeploymentResponse{
 		HasWork:       true,
 		DeploymentId:  "dep-1",
 		ImageRef:      "traefik/whoami:latest",
@@ -632,7 +728,7 @@ func TestExecuteDeployment_RetirePreviousFailureKeepsHealthyReplacement(t *testi
 		AppLabel:      "env-1",
 	})
 
-	wantOps := []string{"pull", "run", "health", "replace", "logs"}
+	wantOps := []string{"pull", "run", "health", "routes", "route", "replace", "logs"}
 	if !reflect.DeepEqual(runtime.ops, wantOps) {
 		t.Fatalf("ops = %v, want %v", runtime.ops, wantOps)
 	}
