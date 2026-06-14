@@ -81,10 +81,12 @@ export function NewDeploymentPage() {
   const connected = connection.data?.connected ?? false;
   const githubLogin = connection.data?.connection?.githubLogin ?? "";
 
-  // Target.
-  const [projectId, setProjectId] = useState("");
-  const [environmentId, setEnvironmentId] = useState("");
-  const [serverId, setServerId] = useState("");
+  // Target. Selections use an override-or-default shape: an empty override means "follow the
+  // computed default" (derived below from freshly loaded data); the Select onChange records an
+  // explicit user choice. Deriving keeps defaults correct without syncing through effects.
+  const [projectOverride, setProjectOverride] = useState("");
+  const [environmentOverride, setEnvironmentOverride] = useState("");
+  const [serverOverride, setServerOverride] = useState("");
   // Quick deploy (a public image, or a public Git URL).
   const [quickValue, setQuickValue] = useState("");
   const [quickPort, setQuickPort] = useState("80");
@@ -100,6 +102,16 @@ export function NewDeploymentPage() {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState("");
   const busy = busyKey !== null;
+
+  // Default the project: a valid current selection wins, then ?project= / the active filter,
+  // then the first project (guarding against a stale or foreign id).
+  const projectList = projects.data ?? [];
+  const projectId =
+    projectOverride && projectList.some((p) => p.id === projectOverride)
+      ? projectOverride
+      : preferredProject && projectList.some((p) => p.id === preferredProject)
+        ? preferredProject
+        : (projectList[0]?.id ?? "");
 
   const environments = useEnvironments(projectId);
   const repos = useRepositories(workspaceId, connected);
@@ -127,64 +139,57 @@ export function NewDeploymentPage() {
     window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
   }, [queryClient]);
 
-  // Default the project: a valid current selection wins, then ?project= / the active filter,
-  // then the first project (guarding against a stale or foreign ?project= id).
-  useEffect(() => {
-    const list = projects.data;
-    if (!list?.length) return;
-    setProjectId((cur) => {
-      if (cur && list.some((p) => p.id === cur)) return cur;
-      if (preferredProject && list.some((p) => p.id === preferredProject)) return preferredProject;
-      return list[0].id;
-    });
-  }, [projects.data, preferredProject]);
-
   // Keep the environment valid for the chosen project (default to its first).
-  useEffect(() => {
-    const envs = environments.data;
-    if (!envs?.length) {
-      setEnvironmentId("");
-      return;
-    }
-    setEnvironmentId((cur) => (cur && envs.some((e) => e.id === cur) ? cur : envs[0].id));
-  }, [environments.data]);
+  const envs = environments.data;
+  const environmentId =
+    envs?.length
+      ? (environmentOverride && envs.some((e) => e.id === environmentOverride) ? environmentOverride : envs[0].id)
+      : "";
 
   // Default the server to a ready one (then any online, then the first server).
-  useEffect(() => {
-    if (serverId) return;
-    const def = pickDefaultServer(servers.data, agents.data);
-    if (def) setServerId(def.id);
-  }, [servers.data, agents.data, serverId]);
+  const serverId = serverOverride || pickDefaultServer(servers.data, agents.data)?.id || "";
 
-  // When a repo is expanded, default its branch to the repo's default.
-  useEffect(() => {
-    if (!selectedRepo) return;
-    setRepoBranch(selectedRepo.defaultBranch || "");
-  }, [selectedRepo]);
+  // When a repo is expanded, default its branch to the repo's default. Tracking the previous
+  // repo and adjusting during render keeps this out of an effect.
+  const [prevSelectedRepo, setPrevSelectedRepo] = useState(selectedRepo);
+  if (selectedRepo !== prevSelectedRepo) {
+    setPrevSelectedRepo(selectedRepo);
+    if (selectedRepo) setRepoBranch(selectedRepo.defaultBranch || "");
+  }
 
   const quickIsRepo = looksLikeGitUrl(quickValue);
 
   // An image deploy needs an explicit port, so default it to 80 when the input becomes an
-  // image (only on the kind flip, so typing an image ref keeps a custom port).
-  useEffect(() => {
+  // image (only on the kind flip, so typing an image ref keeps a custom port). Clearing the
+  // port + hint when the URL changes is likewise adjusted during render, leaving the effect
+  // below purely for the async Dockerfile read.
+  const [prevQuickIsRepo, setPrevQuickIsRepo] = useState(quickIsRepo);
+  if (quickIsRepo !== prevQuickIsRepo) {
+    setPrevQuickIsRepo(quickIsRepo);
     if (!quickIsRepo) setQuickPort("80");
-  }, [quickIsRepo]);
+  }
+  const [prevQuickValue, setPrevQuickValue] = useState(quickValue);
+  if (quickValue !== prevQuickValue) {
+    setPrevQuickValue(quickValue);
+    if (quickIsRepo) {
+      setQuickPort("");
+      setPortHint(
+        parseGitHubRepo(quickValue)
+          ? "Checking the repo's Dockerfile…"
+          : "Public Git repo — the port is auto-detected from the Dockerfile when it builds.",
+      );
+    }
+  }
 
   // For a Git URL, read the repo's Dockerfile up front and PREFILL the port (from its EXPOSE)
   // so the user sees it instead of a mysterious blank. Best-effort + debounced; if it can't be
   // found the field stays blank and the agent still auto-detects from the built image. Public,
-  // unauthenticated GitHub read — re-runs (and clears) when the URL changes, so changing repos
-  // re-detects; a manual edit on the SAME URL sticks (this effect won't re-fire).
+  // unauthenticated GitHub read — re-runs when the URL changes, so changing repos re-detects;
+  // a manual edit on the SAME URL sticks (this effect won't re-fire).
   useEffect(() => {
     if (!quickIsRepo) return;
     const gh = parseGitHubRepo(quickValue);
-    if (!gh) {
-      setQuickPort("");
-      setPortHint("Public Git repo — the port is auto-detected from the Dockerfile when it builds.");
-      return;
-    }
-    setQuickPort("");
-    setPortHint("Checking the repo's Dockerfile…");
+    if (!gh) return;
     const ctrl = new AbortController();
     const timer = setTimeout(async () => {
       const port = await detectDockerfilePort(gh.owner, gh.repo, ctrl.signal);
@@ -383,7 +388,7 @@ export function NewDeploymentPage() {
             />
             <div className="grid gap-4 p-4 sm:grid-cols-3">
               <Field label="Project" icon={FolderGit2}>
-                <Select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+                <Select value={projectId} onChange={(e) => setProjectOverride(e.target.value)}>
                   {(projects.data ?? []).map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
@@ -404,7 +409,7 @@ export function NewDeploymentPage() {
               <Field label="Environment" icon={Layers}>
                 <Select
                   value={environmentId}
-                  onChange={(e) => setEnvironmentId(e.target.value)}
+                  onChange={(e) => setEnvironmentOverride(e.target.value)}
                   disabled={!environments.data?.length}
                 >
                   {(environments.data ?? []).map((env) => (
@@ -418,7 +423,7 @@ export function NewDeploymentPage() {
                 )}
               </Field>
               <Field label="Server" icon={Server}>
-                <Select value={serverId} onChange={(e) => setServerId(e.target.value)} disabled={!servers.data?.length}>
+                <Select value={serverId} onChange={(e) => setServerOverride(e.target.value)} disabled={!servers.data?.length}>
                   {(servers.data ?? []).map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name} — {serverStatusLabel(s.id, agents.data)}

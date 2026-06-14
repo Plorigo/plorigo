@@ -8,16 +8,16 @@ import { AuthShell } from "../components/AuthShell";
 type Status = "verifying" | "ok" | "error";
 
 export function VerifyEmailPage() {
-  const [status, setStatus] = useState<Status>("verifying");
-  const [message, setMessage] = useState("");
+  // The token is fixed for the page's lifetime, so derive the initial state from it during
+  // render rather than syncing it in through the effect.
+  const token = new URLSearchParams(window.location.search).get("token") ?? "";
+  const [status, setStatus] = useState<Status>(token ? "verifying" : "error");
+  const [message, setMessage] = useState(
+    token ? "" : "This verification link is missing its token.",
+  );
 
   useEffect(() => {
-    const token = new URLSearchParams(window.location.search).get("token") ?? "";
-    if (!token) {
-      setStatus("error");
-      setMessage("This verification link is missing its token.");
-      return;
-    }
+    if (!token) return;
     authClient
       .verifyEmail({ token })
       .then(() => setStatus("ok"))
@@ -25,7 +25,7 @@ export function VerifyEmailPage() {
         setStatus("error");
         setMessage(err instanceof ConnectError ? err.message : "Verification failed");
       });
-  }, []);
+  }, [token]);
 
   return (
     <AuthShell
