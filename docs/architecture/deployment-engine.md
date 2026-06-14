@@ -27,13 +27,27 @@ Jobs and streaming are described in [jobs-and-realtime.md](./jobs-and-realtime.m
 side of Caddy and container management is in [agent.md](./agent.md).
 
 > [!NOTE]
-> **What's built first.** The initial slice runs this flow for a **pre-built public image**:
-> the control plane records a deployment and the agent claims it (steps 1–3), pulls the image,
-> starts the container on a published **host port**, health-checks it, retains/replaces the
-> previous container, and reports status + logs (steps 6–11) — delivered by **polling**, not
-> SSE. Source fetch and **build** (steps 4–5), the **Caddy** route switch (step 8), SSL, and
-> one-click rollback are later slices. The claim is atomic per server (a queued deployment is
-> the unit of work; a general job queue comes later).
+> **What's built so far.** A deployment has a **source kind**:
+> - **`image`** — a pre-built public image. The agent claims it (steps 1–3), pulls the image,
+>   starts the container on a published **host port**, health-checks it, retains/replaces the
+>   previous container, and reports status + logs (steps 6–11).
+> - **`git`** — a **public** repository. The agent additionally **clones** the repo (step 3 —
+>   an anonymous shallow clone, no credential) and **builds its Dockerfile with BuildKit**
+>   (steps 4–5: `docker build` with `DOCKER_BUILDKIT=1`) into a local image, then runs that
+>   image (steps 6–11). It reports two extra phases, `cloning` and `building`, streams the build
+>   output as log lines, and records the exact `commit_sha` and `built_image_ref`. A missing
+>   Dockerfile is a clear deployment failure. The **container port is optional**: when the
+>   request omits it (`container_port = 0`), the agent reads the built image's `EXPOSE` (via
+>   `docker image inspect`, so it also sees a base image's exposed port) and publishes the
+>   lowest TCP port; if the image exposes none, the deployment fails asking for an explicit port.
+>
+> Build detection is **Dockerfile-only** for now (a one-file check on the agent; the `builders`
+> module below is still deferred), and **private repos aren't built yet** — only `access =
+> 'public'` sources are dispatched, so no credential ever leaves the control plane (see
+> [security.md](./security.md)). Logs are delivered by **polling**, not SSE; the **Caddy** route
+> switch (step 8), SSL, Compose/Nixpacks/static builds, and one-click rollback are later slices.
+> The claim is atomic per server (a queued deployment is the unit of work; a general job queue
+> comes later).
 
 ## Build priority
 
@@ -46,6 +60,13 @@ Detect and build in this order:
 5. **Manual** build/start command.
 
 Dockerfile builds use **BuildKit** underneath. We do **not** build a custom buildpack system.
+
+> [!NOTE]
+> **Implemented so far: Dockerfile only.** The agent builds a Dockerfile at the repo root with
+> BuildKit (`docker build`, `DOCKER_BUILDKIT=1` — so the prepared server needs the Docker CLI,
+> which the standard install provides). Detection is a one-file check on the agent for now, not
+> the `builders` module yet; Compose, Nixpacks, static-site, and manual builds are deferred. No
+> Dockerfile → the deployment fails with a plain-English message.
 
 ## Build & framework detection
 

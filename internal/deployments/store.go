@@ -28,8 +28,14 @@ type Store interface {
 	// EnvVarsForEnvironment returns the environment's non-secret config to inject into
 	// the container (reuses the env_vars table).
 	EnvVarsForEnvironment(ctx context.Context, environmentID string) (map[string]string, error)
+	// SourceForProject resolves a project's connected repository (clone URL + access) for
+	// a git deployment, reading the project_sources table directly (a sibling-table read
+	// modules.md Rule 2 permits from postgres.go). ok is false (nil error) when the
+	// project has no connected source.
+	SourceForProject(ctx context.Context, projectID string) (Source, bool, error)
 
 	InsertDeployment(ctx context.Context, tx database.Tx, d NewDeployment) (Deployment, error)
+	InsertDeploymentFromGit(ctx context.Context, tx database.Tx, d NewDeploymentFromGit) (Deployment, error)
 	GetDeployment(ctx context.Context, deploymentID string) (Deployment, bool, error)
 	ListByEnvironment(ctx context.Context, environmentID string) ([]Deployment, error)
 	ListByProject(ctx context.Context, projectID string) ([]Deployment, error)
@@ -48,7 +54,7 @@ type Store interface {
 	AppendEvent(ctx context.Context, tx database.Tx, e NewEvent) error
 }
 
-// NewDeployment is the data to insert a queued deployment.
+// NewDeployment is the data to insert a queued image deployment.
 type NewDeployment struct {
 	EnvironmentID string
 	ProjectID     string
@@ -58,13 +64,36 @@ type NewDeployment struct {
 	ContainerPort int32
 }
 
-// StatusUpdate is an agent's reported transition for a deployment.
+// NewDeploymentFromGit is the data to insert a queued git (build-from-source) deployment.
+type NewDeploymentFromGit struct {
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	ContainerPort int32
+	SourceAccess  string
+	CloneURL      string
+	GitRef        string
+}
+
+// Source is a project's connected repository, resolved for a git deployment.
+type Source struct {
+	CloneURL      string
+	Branch        string
+	DefaultBranch string
+	Access        string // "public" | "oauth" | "app"
+}
+
+// StatusUpdate is an agent's reported transition for a deployment. A zero host port /
+// empty container id / commit / built image never clobbers a value already set.
 type StatusUpdate struct {
-	DeploymentID string
-	Status       string
-	Message      string
-	HostPort     int32
-	ContainerID  string
+	DeploymentID  string
+	Status        string
+	Message       string
+	HostPort      int32
+	ContainerID   string
+	CommitSha     string
+	BuiltImageRef string
 }
 
 // NewEvent is one timeline entry to append.

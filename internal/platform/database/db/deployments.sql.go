@@ -52,7 +52,7 @@ WHERE id = (
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref
 `
 
 // ClaimNextDeploymentForServer atomically claims the oldest queued deployment for a
@@ -76,6 +76,12 @@ func (q *Queries) ClaimNextDeploymentForServer(ctx context.Context, serverID str
 		&i.Message,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceKind,
+		&i.SourceAccess,
+		&i.CloneUrl,
+		&i.GitRef,
+		&i.CommitSha,
+		&i.BuiltImageRef,
 	)
 	return i, err
 }
@@ -83,7 +89,7 @@ func (q *Queries) ClaimNextDeploymentForServer(ctx context.Context, serverID str
 const createDeployment = `-- name: CreateDeployment :one
 INSERT INTO deployments (environment_id, project_id, workspace_id, server_id, image_ref, container_port)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref
 `
 
 type CreateDeploymentParams struct {
@@ -119,6 +125,71 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		&i.Message,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceKind,
+		&i.SourceAccess,
+		&i.CloneUrl,
+		&i.GitRef,
+		&i.CommitSha,
+		&i.BuiltImageRef,
+	)
+	return i, err
+}
+
+const createDeploymentFromGit = `-- name: CreateDeploymentFromGit :one
+INSERT INTO deployments (
+    environment_id, project_id, workspace_id, server_id,
+    container_port, source_kind, source_access, clone_url, git_ref
+)
+VALUES ($1, $2, $3, $4, $5, 'git', $6, $7, $8)
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref
+`
+
+type CreateDeploymentFromGitParams struct {
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	ContainerPort int32
+	SourceAccess  string
+	CloneUrl      string
+	GitRef        string
+}
+
+// CreateDeploymentFromGit records a queued deployment whose source is a repo+ref to clone
+// and build on the server (image_ref is filled in by the agent after the build). See
+// docs/architecture/deployment-engine.md.
+func (q *Queries) CreateDeploymentFromGit(ctx context.Context, arg CreateDeploymentFromGitParams) (Deployment, error) {
+	row := q.db.QueryRow(ctx, createDeploymentFromGit,
+		arg.EnvironmentID,
+		arg.ProjectID,
+		arg.WorkspaceID,
+		arg.ServerID,
+		arg.ContainerPort,
+		arg.SourceAccess,
+		arg.CloneUrl,
+		arg.GitRef,
+	)
+	var i Deployment
+	err := row.Scan(
+		&i.ID,
+		&i.EnvironmentID,
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.ServerID,
+		&i.ImageRef,
+		&i.ContainerPort,
+		&i.HostPort,
+		&i.ContainerID,
+		&i.Status,
+		&i.Message,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SourceKind,
+		&i.SourceAccess,
+		&i.CloneUrl,
+		&i.GitRef,
+		&i.CommitSha,
+		&i.BuiltImageRef,
 	)
 	return i, err
 }
@@ -144,7 +215,7 @@ func (q *Queries) GetAgentServerByCredential(ctx context.Context, credentialHash
 }
 
 const getDeployment = `-- name: GetDeployment :one
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at FROM deployments WHERE id = $1
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref FROM deployments WHERE id = $1
 `
 
 func (q *Queries) GetDeployment(ctx context.Context, id string) (Deployment, error) {
@@ -164,6 +235,12 @@ func (q *Queries) GetDeployment(ctx context.Context, id string) (Deployment, err
 		&i.Message,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceKind,
+		&i.SourceAccess,
+		&i.CloneUrl,
+		&i.GitRef,
+		&i.CommitSha,
+		&i.BuiltImageRef,
 	)
 	return i, err
 }
@@ -187,6 +264,37 @@ func (q *Queries) GetEnvironmentWorkspaceAndProject(ctx context.Context, id stri
 	row := q.db.QueryRow(ctx, getEnvironmentWorkspaceAndProject, id)
 	var i GetEnvironmentWorkspaceAndProjectRow
 	err := row.Scan(&i.WorkspaceID, &i.ProjectID)
+	return i, err
+}
+
+const getProjectSourceForDeploy = `-- name: GetProjectSourceForDeploy :one
+SELECT owner, repo, branch, default_branch, access, html_url
+FROM project_sources WHERE project_id = $1
+`
+
+type GetProjectSourceForDeployRow struct {
+	Owner         string
+	Repo          string
+	Branch        string
+	DefaultBranch string
+	Access        string
+	HtmlUrl       string
+}
+
+// GetProjectSourceForDeploy reads a project's connected repository so a git deployment can
+// resolve its clone URL and access kind, without importing the sources module (a sibling-
+// table read, which modules.md Rule 2 permits from a module's postgres.go).
+func (q *Queries) GetProjectSourceForDeploy(ctx context.Context, projectID string) (GetProjectSourceForDeployRow, error) {
+	row := q.db.QueryRow(ctx, getProjectSourceForDeploy, projectID)
+	var i GetProjectSourceForDeployRow
+	err := row.Scan(
+		&i.Owner,
+		&i.Repo,
+		&i.Branch,
+		&i.DefaultBranch,
+		&i.Access,
+		&i.HtmlUrl,
+	)
 	return i, err
 }
 
@@ -230,7 +338,7 @@ func (q *Queries) ListDeploymentEvents(ctx context.Context, arg ListDeploymentEv
 }
 
 const listDeploymentsByEnvironment = `-- name: ListDeploymentsByEnvironment :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at FROM deployments WHERE environment_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref FROM deployments WHERE environment_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByEnvironment(ctx context.Context, environmentID string) ([]Deployment, error) {
@@ -256,6 +364,12 @@ func (q *Queries) ListDeploymentsByEnvironment(ctx context.Context, environmentI
 			&i.Message,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SourceKind,
+			&i.SourceAccess,
+			&i.CloneUrl,
+			&i.GitRef,
+			&i.CommitSha,
+			&i.BuiltImageRef,
 		); err != nil {
 			return nil, err
 		}
@@ -268,7 +382,7 @@ func (q *Queries) ListDeploymentsByEnvironment(ctx context.Context, environmentI
 }
 
 const listDeploymentsByProject = `-- name: ListDeploymentsByProject :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at FROM deployments WHERE project_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref FROM deployments WHERE project_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByProject(ctx context.Context, projectID string) ([]Deployment, error) {
@@ -294,6 +408,12 @@ func (q *Queries) ListDeploymentsByProject(ctx context.Context, projectID string
 			&i.Message,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SourceKind,
+			&i.SourceAccess,
+			&i.CloneUrl,
+			&i.GitRef,
+			&i.CommitSha,
+			&i.BuiltImageRef,
 		); err != nil {
 			return nil, err
 		}
@@ -306,7 +426,7 @@ func (q *Queries) ListDeploymentsByProject(ctx context.Context, projectID string
 }
 
 const listDeploymentsByWorkspace = `-- name: ListDeploymentsByWorkspace :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at FROM deployments WHERE workspace_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref FROM deployments WHERE workspace_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID string) ([]Deployment, error) {
@@ -332,6 +452,12 @@ func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID st
 			&i.Message,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SourceKind,
+			&i.SourceAccess,
+			&i.CloneUrl,
+			&i.GitRef,
+			&i.CommitSha,
+			&i.BuiltImageRef,
 		); err != nil {
 			return nil, err
 		}
@@ -368,27 +494,34 @@ SET status = $1,
     message = $2,
     host_port = CASE WHEN $3::integer > 0 THEN $3::integer ELSE host_port END,
     container_id = CASE WHEN $4::text <> '' THEN $4::text ELSE container_id END,
+    commit_sha = CASE WHEN $5::text <> '' THEN $5::text ELSE commit_sha END,
+    built_image_ref = CASE WHEN $6::text <> '' THEN $6::text ELSE built_image_ref END,
     updated_at = now()
-WHERE id = $5
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at
+WHERE id = $7
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref
 `
 
 type UpdateDeploymentStatusParams struct {
-	Status      string
-	Message     string
-	HostPort    int32
-	ContainerID string
-	ID          string
+	Status        string
+	Message       string
+	HostPort      int32
+	ContainerID   string
+	CommitSha     string
+	BuiltImageRef string
+	ID            string
 }
 
-// UpdateDeploymentStatus records a status transition. host_port and container_id are
-// only known later in the flow, so a zero/empty value never clobbers a set one.
+// UpdateDeploymentStatus records a status transition. host_port, container_id, commit_sha
+// and built_image_ref are only known later in the flow, so a zero/empty value never
+// clobbers a set one.
 func (q *Queries) UpdateDeploymentStatus(ctx context.Context, arg UpdateDeploymentStatusParams) (Deployment, error) {
 	row := q.db.QueryRow(ctx, updateDeploymentStatus,
 		arg.Status,
 		arg.Message,
 		arg.HostPort,
 		arg.ContainerID,
+		arg.CommitSha,
+		arg.BuiltImageRef,
 		arg.ID,
 	)
 	var i Deployment
@@ -406,6 +539,12 @@ func (q *Queries) UpdateDeploymentStatus(ctx context.Context, arg UpdateDeployme
 		&i.Message,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.SourceKind,
+		&i.SourceAccess,
+		&i.CloneUrl,
+		&i.GitRef,
+		&i.CommitSha,
+		&i.BuiltImageRef,
 	)
 	return i, err
 }

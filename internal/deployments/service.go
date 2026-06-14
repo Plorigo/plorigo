@@ -105,6 +105,91 @@ func (s *service) Create(ctx context.Context, in CreateInput) (Deployment, error
 	return created, nil
 }
 
+// CreateFromSource records a queued git deployment that builds the project's connected
+// repository on the server. The request carries no repo URL: the service resolves the
+// project's source and derives the clone URL, so a caller can't smuggle one through. This
+// slice builds PUBLIC repositories only — a private/OAuth source is rejected with a plain
+// message (the agent receives no credential). git_ref is optional (empty = default branch).
+func (s *service) CreateFromSource(ctx context.Context, in CreateFromSourceInput) (Deployment, error) {
+	if _, err := id.Parse(in.EnvironmentID); err != nil {
+		return Deployment{}, problem.InvalidInput("a valid environment_id is required")
+	}
+	if _, err := id.Parse(in.ServerID); err != nil {
+		return Deployment{}, problem.InvalidInput("a valid server_id is required")
+	}
+	// 0 means "auto-detect from the image's EXPOSE on the agent after the build".
+	if in.ContainerPort < 0 || in.ContainerPort > maxPort {
+		return Deployment{}, problem.InvalidInput("container_port must be between 1 and %d, or 0 to auto-detect from the Dockerfile", maxPort)
+	}
+
+	workspaceID, projectID, ok, err := s.store.WorkspaceAndProjectForEnvironment(ctx, in.EnvironmentID)
+	if err != nil {
+		return Deployment{}, problem.Internalf(err, "create deployment from source")
+	}
+	if !ok {
+		return Deployment{}, problem.NotFound("environment %s not found", in.EnvironmentID)
+	}
+
+	caller := principal.FromContext(ctx)
+	if err := s.authorizer.Authorize(ctx, caller, authz.ActionDeploymentCreate, authz.Resource{Type: "deployment", WorkspaceID: workspaceID}); err != nil {
+		return Deployment{}, err
+	}
+
+	src, ok, err := s.store.SourceForProject(ctx, projectID)
+	if err != nil {
+		return Deployment{}, problem.Internalf(err, "create deployment from source")
+	}
+	if !ok {
+		return Deployment{}, problem.NotFound("connect a repository to this project before deploying from source")
+	}
+	// Public-first: the agent only ever receives a clone URL, never a credential. Building
+	// a private repo needs a short-lived credential, which lands with the GitHub App.
+	if src.Access != "public" {
+		return Deployment{}, problem.InvalidInput("building private repositories isn't supported yet — connect a public repo (GitHub App support is coming)")
+	}
+
+	// The target server must live in the same workspace as the environment (cross-tenant
+	// guard). Resolve after authorization; another workspace's server is treated as not-found.
+	serverWorkspace, ok, err := s.store.WorkspaceForServer(ctx, in.ServerID)
+	if err != nil {
+		return Deployment{}, problem.Internalf(err, "create deployment from source")
+	}
+	if !ok || serverWorkspace != workspaceID {
+		return Deployment{}, problem.NotFound("server %s not found in this workspace", in.ServerID)
+	}
+
+	ref := strings.TrimSpace(in.GitRef)
+	if ref == "" {
+		if ref = src.Branch; ref == "" {
+			ref = src.DefaultBranch
+		}
+	}
+
+	var created Deployment
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		var txErr error
+		created, txErr = s.store.InsertDeploymentFromGit(ctx, tx, NewDeploymentFromGit{
+			EnvironmentID: in.EnvironmentID,
+			ProjectID:     projectID,
+			WorkspaceID:   workspaceID,
+			ServerID:      in.ServerID,
+			ContainerPort: in.ContainerPort,
+			SourceAccess:  src.Access,
+			CloneURL:      src.CloneURL,
+			GitRef:        ref,
+		})
+		if txErr != nil {
+			return txErr
+		}
+		return s.audit.Record(ctx, tx, "deployment.create", "deployment", created.ID, workspaceID, caller.UserID)
+	})
+	if err != nil {
+		return Deployment{}, mapErr(err, "create deployment from source")
+	}
+	s.log.Info("git deployment created", "id", created.ID, "environment_id", created.EnvironmentID, "server_id", created.ServerID, "clone_url", src.CloneURL, "git_ref", ref, "workspace_id", workspaceID, "actor", caller.UserID)
+	return created, nil
+}
+
 func (s *service) Get(ctx context.Context, deploymentID string) (Deployment, error) {
 	if _, err := id.Parse(deploymentID); err != nil {
 		return Deployment{}, problem.InvalidInput("a valid deployment id is required")
@@ -219,15 +304,30 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 	if err != nil {
 		return Claimed{}, problem.Internalf(err, "poll deployment")
 	}
-	s.log.Info("deployment claimed", "id", claimed.ID, "server_id", serverID, "image", claimed.ImageRef)
-	return Claimed{
+	s.log.Info("deployment claimed", "id", claimed.ID, "server_id", serverID, "source_kind", claimed.SourceKind, "image", claimed.ImageRef)
+	out := Claimed{
 		HasWork:       true,
 		DeploymentID:  claimed.ID,
 		ImageRef:      claimed.ImageRef,
 		ContainerPort: claimed.ContainerPort,
 		Env:           env,
 		AppLabel:      claimed.EnvironmentID,
-	}, nil
+		SourceKind:    claimed.SourceKind,
+	}
+	// For a git deployment the agent clones + builds; hand it the clone URL, ref, and a
+	// deterministic local tag to build to and then run. No credential (public repos only).
+	if claimed.SourceKind == SourceGit {
+		out.CloneURL = claimed.CloneURL
+		out.GitRef = claimed.GitRef
+		out.BuiltImageTag = builtImageTag(claimed.ID)
+	}
+	return out, nil
+}
+
+// builtImageTag is the deterministic local image tag the agent builds a git deployment to
+// and then runs. It is unique per deployment and a valid Docker reference.
+func builtImageTag(deploymentID string) string {
+	return "plorigo-build:" + deploymentID
 }
 
 // ReportDeployment records a status transition and any new runtime log lines for a
@@ -260,11 +360,13 @@ func (s *service) ReportDeployment(ctx context.Context, in ReportInput) error {
 
 	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
 		if txErr := s.store.UpdateStatus(ctx, tx, StatusUpdate{
-			DeploymentID: in.DeploymentID,
-			Status:       in.Status,
-			Message:      in.Message,
-			HostPort:     in.HostPort,
-			ContainerID:  in.ContainerID,
+			DeploymentID:  in.DeploymentID,
+			Status:        in.Status,
+			Message:       in.Message,
+			HostPort:      in.HostPort,
+			ContainerID:   in.ContainerID,
+			CommitSha:     in.CommitSha,
+			BuiltImageRef: in.BuiltImageRef,
 		}); txErr != nil {
 			return txErr
 		}
@@ -333,7 +435,7 @@ func validateImageRef(raw string) (string, error) {
 
 func isAgentReportableStatus(status string) bool {
 	switch status {
-	case StatusPulling, StatusStarting, StatusRunning, StatusFailed:
+	case StatusCloning, StatusBuilding, StatusPulling, StatusStarting, StatusRunning, StatusFailed:
 		return true
 	}
 	return false

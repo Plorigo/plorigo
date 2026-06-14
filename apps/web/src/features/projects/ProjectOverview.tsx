@@ -26,11 +26,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { deploymentRefLabel } from "@/features/deployments/timeline";
 import { sourceClient } from "@/lib/clients";
 import { useDeploymentsByProject, useEnvironments, useProjectSource } from "@/lib/queries";
 import { statusTone, type Tone } from "@/lib/status";
 import { useWorkspaceStore } from "@/store";
-import { NewDeploymentDialog } from "../deployments/NewDeploymentDialog";
 import { ImportFromGitHubDialog } from "./ImportFromGitHubDialog";
 import { AddEnvironmentDialog } from "./EnvironmentDialog";
 import { useDashboardProjects, frameworkTone } from "./projectData";
@@ -63,7 +63,6 @@ export function ProjectOverview({
   const environments = useEnvironments(projectId);
   const source = useProjectSource(projectId);
   const queryClient = useQueryClient();
-  const [deployOpen, setDeployOpen] = useState(false);
   const [addEnvOpen, setAddEnvOpen] = useState(false);
   const [sourceOpen, setSourceOpen] = useState(false);
 
@@ -114,19 +113,16 @@ export function ProjectOverview({
             <ExternalLink className="h-4 w-4" aria-hidden="true" />
             Visit
           </Button>
-          <Button size="sm" disabled={!workspaceId} onClick={() => setDeployOpen(true)}>
+          <Button
+            size="sm"
+            disabled={!workspaceId}
+            onClick={() => navigate({ to: "/deployments/new", search: { project: project.id } })}
+          >
             <Rocket className="h-4 w-4" aria-hidden="true" />
             Deploy
           </Button>
         </div>
       </div>
-
-      <NewDeploymentDialog
-        workspaceId={workspaceId}
-        open={deployOpen}
-        onOpenChange={setDeployOpen}
-        defaultProjectId={project.id}
-      />
 
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label="Deployments" value={String(rows.length)} detail="Under this project" icon={Boxes} intent="info" accentBar />
@@ -146,7 +142,12 @@ export function ProjectOverview({
           title="Deployments"
           description="Everything deployed under this project."
           action={
-            <Button size="sm" variant="secondary" disabled={!workspaceId} onClick={() => setDeployOpen(true)}>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!workspaceId}
+              onClick={() => navigate({ to: "/deployments/new", search: { project: project.id } })}
+            >
               <Rocket className="h-4 w-4" aria-hidden="true" />
               Deploy
             </Button>
@@ -183,7 +184,7 @@ export function ProjectOverview({
                     onClick={() => navigate({ to: "/deployments/$deploymentId", params: { deploymentId: d.id } })}
                   >
                     <TableCell>
-                      <p className="truncate font-mono text-sm font-medium text-foreground">{d.imageRef}</p>
+                      <p className="truncate font-mono text-sm font-medium text-foreground">{deploymentRefLabel(d)}</p>
                       <p className="text-xs text-muted-foreground">{d.id.slice(0, 8)}</p>
                     </TableCell>
                     <TableCell className="text-muted-foreground">{envName.get(d.environmentId) ?? "—"}</TableCell>

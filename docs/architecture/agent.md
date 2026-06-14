@@ -87,20 +87,31 @@ progress with `ReportDeployment`. Both RPCs are public at the auth interceptor a
 authenticated by the agent **credential** (the same one Heartbeat uses); the control plane
 scopes a claim to the agent's own server, so an agent can only ever run its server's work.
 
-For one deployment the agent: pulls the image, **replaces** any previous container for that
-environment (matched by a `plorigo.environment` label), creates and starts the new container
-with the requested port published to an ephemeral host port, **health-checks** the published
-port, and reports `pulling → starting → running` (or `failed`) plus the container's recent
-logs. It manages Docker through the Engine API (the moby SDK), reaching the daemon via the
-standard environment (`DOCKER_HOST`).
+A claimed deployment has a **source kind**. For an **image** deployment the agent pulls the
+image; for a **git** deployment it instead **clones** the repo (an anonymous shallow clone via
+go-git — public repos only, no credential) and **builds its Dockerfile with BuildKit**
+(`docker build`, `DOCKER_BUILDKIT=1`) into a local image tag, reporting `cloning → building`
+with the build output as logs and recording the `commit_sha` and `built_image_ref`. Both kinds
+then converge: the agent **replaces** any previous container for that environment (matched by a
+`plorigo.environment` label), creates and starts the new container with the requested port
+published to an ephemeral host port — and when a git deployment **requests no port**, the agent
+**auto-detects** it from the built image's `EXPOSE` (`docker image inspect`, lowest TCP port;
+failing clearly if the image exposes none) — **health-checks** the published port, and reports
+`… → starting → running` (or `failed`) plus the container's recent logs. The clone/build runs
+in a per-deploy `0700` temp dir that is always removed afterward. The agent manages Docker
+through the Engine API (the moby SDK) for run/replace/logs and shells out to the **`docker`
+CLI** for the BuildKit build, reaching the daemon via the standard environment (`DOCKER_HOST`).
 
 > [!NOTE]
-> **Scope of this first slice.** It deploys a **pre-built public image** reachable on a
-> **published host port** — build-from-Git/Dockerfile and Caddy routing/SSL are later slices.
-> Authentication is the agent credential plus per-agent server scoping; the **next hardening
-> step** is full cryptographic job signing — the control plane signs the job and the agent
-> signs its poll with the ed25519 key it already persists. Logs are delivered by **polling**
-> (unary `ReportDeployment` / `ListDeploymentEvents`), not SSE; streaming is a later slice.
+> **Scope of this slice.** It deploys a **pre-built public image**, or **builds a public Git
+> repository's Dockerfile** and runs it, on a **published host port**. Build detection is
+> **Dockerfile-only** (Compose/Nixpacks/static come later); **private repos aren't built yet**
+> — only `access = 'public'` sources are dispatched, so no credential is ever sent to the agent
+> (the private path is a GitHub App installation token, see [security.md](./security.md)). Caddy
+> routing/SSL is a later slice. Authentication is the agent credential plus per-agent server
+> scoping; the **next hardening step** is full cryptographic job signing — the control plane
+> signs the job and the agent signs its poll with the ed25519 key it already persists. Logs are
+> delivered by **polling** (unary `ReportDeployment` / `ListDeploymentEvents`), not SSE.
 
 ## Caddy ownership
 

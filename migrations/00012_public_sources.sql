@@ -16,7 +16,9 @@ ALTER TABLE project_sources
     );
 
 -- +goose Down
--- Restoring NOT NULL requires that no public (connection-less) sources remain.
+-- Public (connection-less) sources can't satisfy the restored NOT NULL, so reversing the
+-- feature that introduced them also removes them (they only exist because of this migration).
+DELETE FROM project_sources WHERE connection_id IS NULL;
 ALTER TABLE project_sources
     DROP CONSTRAINT project_sources_access_connection_ck,
     DROP COLUMN access,
