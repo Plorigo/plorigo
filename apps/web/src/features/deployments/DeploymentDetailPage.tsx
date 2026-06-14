@@ -1,10 +1,12 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { ArrowLeft, Terminal } from "lucide-react";
 
 import { FailureSummary } from "@/components/FailureSummary";
 import { Timeline } from "@/components/Timeline";
 import { Badge, EmptyState, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import type { DeploymentEvent } from "@/gen/controlplane/v1/deployments_pb";
 import { isTerminalDeploymentStatus, useDeployment, useDeploymentEvents } from "@/lib/queries";
 import { statusTone } from "@/lib/status";
 import { deploymentRefLabel, deploymentTimeline, shortRepoUrl } from "./timeline";
@@ -37,7 +39,17 @@ export function DeploymentDetailPage() {
   const d = dep.data;
   const isGit = d.sourceKind === "git";
   const steps = deploymentTimeline(events.data ?? [], d.status, d.sourceKind);
-  const logs = (events.data ?? []).filter((e) => e.kind === "log");
+  const allLogs = (events.data ?? []).filter((e) => e.kind === "log");
+  // A log line belongs to the build stream (the agent's clone/build/pull/start output) or
+  // the runtime stream (the container's stdout/stderr). Legacy events predate the
+  // distinction, so they fall back into the build view.
+  const buildLogs = allLogs.filter((e) => e.stream === "build" || e.stream === "");
+  const runtimeLogs = allLogs.filter((e) => e.stream === "runtime");
+  // On failure, show the tail of whichever stream is relevant: a container/health failure
+  // has runtime output; a build-phase failure has only build output.
+  const failureTail = (runtimeLogs.length > 0 ? runtimeLogs : buildLogs).slice(-6).map((l) => l.message);
+  // Default to runtime logs once the app is up; otherwise watch the build/deploy output.
+  const defaultLogTab = d.status === "running" || d.status === "superseded" ? "runtime" : "build";
 
   return (
     <div className="space-y-6">
@@ -61,7 +73,7 @@ export function DeploymentDetailPage() {
               ? "The build or container did not succeed. Check that the repo has a Dockerfile at its root and that the app listens on the container port you set, then deploy again — any previous running release is kept."
               : "The container did not reach a healthy state. Check the image reference and that the app listens on the container port you set, then deploy again — any previous running release is kept."
           }
-          logs={logs.slice(-6).map((l) => l.message)}
+          logs={failureTail}
         />
       )}
 
@@ -122,37 +134,90 @@ export function DeploymentDetailPage() {
       </div>
 
       <Panel>
-        <PanelHeader title="Runtime logs" description="Streamed from the deploy agent." />
-        {logs.length === 0 ? (
-          <div className="p-4">
-            <EmptyState
-              title="No logs yet"
-              body={
-                live
-                  ? isGit
-                    ? "Logs appear here as the agent clones, builds, and starts the container."
-                    : "Logs appear here as the agent pulls and starts the container."
-                  : "This deployment produced no captured logs."
-              }
-            />
-          </div>
-        ) : (
-          <div className="space-y-2 p-4">
-            {logs.map((line) => (
-              <div
-                key={String(line.seq)}
-                className="grid gap-2 rounded-md bg-zinc-950 px-3 py-2 text-xs text-zinc-100 sm:grid-cols-[64px_minmax(0,1fr)]"
-              >
-                <span className="font-mono text-zinc-400">{new Date(line.createdAt).toLocaleTimeString()}</span>
-                <span className="inline-flex min-w-0 items-start gap-1.5 break-words font-mono">
-                  <Terminal className="mt-0.5 h-3 w-3 shrink-0 text-emerald-300" aria-hidden="true" />
-                  <span className="min-w-0 break-words">{line.message}</span>
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+        <PanelHeader title="Logs" description="Build and runtime output, streamed from the deploy agent." />
+        <div className="p-4">
+          <Tabs defaultValue={defaultLogTab}>
+            <TabsList>
+              <TabsTrigger value="build">Build{buildLogs.length > 0 ? ` (${buildLogs.length})` : ""}</TabsTrigger>
+              <TabsTrigger value="runtime">Runtime{runtimeLogs.length > 0 ? ` (${runtimeLogs.length})` : ""}</TabsTrigger>
+            </TabsList>
+            <TabsContent value="build">
+              <LogStream
+                logs={buildLogs}
+                emptyTitle="No build logs yet"
+                emptyBody={
+                  isGit
+                    ? "Output appears here as the agent clones the repo and builds its Dockerfile."
+                    : "Output appears here as the agent pulls the image and starts the container."
+                }
+              />
+            </TabsContent>
+            <TabsContent value="runtime">
+              <LogStream
+                logs={runtimeLogs}
+                emptyTitle="No runtime logs yet"
+                emptyBody={
+                  live
+                    ? "The container's output appears here once it is running."
+                    : "This deployment's container produced no captured output."
+                }
+              />
+            </TabsContent>
+          </Tabs>
+        </div>
       </Panel>
+    </div>
+  );
+}
+
+function LogStream({
+  logs,
+  emptyTitle,
+  emptyBody,
+}: {
+  logs: DeploymentEvent[];
+  emptyTitle: string;
+  emptyBody: string;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+
+  // Follow new lines to the bottom, but only while the user is already there — scrolling up
+  // to read earlier output must not be yanked back down by incoming logs.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight;
+  }, [logs]);
+
+  if (logs.length === 0) {
+    return (
+      <div className="mt-3">
+        <EmptyState title={emptyTitle} body={emptyBody} />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={scrollRef}
+      onScroll={(e) => {
+        const el = e.currentTarget;
+        atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+      }}
+      className="mt-3 max-h-96 space-y-2 overflow-y-auto"
+    >
+      {logs.map((line) => (
+        <div
+          key={String(line.seq)}
+          className="grid gap-2 rounded-md bg-zinc-950 px-3 py-2 text-xs text-zinc-100 sm:grid-cols-[64px_minmax(0,1fr)]"
+        >
+          <span className="font-mono text-zinc-400">{new Date(line.createdAt).toLocaleTimeString()}</span>
+          <span className="inline-flex min-w-0 items-start gap-1.5 break-words font-mono">
+            <Terminal className="mt-0.5 h-3 w-3 shrink-0 text-emerald-300" aria-hidden="true" />
+            <span className="min-w-0 break-words">{line.message}</span>
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
