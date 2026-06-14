@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Globe2, LockKeyhole } from "lucide-react";
 
 import { PageHeader } from "@/components/PageHeader";
@@ -32,26 +32,26 @@ export function ResourcesPage() {
   const projects = useProjects(workspaceId);
 
   const [localProjectId, setLocalProjectId] = useState("");
-  const [environmentId, setEnvironmentId] = useState("");
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState("");
 
   // When a project filter is active, lock onto it; otherwise default to the first project
-  // and let the user pick freely.
+  // and let the user pick freely. The effective project and environment are derived during
+  // render so a freshly loaded (or changed) list settles on a valid selection without
+  // syncing through an effect.
   const locked = Boolean(selectedProjectId);
-  const projectId = selectedProjectId || localProjectId;
-
-  useEffect(() => {
-    if (locked) return;
-    const list = projects.data ?? [];
-    if (list.length > 0 && !list.some((p) => p.id === localProjectId)) {
-      setLocalProjectId(list[0].id);
-    }
-  }, [projects.data, localProjectId, locked]);
+  const projectList = projects.data ?? [];
+  const localProject =
+    localProjectId && projectList.some((p) => p.id === localProjectId)
+      ? localProjectId
+      : (projectList[0]?.id ?? "");
+  const projectId = selectedProjectId || localProject;
 
   const environments = useEnvironments(projectId);
-  useEffect(() => {
-    const list = environments.data ?? [];
-    setEnvironmentId(list.length > 0 ? (list.some((e) => e.id === environmentId) ? environmentId : list[0].id) : "");
-  }, [environments.data, environmentId]);
+  const envList = environments.data ?? [];
+  const environmentId =
+    envList.length > 0
+      ? (envList.some((e) => e.id === selectedEnvironmentId) ? selectedEnvironmentId : envList[0].id)
+      : "";
 
   const envVars = useEnvVars(environmentId);
   const secrets = useSecrets(environmentId);
@@ -105,7 +105,7 @@ export function ResourcesPage() {
             ))}
             {!projects.data?.length && <option value="">No projects</option>}
           </Select>
-          <Select value={environmentId} onChange={(e) => setEnvironmentId(e.target.value)} disabled={!environments.data?.length} aria-label="Environment">
+          <Select value={environmentId} onChange={(e) => setSelectedEnvironmentId(e.target.value)} disabled={!environments.data?.length} aria-label="Environment">
             {environments.data?.map((environment) => (
               <option key={environment.id} value={environment.id}>
                 {environment.name} ({environment.type || environment.slug})
