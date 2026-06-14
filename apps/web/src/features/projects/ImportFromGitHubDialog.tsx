@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { ConnectError } from "@connectrpc/connect";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -44,7 +44,10 @@ export function ImportFromGitHubDialog({
   const connected = connection.data?.connected ?? false;
   const configured = connection.data?.configured ?? false;
 
-  const [method, setMethod] = useState<Method>("oauth");
+  // An empty override means "follow the default": OAuth normally, but the public-URL method
+  // once we know OAuth isn't configured. The method buttons record an explicit choice.
+  const [methodOverride, setMethodOverride] = useState<Method | null>(null);
+  const method: Method = methodOverride ?? (!connection.isLoading && !configured ? "public" : "oauth");
 
   // OAuth picker state.
   const repos = useRepositories(workspaceId, open && method === "oauth" && connected);
@@ -70,7 +73,7 @@ export function ImportFromGitHubDialog({
   const importMode = !projectId;
 
   function reset() {
-    setMethod(configured ? "oauth" : "public");
+    setMethodOverride(null);
     setFilter("");
     setRepoFullName("");
     setRepoUrl("");
@@ -82,25 +85,26 @@ export function ImportFromGitHubDialog({
     setError("");
   }
 
-  // When OAuth isn't configured, default to the public URL method (the working path).
-  useEffect(() => {
-    if (!connection.isLoading && !configured) setMethod("public");
-  }, [connection.isLoading, configured]);
-
-  // OAuth: when a repo is picked, default the branch to its default and prefill the name.
-  useEffect(() => {
-    if (method !== "oauth" || !selectedRepo) return;
-    setBranch(selectedRepo.defaultBranch || "");
-    if (importMode) setName((prev) => prev || selectedRepo.name);
-  }, [method, selectedRepo, importMode]);
-
-  // Public: clearing the branch falls back to the repo's default on the server. Prefill
-  // the project name from the URL's repo segment (best-effort; the server is authoritative).
-  useEffect(() => {
-    if (method !== "public" || !importMode) return;
-    const suggested = repoNameFromUrl(repoUrl);
-    if (suggested) setName((prev) => prev || suggested);
-  }, [method, importMode, repoUrl]);
+  // Prefill defaults when the trigger changes, adjusting state during render (tracking the
+  // previous value) instead of syncing through effects. OAuth: when a repo is picked,
+  // default the branch and prefill the project name. Public: prefill the project name from
+  // the URL's repo segment (best-effort; the server stays authoritative for the branch).
+  const [prevSelectedRepo, setPrevSelectedRepo] = useState(selectedRepo);
+  if (selectedRepo !== prevSelectedRepo) {
+    setPrevSelectedRepo(selectedRepo);
+    if (method === "oauth" && selectedRepo) {
+      setBranch(selectedRepo.defaultBranch || "");
+      if (importMode) setName((prev) => prev || selectedRepo.name);
+    }
+  }
+  const [prevRepoUrl, setPrevRepoUrl] = useState(repoUrl);
+  if (repoUrl !== prevRepoUrl) {
+    setPrevRepoUrl(repoUrl);
+    if (method === "public" && importMode) {
+      const suggested = repoNameFromUrl(repoUrl);
+      if (suggested) setName((prev) => prev || suggested);
+    }
+  }
 
   const filteredRepos = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -173,7 +177,7 @@ export function ImportFromGitHubDialog({
       return;
     }
 
-    let newProjectId = "";
+    let newProjectId: string;
     try {
       const { project } = await projectClient.createProject({ workspaceId, name: projectName });
       if (!project) throw new Error("the project was not created");
@@ -242,7 +246,7 @@ export function ImportFromGitHubDialog({
               key={m}
               type="button"
               onClick={() => {
-                setMethod(m);
+                setMethodOverride(m);
                 setError("");
               }}
               className={cn(

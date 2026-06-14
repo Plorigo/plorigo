@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { ConnectError } from "@connectrpc/connect";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -66,23 +66,34 @@ export function NewDeploymentDialog({
   const configured = connection.data?.configured ?? false;
   const connected = connection.data?.connected ?? false;
 
+  // Selections use an override-or-default shape: an empty override means "follow the
+  // computed default" (derived below from freshly loaded data), and the Select onChange
+  // records an explicit user choice. This keeps defaults correct without syncing state in
+  // through effects.
   const [mode, setMode] = useState<Mode>("image");
-  const [projectId, setProjectId] = useState("");
-  const [environmentId, setEnvironmentId] = useState("");
-  const [serverId, setServerId] = useState("");
+  const [projectOverride, setProjectOverride] = useState("");
+  const [environmentOverride, setEnvironmentOverride] = useState("");
+  const [serverOverride, setServerOverride] = useState("");
   // Image source.
   const [imageRef, setImageRef] = useState("traefik/whoami");
   const [containerPort, setContainerPort] = useState("80");
   // Template source.
   const [templateId, setTemplateId] = useState("");
   // GitHub source.
-  const [repoMethod, setRepoMethod] = useState<RepoMethod>("oauth");
+  const [repoMethodOverride, setRepoMethodOverride] = useState<RepoMethod | null>(null);
   const [repoFilter, setRepoFilter] = useState("");
   const [repoFullName, setRepoFullName] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
   const [branch, setBranch] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  // Default the project (preselected project wins, then the first available project).
+  const projectId = projectOverride || defaultProjectId || (projects.data?.[0]?.id ?? "");
+
+  // When OAuth isn't configured, fall back to the public-URL method.
+  const repoMethod: RepoMethod =
+    repoMethodOverride ?? (!connection.isLoading && !configured ? "public" : "oauth");
 
   const environments = useEnvironments(projectId);
   const repos = useRepositories(workspaceId, open && mode === "github" && repoMethod === "oauth" && connected);
@@ -97,40 +108,25 @@ export function NewDeploymentDialog({
   // Image sources deploy now; repo sources connect (build-from-Git is a later slice).
   const isDeploy = mode === "image" || (mode === "template" && templateIsImage);
 
-  // Default the project when the dialog opens (preselected project wins).
-  useEffect(() => {
-    if (!open) return;
-    if (defaultProjectId) setProjectId(defaultProjectId);
-    else if (!projectId && projects.data?.length) setProjectId(projects.data[0].id);
-  }, [open, defaultProjectId, projects.data, projectId]);
-
   // Keep the environment valid for the chosen project (default to its first).
-  useEffect(() => {
-    const envs = environments.data;
-    if (!envs?.length) {
-      setEnvironmentId("");
-      return;
-    }
-    setEnvironmentId((cur) => (cur && envs.some((e) => e.id === cur) ? cur : envs[0].id));
-  }, [environments.data]);
+  const envs = environments.data;
+  const environmentId =
+    envs?.length
+      ? (environmentOverride && envs.some((e) => e.id === environmentOverride) ? environmentOverride : envs[0].id)
+      : "";
 
   // Default the server to a ready one (then any online, then the first server).
-  useEffect(() => {
-    if (serverId) return;
-    const def = pickDefaultServer(servers.data, agents.data);
-    if (def) setServerId(def.id);
-  }, [servers.data, agents.data, serverId]);
+  const serverId = serverOverride || pickDefaultServer(servers.data, agents.data)?.id || "";
 
-  // When OAuth isn't configured, default the GitHub source to the public-URL method.
-  useEffect(() => {
-    if (!connection.isLoading && !configured) setRepoMethod("public");
-  }, [connection.isLoading, configured]);
-
-  // OAuth: when a repo is picked, default the branch to its default.
-  useEffect(() => {
-    if (mode !== "github" || repoMethod !== "oauth" || !selectedRepo) return;
-    setBranch(selectedRepo.defaultBranch || "");
-  }, [mode, repoMethod, selectedRepo]);
+  // OAuth: when a repo is picked, default the branch to its default. Tracking the previous
+  // repo and adjusting during render keeps this out of an effect.
+  const [prevSelectedRepo, setPrevSelectedRepo] = useState(selectedRepo);
+  if (selectedRepo !== prevSelectedRepo) {
+    setPrevSelectedRepo(selectedRepo);
+    if (mode === "github" && repoMethod === "oauth" && selectedRepo) {
+      setBranch(selectedRepo.defaultBranch || "");
+    }
+  }
 
   const filteredRepos = useMemo(() => {
     const q = repoFilter.trim().toLowerCase();
@@ -142,6 +138,8 @@ export function NewDeploymentDialog({
   function reset() {
     setBusy(false);
     setError("");
+    // Clear the project override so reopening re-applies the preselected/default project.
+    setProjectOverride("");
     setImageRef("traefik/whoami");
     setContainerPort("80");
     setTemplateId("");
@@ -281,7 +279,7 @@ export function NewDeploymentDialog({
 
         <form onSubmit={onSubmit} className="space-y-4">
           <Field label="Project">
-            <Select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            <Select value={projectId} onChange={(e) => setProjectOverride(e.target.value)}>
               {(projects.data ?? []).map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -362,7 +360,7 @@ export function NewDeploymentDialog({
               <Field label="Environment">
                 <Select
                   value={environmentId}
-                  onChange={(e) => setEnvironmentId(e.target.value)}
+                  onChange={(e) => setEnvironmentOverride(e.target.value)}
                   disabled={!environments.data?.length}
                 >
                   {(environments.data ?? []).map((env) => (
@@ -379,7 +377,7 @@ export function NewDeploymentDialog({
               </Field>
 
               <Field label="Server">
-                <Select value={serverId} onChange={(e) => setServerId(e.target.value)} disabled={!servers.data?.length}>
+                <Select value={serverId} onChange={(e) => setServerOverride(e.target.value)} disabled={!servers.data?.length}>
                   {(servers.data ?? []).map((s) => (
                     <option key={s.id} value={s.id}>
                       {s.name} — {serverStatusLabel(s.id, agents.data)}
@@ -417,7 +415,7 @@ export function NewDeploymentDialog({
                     key={rm}
                     type="button"
                     onClick={() => {
-                      setRepoMethod(rm);
+                      setRepoMethodOverride(rm);
                       setError("");
                     }}
                     className={cn(

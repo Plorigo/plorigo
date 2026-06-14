@@ -35,7 +35,7 @@ export function NewProjectPage() {
     setBusy(true);
     setError("");
 
-    let projectId = "";
+    let projectId: string;
     try {
       const { project } = await projectClient.createProject({ workspaceId, name: projectName });
       if (!project) throw new Error("the project was not created");
