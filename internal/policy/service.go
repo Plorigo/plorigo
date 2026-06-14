@@ -45,6 +45,10 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionServiceRead:       true,
 		authz.ActionServiceUpdate:     true,
 		authz.ActionServiceDelete:     true,
+		authz.ActionDomainCreate:      true,
+		authz.ActionDomainRead:        true,
+		authz.ActionDomainVerify:      true,
+		authz.ActionDomainDelete:      true,
 	},
 	authz.RoleAdmin: {
 		authz.ActionMemberInvite:      true,
@@ -75,6 +79,10 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionServiceRead:       true,
 		authz.ActionServiceUpdate:     true,
 		authz.ActionServiceDelete:     true,
+		authz.ActionDomainCreate:      true,
+		authz.ActionDomainRead:        true,
+		authz.ActionDomainVerify:      true,
+		authz.ActionDomainDelete:      true,
 	},
 	authz.RoleMember: {
 		authz.ActionMemberList:        true,
@@ -101,6 +109,10 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionServiceRead:       true,
 		authz.ActionServiceUpdate:     true,
 		authz.ActionServiceDelete:     true,
+		authz.ActionDomainCreate:      true,
+		authz.ActionDomainRead:        true,
+		authz.ActionDomainVerify:      true,
+		authz.ActionDomainDelete:      true,
 	},
 	authz.RoleViewer: {
 		authz.ActionMemberList:      true,
@@ -118,6 +130,8 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionSourceRead: true,
 		// A viewer may see services but not create, update, or delete them.
 		authz.ActionServiceRead: true,
+		// A viewer may see custom domain status and DNS instructions but not mutate or verify.
+		authz.ActionDomainRead: true,
 	},
 }
 

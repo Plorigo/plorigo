@@ -20,6 +20,15 @@ service DeployService {
   // ReportDeployment records a status transition and any new runtime log lines for a
   // deployment the agent is executing.
   rpc ReportDeployment(ReportDeploymentRequest) returns (ReportDeploymentResponse);
+
+  // SyncRoutes lets the outbound agent ask the control plane for verified custom hostnames
+  // that should be routed to the services it is currently running. The agent applies the
+  // returned desired state to Caddy and reports the result with ReportRouteSync.
+  rpc SyncRoutes(SyncRoutesRequest) returns (SyncRoutesResponse);
+
+  // ReportRouteSync records whether the latest Caddy route sync activated or failed the
+  // custom domains returned by SyncRoutes.
+  rpc ReportRouteSync(ReportRouteSyncRequest) returns (ReportRouteSyncResponse);
 }
 
 message PollDeploymentRequest {
@@ -75,3 +84,40 @@ message ReportDeploymentRequest {
 }
 
 message ReportDeploymentResponse {}
+
+message ManagedRoute {
+  string service_id = 1;
+  string deployment_id = 2;
+  int32 host_port = 3;
+}
+
+message RouteOverride {
+  string service_id = 1;
+  repeated string hostnames = 2;
+}
+
+message SyncRoutesRequest {
+  string agent_id = 1;
+  string credential = 2;
+  repeated ManagedRoute routes = 3;
+}
+
+message SyncRoutesResponse {
+  repeated RouteOverride overrides = 1;
+}
+
+message RouteSyncResult {
+  string service_id = 1;
+  repeated string hostnames = 2;
+  bool ok = 3;
+  string message = 4;
+  string deployment_id = 5;
+}
+
+message ReportRouteSyncRequest {
+  string agent_id = 1;
+  string credential = 2;
+  repeated RouteSyncResult results = 3;
+}
+
+message ReportRouteSyncResponse {}

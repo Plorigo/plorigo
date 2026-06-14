@@ -39,6 +39,7 @@ type managedRoute struct {
 	DeploymentID string
 	ContainerID  string
 	HostPort     int32
+	CustomHosts  []string
 }
 
 type caddyManager struct {
@@ -237,15 +238,18 @@ func (m *caddyManager) render(routes []managedRoute) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&b, "%s {\n", siteAddress(host, m.httpPort))
-		fmt.Fprintf(&b, "\treverse_proxy 127.0.0.1:%d\n", r.HostPort)
-		b.WriteString("}\n\n")
+		for _, siteHost := range append([]string{host}, r.CustomHosts...) {
+			fmt.Fprintf(&b, "%s {\n", siteAddress(siteHost, m.httpPort))
+			fmt.Fprintf(&b, "\treverse_proxy 127.0.0.1:%d\n", r.HostPort)
+			b.WriteString("}\n\n")
+		}
 	}
 	return b.String(), nil
 }
 
 func normalizeRoutes(routes []managedRoute) ([]managedRoute, error) {
 	byService := make(map[string]managedRoute, len(routes))
+	seenHosts := map[string]string{}
 	for _, r := range routes {
 		svc := strings.ToLower(strings.TrimSpace(r.ServiceID))
 		if err := validateDNSLabel("service route label", svc); err != nil {
@@ -254,7 +258,12 @@ func normalizeRoutes(routes []managedRoute) ([]managedRoute, error) {
 		if r.HostPort <= 0 || r.HostPort > 65535 {
 			return nil, fmt.Errorf("route for service %s has invalid host port %d", svc, r.HostPort)
 		}
+		customHosts, err := normalizeCustomHosts(r.CustomHosts)
+		if err != nil {
+			return nil, err
+		}
 		r.ServiceID = svc
+		r.CustomHosts = customHosts
 		cur, ok := byService[svc]
 		if !ok || routeTieBreak(r, cur) > 0 {
 			byService[svc] = r
@@ -262,11 +271,38 @@ func normalizeRoutes(routes []managedRoute) ([]managedRoute, error) {
 	}
 	out := make([]managedRoute, 0, len(byService))
 	for _, r := range byService {
+		for _, host := range r.CustomHosts {
+			if owner, ok := seenHosts[host]; ok && owner != r.ServiceID {
+				return nil, fmt.Errorf("custom host %s is attached to multiple services", host)
+			}
+			seenHosts[host] = r.ServiceID
+		}
 		out = append(out, r)
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].ServiceID < out[j].ServiceID
 	})
+	return out, nil
+}
+
+func normalizeCustomHosts(hosts []string) ([]string, error) {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		host := strings.ToLower(strings.TrimSpace(strings.TrimSuffix(h, ".")))
+		if host == "" || seen[host] {
+			continue
+		}
+		if strings.Contains(host, "*") {
+			return nil, fmt.Errorf("custom host %q uses a wildcard, which is not supported yet", host)
+		}
+		if err := validateDomainName(host); err != nil {
+			return nil, fmt.Errorf("custom host %q: %w", host, err)
+		}
+		seen[host] = true
+		out = append(out, host)
+	}
+	sort.Strings(out)
 	return out, nil
 }
 

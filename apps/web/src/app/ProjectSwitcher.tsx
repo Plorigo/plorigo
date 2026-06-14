@@ -13,17 +13,18 @@ import {
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDashboardProjects } from "@/features/projects/projectData";
+import { useEffectiveProjectId } from "@/lib/projectScope";
 import { useWorkspaceStore } from "@/store";
 
 // Project picker shown under the WorkspaceSwitcher. Writes the selected project to the
 // shared store (an empty id means "All projects" — the whole workspace). It sources the
 // same dashboard-project list the /projects page uses, so it matches what the user sees
-// there (including demo fixtures). Selecting a project lands on Overview so the user
-// immediately sees that project's overview.
+// there (including demo fixtures). Selecting a project lands on that project's URL so
+// browser refresh can restore the selection from the route.
 export function ProjectSwitcher({ onNavigate }: { onNavigate?: () => void }) {
   const navigate = useNavigate();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
-  const projectId = useWorkspaceStore((s) => s.projectId);
+  const projectId = useEffectiveProjectId();
   const setProjectId = useWorkspaceStore((s) => s.setProjectId);
   const clearProject = useWorkspaceStore((s) => s.clearProject);
   const { dashboardProjects, query } = useDashboardProjects();
@@ -34,8 +35,13 @@ export function ProjectSwitcher({ onNavigate }: { onNavigate?: () => void }) {
 
   function select(id: string) {
     setOpen(false);
-    if (id) setProjectId(id);
-    else clearProject();
+    if (id) {
+      setProjectId(id);
+      onNavigate?.();
+      navigate({ to: "/projects/$projectId", params: { projectId: id } });
+      return;
+    }
+    clearProject();
     onNavigate?.();
     navigate({ to: "/" });
   }

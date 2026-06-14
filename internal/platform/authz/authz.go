@@ -62,6 +62,12 @@ const (
 	ActionServiceRead   Action = "service.read"
 	ActionServiceUpdate Action = "service.update"
 	ActionServiceDelete Action = "service.delete"
+	// Domain actions cover attaching custom hostnames to services and checking DNS. Route
+	// sync is agent-facing and authenticated by agent credential, so it has no Action here.
+	ActionDomainCreate Action = "domain.create"
+	ActionDomainRead   Action = "domain.read"
+	ActionDomainVerify Action = "domain.verify"
+	ActionDomainDelete Action = "domain.delete"
 )
 
 // Workspace roles, most privileged first. Stored in workspace_members.role and

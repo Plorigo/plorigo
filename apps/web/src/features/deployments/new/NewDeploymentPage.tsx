@@ -281,7 +281,10 @@ export function NewDeploymentPage() {
     void queryClient.invalidateQueries({ queryKey: ["services"] });
     void queryClient.invalidateQueries({ queryKey: ["deployments"] });
     if (deploymentId) {
-      void navigate({ to: "/deployments/$deploymentId", params: { deploymentId } });
+      void navigate({
+        to: "/projects/$projectId/deployments/$deploymentId",
+        params: { projectId, deploymentId },
+      });
     } else {
       void navigate({
         to: "/projects/$projectId/services/$serviceId",

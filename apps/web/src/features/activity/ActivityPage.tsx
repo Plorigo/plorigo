@@ -5,9 +5,11 @@ import { PageHeader } from "@/components/PageHeader";
 import { Panel, PanelHeader } from "@/components/ui";
 import { useDemoData } from "@/lib/demo";
 import { activity } from "@/lib/mockDashboard";
+import { useEffectiveProjectId } from "@/lib/projectScope";
 
 export function ActivityPage() {
   const demo = useDemoData();
+  useEffectiveProjectId();
 
   return (
     <div className="space-y-6">

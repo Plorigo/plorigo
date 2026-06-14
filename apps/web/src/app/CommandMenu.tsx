@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/command";
 import { useLogout } from "@/lib/auth";
 import { useDemoStore } from "@/lib/demo";
+import { useEffectiveProjectId } from "@/lib/projectScope";
 import { useThemeStore } from "@/lib/theme";
 import { useCommandMenu } from "./commandMenuStore";
 import { navItems } from "./nav";
@@ -23,6 +24,7 @@ export function CommandMenu() {
   const navigate = useNavigate();
   const setTheme = useThemeStore((s) => s.setTheme);
   const toggleDemo = useDemoStore((s) => s.toggleDemo);
+  const projectId = useEffectiveProjectId();
   const logout = useLogout();
 
   useEffect(() => {
@@ -53,7 +55,15 @@ export function CommandMenu() {
               <CommandItem
                 key={item.to}
                 value={`${item.label} ${item.description}`}
-                onSelect={() => run(() => navigate({ to: item.to }))}
+                onSelect={() =>
+                  run(() => {
+                    if (projectId && item.projectTo) {
+                      navigate({ to: item.projectTo, params: { projectId } });
+                      return;
+                    }
+                    navigate({ to: item.to });
+                  })
+                }
               >
                 <Icon className="h-4 w-4" aria-hidden="true" />
                 <span>{item.label}</span>

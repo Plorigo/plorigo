@@ -7,6 +7,7 @@ import { Timeline } from "@/components/Timeline";
 import { Badge, EmptyState, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { DeploymentEvent } from "@/gen/controlplane/v1/deployments_pb";
+import { useEffectiveProjectId } from "@/lib/projectScope";
 import { isTerminalDeploymentStatus, useDeployment, useDeploymentEvents } from "@/lib/queries";
 import { statusTone } from "@/lib/status";
 import { deploymentRefLabel, deploymentTimeline, shortRepoUrl } from "./timeline";
@@ -14,6 +15,7 @@ import { deploymentRefLabel, deploymentTimeline, shortRepoUrl } from "./timeline
 export function DeploymentDetailPage() {
   const { deploymentId } = useParams({ strict: false }) as { deploymentId?: string };
   const id = deploymentId ?? "";
+  const projectId = useEffectiveProjectId();
   const dep = useDeployment(id);
   const live = !dep.data || !isTerminalDeploymentStatus(dep.data.status);
   const events = useDeploymentEvents(id, live);
@@ -21,7 +23,7 @@ export function DeploymentDetailPage() {
   if (dep.isLoading && !dep.data) {
     return (
       <div className="space-y-6">
-        <BackLink />
+        <BackLink projectId={projectId} />
         <Skeleton className="h-64 w-full" />
       </div>
     );
@@ -30,7 +32,7 @@ export function DeploymentDetailPage() {
   if (!dep.data) {
     return (
       <div className="space-y-6">
-        <BackLink />
+        <BackLink projectId={projectId} />
         <EmptyState title="Deployment not found" body="It may have been removed, or it belongs to another workspace." />
       </div>
     );
@@ -54,7 +56,7 @@ export function DeploymentDetailPage() {
 
   return (
     <div className="space-y-6">
-      <BackLink />
+      <BackLink projectId={projectId} />
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
@@ -268,7 +270,19 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-function BackLink() {
+function BackLink({ projectId = "" }: { projectId?: string }) {
+  if (projectId) {
+    return (
+      <Link
+        to="/projects/$projectId/deployments"
+        params={{ projectId }}
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+        Back to deployments
+      </Link>
+    );
+  }
   return (
     <Link to="/deployments" className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground">
       <ArrowLeft className="h-4 w-4" aria-hidden="true" />

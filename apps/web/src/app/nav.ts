@@ -1,6 +1,7 @@
 import {
   Box,
   Clock3,
+  Globe2,
   HardDrive,
   Home,
   Layers3,
@@ -17,6 +18,7 @@ import {
 export type NavTo =
   | "/"
   | "/projects"
+  | "/domains"
   | "/deployments"
   | "/servers"
   | "/resources"
@@ -25,9 +27,17 @@ export type NavTo =
   | "/team"
   | "/activity";
 
+export type ProjectNavTo =
+  | "/projects/$projectId"
+  | "/projects/$projectId/domains"
+  | "/projects/$projectId/deployments"
+  | "/projects/$projectId/resources"
+  | "/projects/$projectId/activity";
+
 export interface NavItem {
   label: string;
   to: NavTo;
+  projectTo?: ProjectNavTo;
   icon: LucideIcon;
   description: string;
   // Which group the item belongs to when a project is selected (the split nav).
@@ -36,15 +46,16 @@ export interface NavItem {
 }
 
 export const navItems: NavItem[] = [
-  { label: "Overview", to: "/", icon: Home, description: "Workspace at a glance", scope: "project" },
+  { label: "Overview", to: "/", projectTo: "/projects/$projectId", icon: Home, description: "Workspace at a glance", scope: "project" },
   { label: "Projects", to: "/projects", icon: Box, description: "Apps, environments, and health", scope: "workspace" },
-  { label: "Deployments", to: "/deployments", icon: Rocket, description: "Release timeline and logs", scope: "project" },
+  { label: "Domains", to: "/domains", projectTo: "/projects/$projectId/domains", icon: Globe2, description: "Custom hostnames and DNS", scope: "project" },
+  { label: "Deployments", to: "/deployments", projectTo: "/projects/$projectId/deployments", icon: Rocket, description: "Release timeline and logs", scope: "project" },
   { label: "Servers", to: "/servers", icon: Server, description: "Owned infrastructure", scope: "workspace" },
-  { label: "Resources", to: "/resources", icon: Layers3, description: "Env vars and secrets", scope: "project" },
+  { label: "Resources", to: "/resources", projectTo: "/projects/$projectId/resources", icon: Layers3, description: "Env vars and secrets", scope: "project" },
   { label: "Backups", to: "/backups", icon: HardDrive, description: "Recovery and restore", scope: "workspace" },
   { label: "Security", to: "/security", icon: Shield, description: "Production guardrails", scope: "workspace" },
   { label: "Team", to: "/team", icon: Users, description: "Members and access", scope: "workspace" },
-  { label: "Activity", to: "/activity", icon: Clock3, description: "Audit-ready timeline", scope: "project" },
+  { label: "Activity", to: "/activity", projectTo: "/projects/$projectId/activity", icon: Clock3, description: "Audit-ready timeline", scope: "project" },
 ];
 
 // The mobile bottom bar shows the five most-used sections.

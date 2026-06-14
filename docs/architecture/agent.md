@@ -135,6 +135,13 @@ don't collide; only **public** services get a route. If validation or reload fai
 new container is cleaned up, and the deployment timeline records the Caddy failure. This is also
 how traffic is switched during a deploy or rollback — see [deployment-engine.md](./deployment-engine.md).
 
+After deployments, and periodically while running, the agent also syncs verified custom
+domains. It sends the currently running managed service routes to the control plane, receives
+the verified hostnames for those services, renders them into the same Plorigo-managed
+Caddyfile, and reports whether Caddy accepted the config. Failed custom-domain sync marks the
+domain rows as failed without changing the generated service URL. This is still HTTP-only;
+automatic HTTPS/SSL is a later hardening slice.
+
 ## Updates & reconnection
 
 The agent is designed to reconnect cleanly after a restart or a network drop, and to support a

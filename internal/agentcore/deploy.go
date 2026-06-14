@@ -256,7 +256,85 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 	}
 
 	reportRuntime(statusRunning, hostPort, containerID, message, runtime.recentLogs(ctx, containerID, maxReportLogLines))
+	syncCustomRoutes(ctx, out, deploy, ident, runtime, router)
 	fmt.Fprintf(out, "deployment %s %s\n", depID, message)
+}
+
+func syncCustomRoutes(ctx context.Context, out io.Writer, deploy agentv1connect.DeployServiceClient, ident *identity, runtime deploymentRuntime, router deploymentRouter) {
+	if runtime == nil || router == nil {
+		return
+	}
+	routes, err := runtime.listManagedRoutes(ctx)
+	if err != nil {
+		fmt.Fprintf(out, "custom domain route sync skipped: could not inspect running containers: %v\n", err)
+		return
+	}
+	if len(routes) == 0 {
+		return
+	}
+	st := ident.get()
+	reqRoutes := make([]*agentv1.ManagedRoute, 0, len(routes))
+	byService := make(map[string]managedRoute, len(routes))
+	for _, r := range routes {
+		reqRoutes = append(reqRoutes, &agentv1.ManagedRoute{
+			ServiceId:    r.ServiceID,
+			DeploymentId: r.DeploymentID,
+			HostPort:     r.HostPort,
+		})
+		byService[r.ServiceID] = r
+	}
+	resp, err := deploy.SyncRoutes(ctx, connect.NewRequest(&agentv1.SyncRoutesRequest{
+		AgentId:    st.AgentID,
+		Credential: st.Credential,
+		Routes:     reqRoutes,
+	}))
+	if err != nil {
+		fmt.Fprintf(out, "custom domain route sync failed: %v\n", err)
+		return
+	}
+	var results []*agentv1.RouteSyncResult
+	desired := routes
+	for _, override := range resp.Msg.GetOverrides() {
+		base, ok := byService[override.GetServiceId()]
+		if !ok || len(override.GetHostnames()) == 0 {
+			continue
+		}
+		desired = routesForDeployment(desired, managedRoute{
+			ServiceID:    base.ServiceID,
+			DeploymentID: base.DeploymentID,
+			ContainerID:  base.ContainerID,
+			HostPort:     base.HostPort,
+			CustomHosts:  override.GetHostnames(),
+		})
+		results = append(results, &agentv1.RouteSyncResult{
+			ServiceId:    base.ServiceID,
+			DeploymentId: base.DeploymentID,
+			Hostnames:    override.GetHostnames(),
+			Ok:           true,
+			Message:      "Domain is routed to this service.",
+		})
+	}
+	if logs, err := router.apply(ctx, desired); err != nil {
+		msg := "Caddy routing failed: " + err.Error()
+		if len(logs) > 0 {
+			msg = logs[len(logs)-1]
+		}
+		for _, r := range results {
+			r.Ok = false
+			r.Message = msg
+		}
+	}
+	if len(results) == 0 {
+		return
+	}
+	st = ident.get()
+	if _, err := deploy.ReportRouteSync(ctx, connect.NewRequest(&agentv1.ReportRouteSyncRequest{
+		AgentId:    st.AgentID,
+		Credential: st.Credential,
+		Results:    results,
+	})); err != nil {
+		fmt.Fprintf(out, "custom domain route sync report failed: %v\n", err)
+	}
 }
 
 func routesForDeployment(existing []managedRoute, current managedRoute) []managedRoute {
@@ -342,6 +420,21 @@ func appendCapped(s []string, line string, limit int) []string {
 // output. Short enough that the dashboard's runtime logs feel live, but each tick also
 // caps the lines it forwards (maxReportLogLines) so a chatty app can't flood the timeline.
 const defaultRuntimeLogInterval = 3 * time.Second
+const defaultRouteSyncInterval = 20 * time.Second
+
+func routeSyncLoop(ctx context.Context, out io.Writer, deploy agentv1connect.DeployServiceClient, ident *identity, runtime deploymentRuntime, router deploymentRouter, interval time.Duration) error {
+	if runtime == nil || router == nil {
+		if !sleep(ctx, interval) {
+			return nil
+		}
+	}
+	for {
+		syncCustomRoutes(ctx, out, deploy, ident, runtime, router)
+		if !sleep(ctx, interval) {
+			return nil
+		}
+	}
+}
 
 // runtimeLogLoop continuously tails the stdout/stderr of every running container the agent
 // manages and streams new lines to the control plane as runtime-stream log events, so a

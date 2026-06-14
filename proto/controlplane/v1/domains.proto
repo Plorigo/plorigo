@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// A Domain is one custom hostname attached to a service. A service can have many custom
+// domains; the service's generated route_url remains available separately.
+message Domain {
+  string id = 1;
+  string service_id = 2;
+  string environment_id = 3;
+  string project_id = 4;
+  string workspace_id = 5;
+  string hostname = 6;
+  string status = 7;          // blocked|pending_dns|verified|active|failed
+  string status_message = 8;  // plain-English next action or failure
+  string dns_record_type = 9; // CNAME|A|AAAA
+  string dns_record_name = 10;
+  string dns_record_value = 11;
+  string created_at = 12;      // RFC 3339
+  string updated_at = 13;      // RFC 3339
+  string last_checked_at = 14; // RFC 3339, empty until checked
+}
+
+message CreateDomainRequest {
+  string service_id = 1;
+  string hostname = 2;
+}
+
+message CreateDomainResponse {
+  Domain domain = 1;
+}
+
+message ListDomainsByServiceRequest {
+  string service_id = 1;
+}
+
+message ListDomainsByServiceResponse {
+  repeated Domain domains = 1;
+}
+
+message ListDomainsByProjectRequest {
+  string project_id = 1;
+}
+
+message ListDomainsByProjectResponse {
+  repeated Domain domains = 1;
+}
+
+message ListDomainsByWorkspaceRequest {
+  string workspace_id = 1;
+}
+
+message ListDomainsByWorkspaceResponse {
+  repeated Domain domains = 1;
+}
+
+message VerifyDomainRequest {
+  string id = 1;
+}
+
+message VerifyDomainResponse {
+  Domain domain = 1;
+}
+
+message DeleteDomainRequest {
+  string id = 1;
+}
+
+message DeleteDomainResponse {}
+
+service DomainService {
+  rpc CreateDomain(CreateDomainRequest) returns (CreateDomainResponse);
+  rpc ListDomainsByService(ListDomainsByServiceRequest) returns (ListDomainsByServiceResponse);
+  rpc ListDomainsByProject(ListDomainsByProjectRequest) returns (ListDomainsByProjectResponse);
+  rpc ListDomainsByWorkspace(ListDomainsByWorkspaceRequest) returns (ListDomainsByWorkspaceResponse);
+  rpc VerifyDomain(VerifyDomainRequest) returns (VerifyDomainResponse);
+  rpc DeleteDomain(DeleteDomainRequest) returns (DeleteDomainResponse);
+}

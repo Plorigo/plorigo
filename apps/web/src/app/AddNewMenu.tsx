@@ -8,6 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useEffectiveProjectId } from "@/lib/projectScope";
 import { useWorkspaceStore } from "@/store";
 
 // AddNewMenu is the Vercel-style "Add New" quick-add menu in the topbar: one dropdown
@@ -18,6 +19,7 @@ import { useWorkspaceStore } from "@/store";
 export function AddNewMenu() {
   const navigate = useNavigate();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  const projectId = useEffectiveProjectId();
 
   return (
     <DropdownMenu>
@@ -37,7 +39,7 @@ export function AddNewMenu() {
           <Box className="h-4 w-4" aria-hidden="true" />
           Project
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => navigate({ to: "/deployments/new", search: {} })}>
+        <DropdownMenuItem onClick={() => navigate({ to: "/deployments/new", search: projectId ? { project: projectId } : {} })}>
           <Boxes className="h-4 w-4" aria-hidden="true" />
           Service
         </DropdownMenuItem>

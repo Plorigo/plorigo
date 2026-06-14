@@ -91,6 +91,20 @@ type DeploymentEvent struct {
 	Stream       string
 }
 
+type Domain struct {
+	ID            string
+	ServiceID     string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	Hostname      string
+	Status        string
+	StatusMessage string
+	LastCheckedAt *time.Time
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 type EnvVar struct {
 	ID        string
 	Key       string

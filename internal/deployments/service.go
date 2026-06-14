@@ -433,6 +433,101 @@ func (s *service) ReportDeployment(ctx context.Context, in ReportInput) error {
 	return nil
 }
 
+func (s *service) SyncRoutes(ctx context.Context, in SyncRoutesInput) ([]RouteOverride, error) {
+	if in.Credential == "" {
+		return nil, problem.InvalidInput("a credential is required")
+	}
+	_, serverID, err := s.resolveAgent(ctx, in.AgentID, in.Credential)
+	if err != nil {
+		return nil, err
+	}
+	serviceSet := map[string]bool{}
+	for _, r := range in.Routes {
+		if r.HostPort <= 0 {
+			continue
+		}
+		if _, err := id.Parse(r.ServiceID); err != nil {
+			continue
+		}
+		if _, err := id.Parse(r.DeploymentID); err != nil {
+			continue
+		}
+		dep, ok, err := s.store.GetDeployment(ctx, r.DeploymentID)
+		if err != nil {
+			return nil, problem.Internalf(err, "sync routes")
+		}
+		if !ok || dep.ServerID != serverID || dep.ServiceID != r.ServiceID {
+			continue
+		}
+		serviceSet[r.ServiceID] = true
+	}
+	serviceIDs := make([]string, 0, len(serviceSet))
+	for serviceID := range serviceSet {
+		serviceIDs = append(serviceIDs, serviceID)
+	}
+	domainsByService, err := s.store.VerifiedDomainsForServices(ctx, serviceIDs)
+	if err != nil {
+		return nil, problem.Internalf(err, "sync routes")
+	}
+	out := make([]RouteOverride, 0, len(domainsByService))
+	for _, serviceID := range serviceIDs {
+		hostnames := domainsByService[serviceID]
+		if len(hostnames) == 0 {
+			continue
+		}
+		out = append(out, RouteOverride{ServiceID: serviceID, Hostnames: hostnames})
+	}
+	return out, nil
+}
+
+func (s *service) ReportRouteSync(ctx context.Context, in ReportRouteSyncInput) error {
+	if in.Credential == "" {
+		return problem.InvalidInput("a credential is required")
+	}
+	_, serverID, err := s.resolveAgent(ctx, in.AgentID, in.Credential)
+	if err != nil {
+		return err
+	}
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		for _, r := range in.Results {
+			if len(r.Hostnames) == 0 {
+				continue
+			}
+			if _, err := id.Parse(r.ServiceID); err != nil {
+				continue
+			}
+			if _, err := id.Parse(r.DeploymentID); err != nil {
+				continue
+			}
+			dep, ok, txErr := s.store.GetDeployment(ctx, r.DeploymentID)
+			if txErr != nil {
+				return txErr
+			}
+			if !ok || dep.ServerID != serverID || dep.ServiceID != r.ServiceID {
+				continue
+			}
+			status := "failed"
+			message := strings.TrimSpace(r.Message)
+			if r.OK {
+				status = "active"
+				if message == "" {
+					message = "Domain is routed to this service."
+				}
+			} else if message == "" {
+				message = "Caddy could not activate this domain. Check the deployment route logs and try again."
+			}
+			if txErr := s.store.MarkDomainsRouteSync(ctx, tx, r.ServiceID, r.Hostnames, status, message); txErr != nil {
+				return txErr
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return problem.Internalf(err, "report route sync")
+	}
+	return nil
+}
+
 // resolveAgent validates a durable agent credential and returns the agent and its
 // server. If agentID is provided it must match the credential's agent.
 func (s *service) resolveAgent(ctx context.Context, agentID, credential string) (string, string, error) {

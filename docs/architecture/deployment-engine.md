@@ -122,6 +122,13 @@ the agent stamps it on the container as the `plorigo.service` label — what it 
 find and supersede the service's previous container. Only a **public** service gets a route at
 all (see below).
 
+Custom domains layer onto that generated route. Users attach one or more hostnames to a
+service; the dashboard shows the exact DNS record to point at the generated host and verifies
+DNS before routing. The outbound agent periodically asks the control plane for verified
+custom hostnames for the managed containers it is currently running, renders those hostnames
+beside the generated host in the Plorigo-managed Caddyfile, and reports route-sync failures
+back to the domain rows. This slice is HTTP-only; automatic HTTPS/SSL is deferred.
+
 ## Visibility & per-environment networking
 
 Every service container joins a **per-environment Docker network** named

@@ -16,6 +16,7 @@ import {
 import { cn } from "@/lib/cn";
 import { useDemoData } from "@/lib/demo";
 import { errorMessage } from "@/lib/format";
+import { useEffectiveProjectId } from "@/lib/projectScope";
 import { deploymentRefLabel } from "./timeline";
 import { deployments, logLines } from "@/lib/mockDashboard";
 import { statusTone } from "@/lib/status";
@@ -26,7 +27,7 @@ export function DeploymentsPage() {
   const demo = useDemoData();
   const navigate = useNavigate();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
-  const projectId = useWorkspaceStore((s) => s.projectId);
+  const projectId = useEffectiveProjectId();
   // Both hooks are called (hooks rule); the project one is gated on a non-empty id, so it
   // makes no request when no project is selected. Read whichever matches the active scope.
   const byWorkspace = useDeploymentsByWorkspace(workspaceId);
@@ -82,7 +83,16 @@ export function DeploymentsPage() {
                   <TableRow
                     key={d.id}
                     className="cursor-pointer"
-                    onClick={() => navigate({ to: "/deployments/$deploymentId", params: { deploymentId: d.id } })}
+                    onClick={() => {
+                      if (projectId) {
+                        navigate({
+                          to: "/projects/$projectId/deployments/$deploymentId",
+                          params: { projectId, deploymentId: d.id },
+                        });
+                        return;
+                      }
+                      navigate({ to: "/deployments/$deploymentId", params: { deploymentId: d.id } });
+                    }}
                   >
                     <TableCell>
                       <p className="truncate font-mono text-sm font-medium text-foreground">{deploymentRefLabel(d)}</p>

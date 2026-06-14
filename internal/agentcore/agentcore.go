@@ -145,16 +145,20 @@ func Run(ctx context.Context, out io.Writer, opts Options) error {
 	// *strings.Builder (tests) or os.Stdout isn't safe for concurrent, interleaved writes.
 	out = &syncWriter{w: out}
 
-	// Run the heartbeat, deploy, and runtime-log loops together. Each returns only when its
+	// Run the heartbeat, deploy, runtime-log, and route-sync loops together. Each returns only when its
 	// context ends, so if any returns, cancel the siblings and wait for all to unwind.
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	errc := make(chan error, 3)
+	errc := make(chan error, 4)
 	go func() { errc <- heartbeatLoop(loopCtx, out, client, ident, prober, opts) }()
 	go func() { errc <- deployLoop(loopCtx, out, deployClient, ident, runtime, router, opts.PollInterval) }()
 	go func() { errc <- runtimeLogLoop(loopCtx, out, deployClient, ident, runtime, defaultRuntimeLogInterval) }()
+	go func() {
+		errc <- routeSyncLoop(loopCtx, out, deployClient, ident, runtime, router, defaultRouteSyncInterval)
+	}()
 	first := <-errc
 	cancel()
+	<-errc
 	<-errc
 	<-errc
 	return first
