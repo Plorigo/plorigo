@@ -49,6 +49,7 @@ const (
 	// authenticate by the agent credential, so they have no Action here.
 	ActionDeploymentCreate Action = "deployment.create"
 	ActionDeploymentRead   Action = "deployment.read"
+	ActionDeploymentUpdate Action = "deployment.update"
 	// Source actions cover connecting a workspace's Git provider (GitHub OAuth) and a
 	// project's repository, reading that metadata, and disconnecting. Connect also gates
 	// listing repositories/branches, since those calls use the connection's token.

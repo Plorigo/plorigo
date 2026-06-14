@@ -82,6 +82,10 @@ type Deployment struct {
 	// RouteURL is the real deployment URL (e.g. http://{env-id}.localhost:8083) computed
 	// by the agent and stored so the dashboard can display a clickable link.
 	RouteURL string
+	// CustomDomain is an optional user-supplied domain that the agent adds as an
+	// additional Caddy route alongside the auto-generated {env-id}.{base-domain}.
+	// Empty string means no custom domain is configured.
+	CustomDomain string
 }
 
 // Event is one entry in a deployment's timeline: a status transition (KindStatus) or
@@ -135,6 +139,9 @@ type Claimed struct {
 	Env           map[string]string
 	AppLabel      string
 
+	// CustomDomain is an optional custom domain the user attached to this deployment.
+	// The agent adds it as an additional Caddy route alongside the generated subdomain.
+	CustomDomain string
 	// Build-from-Git. For a git deployment SourceKind is SourceGit and the agent clones
 	// CloneURL at GitRef, builds the Dockerfile to BuiltImageTag, then runs that tag. No
 	// credential is included: this slice builds public repositories only.
@@ -170,6 +177,7 @@ type Service interface {
 	ListByProject(ctx context.Context, projectID string) ([]Deployment, error)
 	ListByWorkspace(ctx context.Context, workspaceID string) ([]Deployment, error)
 	ListEvents(ctx context.Context, deploymentID string, afterSeq int64) ([]Event, error)
+	SetCustomDomain(ctx context.Context, deploymentID, customDomain string) (Deployment, error)
 
 	// Agent gateway (credential-authenticated, NOT policy-authorized — like Heartbeat).
 	PollDeployment(ctx context.Context, in PollInput) (Claimed, error)

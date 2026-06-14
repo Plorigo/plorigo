@@ -30,6 +30,7 @@ message Deployment {
   string commit_sha = 17;    // the exact commit the agent built
   string built_image_ref = 18; // the local image tag the agent produced
   string route_url = 19;      // the real deployment URL (e.g. http://{env-id}.localhost:8083)
+  string custom_domain = 20;  // optional custom domain the user has attached to this deployment
 }
 
 // A DeploymentEvent is one entry in a deployment's timeline: either a status
@@ -110,6 +111,15 @@ message ListDeploymentsByWorkspaceResponse {
   repeated Deployment deployments = 1;
 }
 
+message SetCustomDomainRequest {
+  string id = 1;             // deployment id
+  string custom_domain = 2;  // the custom domain to set (empty string clears it)
+}
+
+message SetCustomDomainResponse {
+  Deployment deployment = 1;
+}
+
 message ListDeploymentEventsRequest {
   string deployment_id = 1;
   int64 after_seq = 2; // return events with seq greater than this (0 = from start)
@@ -127,6 +137,7 @@ service DeploymentService {
   rpc CreateDeployment(CreateDeploymentRequest) returns (CreateDeploymentResponse);
   rpc CreateDeploymentFromSource(CreateDeploymentFromSourceRequest) returns (CreateDeploymentFromSourceResponse);
   rpc GetDeployment(GetDeploymentRequest) returns (GetDeploymentResponse);
+  rpc SetCustomDomain(SetCustomDomainRequest) returns (SetCustomDomainResponse);
   rpc ListDeploymentsByEnvironment(ListDeploymentsByEnvironmentRequest) returns (ListDeploymentsByEnvironmentResponse);
   rpc ListDeploymentsByProject(ListDeploymentsByProjectRequest) returns (ListDeploymentsByProjectResponse);
   rpc ListDeploymentsByWorkspace(ListDeploymentsByWorkspaceRequest) returns (ListDeploymentsByWorkspaceResponse);

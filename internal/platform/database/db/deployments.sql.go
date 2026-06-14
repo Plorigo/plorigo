@@ -55,7 +55,7 @@ WHERE id = (
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, custom_domain
 `
 
 // ClaimNextDeploymentForServer atomically claims the oldest queued deployment for a
@@ -86,6 +86,7 @@ func (q *Queries) ClaimNextDeploymentForServer(ctx context.Context, serverID str
 		&i.CommitSha,
 		&i.BuiltImageRef,
 		&i.RouteUrl,
+		&i.CustomDomain,
 	)
 	return i, err
 }
@@ -93,7 +94,7 @@ func (q *Queries) ClaimNextDeploymentForServer(ctx context.Context, serverID str
 const createDeployment = `-- name: CreateDeployment :one
 INSERT INTO deployments (environment_id, project_id, workspace_id, server_id, image_ref, container_port)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, custom_domain
 `
 
 type CreateDeploymentParams struct {
@@ -136,6 +137,7 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		&i.CommitSha,
 		&i.BuiltImageRef,
 		&i.RouteUrl,
+		&i.CustomDomain,
 	)
 	return i, err
 }
@@ -146,7 +148,7 @@ INSERT INTO deployments (
     container_port, source_kind, source_access, clone_url, git_ref
 )
 VALUES ($1, $2, $3, $4, $5, 'git', $6, $7, $8)
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, custom_domain
 `
 
 type CreateDeploymentFromGitParams struct {
@@ -196,6 +198,7 @@ func (q *Queries) CreateDeploymentFromGit(ctx context.Context, arg CreateDeploym
 		&i.CommitSha,
 		&i.BuiltImageRef,
 		&i.RouteUrl,
+		&i.CustomDomain,
 	)
 	return i, err
 }
@@ -221,7 +224,7 @@ func (q *Queries) GetAgentServerByCredential(ctx context.Context, credentialHash
 }
 
 const getDeployment = `-- name: GetDeployment :one
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url FROM deployments WHERE id = $1
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, custom_domain FROM deployments WHERE id = $1
 `
 
 func (q *Queries) GetDeployment(ctx context.Context, id string) (Deployment, error) {
@@ -248,6 +251,7 @@ func (q *Queries) GetDeployment(ctx context.Context, id string) (Deployment, err
 		&i.CommitSha,
 		&i.BuiltImageRef,
 		&i.RouteUrl,
+		&i.CustomDomain,
 	)
 	return i, err
 }
@@ -346,7 +350,7 @@ func (q *Queries) ListDeploymentEvents(ctx context.Context, arg ListDeploymentEv
 }
 
 const listDeploymentsByEnvironment = `-- name: ListDeploymentsByEnvironment :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url FROM deployments WHERE environment_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, custom_domain FROM deployments WHERE environment_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByEnvironment(ctx context.Context, environmentID string) ([]Deployment, error) {
@@ -379,6 +383,7 @@ func (q *Queries) ListDeploymentsByEnvironment(ctx context.Context, environmentI
 			&i.CommitSha,
 			&i.BuiltImageRef,
 			&i.RouteUrl,
+			&i.CustomDomain,
 		); err != nil {
 			return nil, err
 		}
@@ -391,7 +396,7 @@ func (q *Queries) ListDeploymentsByEnvironment(ctx context.Context, environmentI
 }
 
 const listDeploymentsByProject = `-- name: ListDeploymentsByProject :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url FROM deployments WHERE project_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, custom_domain FROM deployments WHERE project_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByProject(ctx context.Context, projectID string) ([]Deployment, error) {
@@ -424,6 +429,7 @@ func (q *Queries) ListDeploymentsByProject(ctx context.Context, projectID string
 			&i.CommitSha,
 			&i.BuiltImageRef,
 			&i.RouteUrl,
+			&i.CustomDomain,
 		); err != nil {
 			return nil, err
 		}
@@ -436,7 +442,7 @@ func (q *Queries) ListDeploymentsByProject(ctx context.Context, projectID string
 }
 
 const listDeploymentsByWorkspace = `-- name: ListDeploymentsByWorkspace :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url FROM deployments WHERE workspace_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, custom_domain FROM deployments WHERE workspace_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID string) ([]Deployment, error) {
@@ -469,6 +475,7 @@ func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID st
 			&i.CommitSha,
 			&i.BuiltImageRef,
 			&i.RouteUrl,
+			&i.CustomDomain,
 		); err != nil {
 			return nil, err
 		}
@@ -478,6 +485,49 @@ func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID st
 		return nil, err
 	}
 	return items, nil
+}
+
+const setDeploymentCustomDomain = `-- name: SetDeploymentCustomDomain :one
+UPDATE deployments
+SET custom_domain = $1, updated_at = now()
+WHERE id = $2
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, custom_domain
+`
+
+type SetDeploymentCustomDomainParams struct {
+	CustomDomain string
+	ID           string
+}
+
+// SetDeploymentCustomDomain sets the custom domain on a deployment. Only the custom_domain
+// field is updated; all other fields keep their current values.
+func (q *Queries) SetDeploymentCustomDomain(ctx context.Context, arg SetDeploymentCustomDomainParams) (Deployment, error) {
+	row := q.db.QueryRow(ctx, setDeploymentCustomDomain, arg.CustomDomain, arg.ID)
+	var i Deployment
+	err := row.Scan(
+		&i.ID,
+		&i.EnvironmentID,
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.ServerID,
+		&i.ImageRef,
+		&i.ContainerPort,
+		&i.HostPort,
+		&i.ContainerID,
+		&i.Status,
+		&i.Message,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SourceKind,
+		&i.SourceAccess,
+		&i.CloneUrl,
+		&i.GitRef,
+		&i.CommitSha,
+		&i.BuiltImageRef,
+		&i.RouteUrl,
+		&i.CustomDomain,
+	)
+	return i, err
 }
 
 const supersedePreviousRunning = `-- name: SupersedePreviousRunning :exec
@@ -510,7 +560,7 @@ SET status = $1,
     route_url = CASE WHEN $7::text <> '' THEN $7::text ELSE route_url END,
     updated_at = now()
 WHERE id = $8
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, custom_domain
 `
 
 type UpdateDeploymentStatusParams struct {
@@ -562,6 +612,7 @@ func (q *Queries) UpdateDeploymentStatus(ctx context.Context, arg UpdateDeployme
 		&i.CommitSha,
 		&i.BuiltImageRef,
 		&i.RouteUrl,
+		&i.CustomDomain,
 	)
 	return i, err
 }

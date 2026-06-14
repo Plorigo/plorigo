@@ -137,6 +137,12 @@ func (f *fakeStore) AppendEvent(_ context.Context, _ database.Tx, e NewEvent) er
 	f.events = append(f.events, e)
 	return nil
 }
+func (f *fakeStore) SetCustomDomain(_ context.Context, _ database.Tx, deploymentID, customDomain string) (Deployment, error) {
+	return Deployment{
+		ID:           deploymentID,
+		CustomDomain: customDomain,
+	}, nil
+}
 
 type fakeRecorder struct {
 	called bool
@@ -557,6 +563,35 @@ func TestValidateImageRef(t *testing.T) {
 		}
 		if err != nil || got != c.want {
 			t.Errorf("validateImageRef(%q) = %q, %v; want %q", c.in, got, err, c.want)
+		}
+	}
+}
+
+func TestValidateCustomDomain(t *testing.T) {
+	cases := []struct {
+		in      string
+		wantErr bool
+	}{
+		{in: ""},                       // empty clears the domain
+		{in: "app.example.com"},        // typical
+		{in: "a.b.c.example.co.uk"},    // multi-label
+		{in: "xn--bcher-kva.example"},  // punycode label
+		{in: "localhost"},              // single label allowed
+		{in: "https://app.example.com", wantErr: true}, // scheme
+		{in: "app.example.com/path", wantErr: true},    // path
+		{in: "app.example.com:8080", wantErr: true},    // port
+		{in: "app..example.com", wantErr: true},        // empty label
+		{in: "-app.example.com", wantErr: true},        // leading hyphen
+		{in: "app-.example.com", wantErr: true},        // trailing hyphen
+		{in: "app_x.example.com", wantErr: true},       // invalid char
+	}
+	for _, c := range cases {
+		err := validateCustomDomain(c.in)
+		if c.wantErr && err == nil {
+			t.Errorf("validateCustomDomain(%q) = nil, want error", c.in)
+		}
+		if !c.wantErr && err != nil {
+			t.Errorf("validateCustomDomain(%q) = %v, want nil", c.in, err)
 		}
 	}
 }

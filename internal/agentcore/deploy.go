@@ -228,6 +228,7 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 		DeploymentID:  depID,
 		ContainerID:   containerID,
 		HostPort:      hostPort,
+		CustomDomain:  job.GetCustomDomain(),
 	})
 	if logs, err := router.apply(ctx, routes); err != nil {
 		if len(logs) == 0 {

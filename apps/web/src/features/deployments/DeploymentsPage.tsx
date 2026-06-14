@@ -73,7 +73,7 @@ export function DeploymentsPage() {
                   <TableHead>Deployment</TableHead>
                   <TableHead>Project</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Host port</TableHead>
+                  <TableHead>URL</TableHead>
                   <TableHead>Created</TableHead>
                 </TableRow>
               </TableHeader>
@@ -92,7 +92,17 @@ export function DeploymentsPage() {
                     <TableCell>
                       <StatusDot tone={statusTone(d.status)} label={d.status} />
                     </TableCell>
-                    <TableCell className="font-mono text-muted-foreground">{d.hostPort > 0 ? `:${d.hostPort}` : "—"}</TableCell>
+                    <TableCell className="max-w-[14rem] truncate font-mono text-xs text-muted-foreground">
+                      {d.routeUrl ? (
+                        <a href={d.routeUrl} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 hover:underline">
+                          {d.routeUrl}
+                        </a>
+                      ) : d.customDomain ? (
+                        <span className="text-blue-400">{d.customDomain}</span>
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
                     <TableCell className="text-muted-foreground">{timeAgo(d.createdAt)}</TableCell>
                   </TableRow>
                 ))}

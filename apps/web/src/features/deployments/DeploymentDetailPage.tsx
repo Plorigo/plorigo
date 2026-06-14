@@ -1,12 +1,16 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useParams } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { ArrowLeft, Globe, PenLine, X, Check } from "lucide-react";
+import { ConnectError } from "@connectrpc/connect";
+import { toast } from "sonner";
 
 import { FailureSummary } from "@/components/FailureSummary";
 import { Timeline } from "@/components/Timeline";
-import { Badge, EmptyState, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
+import { Badge, EmptyState, Input, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { DeploymentEvent } from "@/gen/controlplane/v1/deployments_pb";
+import { deploymentClient } from "@/lib/clients";
 import { isTerminalDeploymentStatus, useDeployment, useDeploymentEvents } from "@/lib/queries";
 import { statusTone } from "@/lib/status";
 import { deploymentRefLabel, deploymentTimeline, shortRepoUrl } from "./timeline";
@@ -17,6 +21,10 @@ export function DeploymentDetailPage() {
   const dep = useDeployment(id);
   const live = !dep.data || !isTerminalDeploymentStatus(dep.data.status);
   const events = useDeploymentEvents(id, live);
+  const queryClient = useQueryClient();
+  const [domainEdit, setDomainEdit] = useState(false);
+  const [domainValue, setDomainValue] = useState("");
+  const [domainSaving, setDomainSaving] = useState(false);
 
   if (dep.isLoading && !dep.data) {
     return (
@@ -45,6 +53,23 @@ export function DeploymentDetailPage() {
   // distinction, so they fall back into the build view.
   const buildLogs = allLogs.filter((e) => e.stream === "build" || e.stream === "");
   const runtimeLogs = allLogs.filter((e) => e.stream === "runtime");
+
+  async function saveCustomDomain() {
+    const val = domainValue.trim();
+    setDomainSaving(true);
+    try {
+      await deploymentClient.setCustomDomain({ id: d.id, customDomain: val });
+      await queryClient.invalidateQueries({ queryKey: ["deployment", d.id] });
+      await queryClient.invalidateQueries({ queryKey: ["deployments"] });
+      toast.success(val ? "Custom domain set." : "Custom domain cleared.");
+      setDomainEdit(false);
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not set custom domain");
+    } finally {
+      setDomainSaving(false);
+    }
+  }
+
   const failedBecauseCaddy = /caddy/i.test(d.message);
   // On failure, show the tail of whichever stream is relevant: a container/health failure
   // has runtime output; a build-phase failure has only build output.
@@ -147,6 +172,53 @@ export function DeploymentDetailPage() {
                 }
               />
             )}
+            <Row
+              label="Custom domain"
+              value={
+                domainEdit ? (
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      value={domainValue}
+                      onChange={(e) => setDomainValue(e.target.value)}
+                      placeholder="e.g. app.example.com"
+                      className="h-7 w-44 font-mono text-xs"
+                      disabled={domainSaving}
+                    />
+                    <button
+                      onClick={saveCustomDomain}
+                      disabled={domainSaving}
+                      className="rounded p-0.5 text-green-400 hover:text-green-300 disabled:opacity-40"
+                      aria-label="Save"
+                    >
+                      <Check className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => { setDomainEdit(false); setDomainValue(d.customDomain || ""); }}
+                      disabled={domainSaving}
+                      className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+                      aria-label="Cancel"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => { setDomainValue(d.customDomain || ""); setDomainEdit(true); }}
+                    className="group inline-flex items-center gap-1 truncate font-mono text-sm text-muted-foreground hover:text-foreground"
+                  >
+                    {d.customDomain ? (
+                      <span className="text-blue-400 hover:text-blue-300 hover:underline">{d.customDomain}</span>
+                    ) : (
+                      <span className="flex items-center gap-1">
+                        <Globe className="h-3 w-3" />
+                        Add domain
+                      </span>
+                    )}
+                    <PenLine className="h-3 w-3 shrink-0 opacity-40 group-hover:opacity-100" />
+                  </button>
+                )
+              }
+            />
           </div>
         </Panel>
       </div>

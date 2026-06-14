@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -251,6 +252,43 @@ func (s *service) ListByWorkspace(ctx context.Context, workspaceID string) ([]De
 	return s.store.ListByWorkspace(ctx, workspaceID)
 }
 
+func (s *service) SetCustomDomain(ctx context.Context, deploymentID, customDomain string) (Deployment, error) {
+	if _, err := id.Parse(deploymentID); err != nil {
+		return Deployment{}, problem.InvalidInput("a valid deployment id is required")
+	}
+	dep, ok, err := s.store.GetDeployment(ctx, deploymentID)
+	if err != nil {
+		return Deployment{}, problem.Internalf(err, "set custom domain")
+	}
+	if !ok {
+		return Deployment{}, problem.NotFound("deployment %s not found", deploymentID)
+	}
+	caller := principal.FromContext(ctx)
+	if err := s.authorizer.Authorize(ctx, caller, authz.ActionDeploymentUpdate, authz.Resource{Type: "deployment", WorkspaceID: dep.WorkspaceID, ID: dep.ID}); err != nil {
+		return Deployment{}, err
+	}
+	domain := strings.TrimSpace(customDomain)
+	if domain != "" {
+		if err := validateCustomDomain(domain); err != nil {
+			return Deployment{}, problem.InvalidInput("custom domain: %v", err)
+		}
+	}
+	var updated Deployment
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		var txErr error
+		updated, txErr = s.store.SetCustomDomain(ctx, tx, deploymentID, domain)
+		if txErr != nil {
+			return txErr
+		}
+		return s.audit.Record(ctx, tx, "deployment.update_domain", "deployment", deploymentID, dep.WorkspaceID, caller.UserID)
+	})
+	if err != nil {
+		return Deployment{}, mapErr(err, "set custom domain")
+	}
+	s.log.Info("custom domain set", "id", deploymentID, "domain", domain, "workspace_id", dep.WorkspaceID, "actor", caller.UserID)
+	return updated, nil
+}
+
 func (s *service) ListEvents(ctx context.Context, deploymentID string, afterSeq int64) ([]Event, error) {
 	if _, err := id.Parse(deploymentID); err != nil {
 		return nil, problem.InvalidInput("a valid deployment id is required")
@@ -313,6 +351,7 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 		Env:           env,
 		AppLabel:      claimed.EnvironmentID,
 		SourceKind:    claimed.SourceKind,
+		CustomDomain:  claimed.CustomDomain,
 	}
 	// For a git deployment the agent clones + builds; hand it the clone URL, ref, and a
 	// deterministic local tag to build to and then run. No credential (public repos only).
@@ -412,6 +451,45 @@ func (s *service) resolveAgent(ctx context.Context, agentID, credential string) 
 		return "", "", problem.PermissionDenied("credential does not belong to agent %s", agentID)
 	}
 	return gotAgentID, serverID, nil
+}
+
+// validateCustomDomain validates a custom domain string. Empty is allowed (clears the
+// domain). Non-empty must be a valid DNS name with no scheme, port, or path.
+func validateCustomDomain(domain string) error {
+	if domain == "" {
+		return nil
+	}
+	if len(domain) > 253 {
+		return fmt.Errorf("too long (max 253 characters)")
+	}
+	if strings.Contains(domain, "://") {
+		return fmt.Errorf("must not include a scheme")
+	}
+	if strings.Contains(domain, "/") {
+		return fmt.Errorf("must not include a path")
+	}
+	if strings.Contains(domain, ":") {
+		return fmt.Errorf("must not include a port")
+	}
+	labels := strings.Split(domain, ".")
+	for _, label := range labels {
+		if label == "" {
+			return fmt.Errorf("must not contain empty labels (consecutive dots)")
+		}
+		if len(label) > 63 {
+			return fmt.Errorf("label %q is too long (max 63)", label)
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return fmt.Errorf("label %q must not start or end with '-'", label)
+		}
+		for _, r := range label {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || (r >= 'A' && r <= 'Z') {
+				continue
+			}
+			return fmt.Errorf("label %q contains invalid character %q", label, r)
+		}
+	}
+	return nil
 }
 
 // validateImageRef trims and sanity-checks a container image reference, defaulting the

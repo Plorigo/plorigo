@@ -48,6 +48,9 @@ type Store interface {
 	// UpdateStatus records a status transition; a zero host port / empty container id
 	// never clobbers a value already set.
 	UpdateStatus(ctx context.Context, tx database.Tx, u StatusUpdate) error
+	// SetCustomDomain updates the custom_domain on a deployment. Returns the updated
+	// deployment. Empty string clears the custom domain.
+	SetCustomDomain(ctx context.Context, tx database.Tx, deploymentID, customDomain string) (Deployment, error)
 	// SupersedePreviousRunning marks the environment's prior running deployment on this
 	// server as superseded once a newer one reaches running.
 	SupersedePreviousRunning(ctx context.Context, tx database.Tx, environmentID, serverID, deploymentID string) error

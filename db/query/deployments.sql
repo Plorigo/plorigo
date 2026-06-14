@@ -90,6 +90,14 @@ UPDATE deployments
 SET status = 'superseded', updated_at = now()
 WHERE environment_id = $1 AND server_id = $2 AND status = 'running' AND id <> $3;
 
+-- SetDeploymentCustomDomain sets the custom domain on a deployment. Only the custom_domain
+-- field is updated; all other fields keep their current values.
+-- name: SetDeploymentCustomDomain :one
+UPDATE deployments
+SET custom_domain = sqlc.arg(custom_domain), updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
 -- name: AppendDeploymentEvent :one
 INSERT INTO deployment_events (deployment_id, kind, status, message, stream)
 VALUES ($1, $2, $3, $4, $5)

@@ -37,6 +37,7 @@ type managedRoute struct {
 	DeploymentID  string
 	ContainerID   string
 	HostPort      int32
+	CustomDomain  string // optional custom domain; if set, added as an extra site address
 }
 
 type caddyManager struct {
@@ -235,7 +236,12 @@ func (m *caddyManager) render(routes []managedRoute) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&b, "%s {\n", siteAddress(host, m.httpPort))
+		addr := siteAddress(host, m.httpPort)
+		if r.CustomDomain != "" {
+			cdAddr := siteAddress(r.CustomDomain, m.httpPort)
+			addr = cdAddr + ", " + addr
+		}
+		fmt.Fprintf(&b, "%s {\n", addr)
 		fmt.Fprintf(&b, "\treverse_proxy 127.0.0.1:%d\n", r.HostPort)
 		b.WriteString("}\n\n")
 	}

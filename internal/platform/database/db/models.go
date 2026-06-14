@@ -77,6 +77,7 @@ type Deployment struct {
 	CommitSha     string
 	BuiltImageRef string
 	RouteUrl      string
+	CustomDomain  string
 }
 
 type DeploymentEvent struct {

@@ -43,6 +43,7 @@ message PollDeploymentResponse {
   string clone_url = 8;        // the repo to clone (git)
   string git_ref = 9;          // the branch/tag to build (git)
   string built_image_tag = 10; // the local tag the agent should build to and run (git)
+  string custom_domain = 11;   // optional custom domain to add as an additional Caddy route
 }
 
 message ReportDeploymentRequest {

@@ -56,6 +56,14 @@ func (h *adminHandler) GetDeployment(ctx context.Context, req *connect.Request[c
 	return connect.NewResponse(&controlplanev1.GetDeploymentResponse{Deployment: toProto(dep)}), nil
 }
 
+func (h *adminHandler) SetCustomDomain(ctx context.Context, req *connect.Request[controlplanev1.SetCustomDomainRequest]) (*connect.Response[controlplanev1.SetCustomDomainResponse], error) {
+	dep, err := h.svc.SetCustomDomain(ctx, req.Msg.GetId(), req.Msg.GetCustomDomain())
+	if err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&controlplanev1.SetCustomDomainResponse{Deployment: toProto(dep)}), nil
+}
+
 func (h *adminHandler) ListDeploymentsByEnvironment(ctx context.Context, req *connect.Request[controlplanev1.ListDeploymentsByEnvironmentRequest]) (*connect.Response[controlplanev1.ListDeploymentsByEnvironmentResponse], error) {
 	deps, err := h.svc.ListByEnvironment(ctx, req.Msg.GetEnvironmentId())
 	if err != nil {
@@ -120,6 +128,7 @@ func (h *gatewayHandler) PollDeployment(ctx context.Context, req *connect.Reques
 		CloneUrl:      claimed.CloneURL,
 		GitRef:        claimed.GitRef,
 		BuiltImageTag: claimed.BuiltImageTag,
+		CustomDomain:  claimed.CustomDomain,
 	}), nil
 }
 
@@ -172,6 +181,7 @@ func toProto(d Deployment) *controlplanev1.Deployment {
 		CommitSha:     d.CommitSha,
 		BuiltImageRef: d.BuiltImageRef,
 		RouteUrl:      d.RouteURL,
+		CustomDomain:  d.CustomDomain,
 	}
 }
 

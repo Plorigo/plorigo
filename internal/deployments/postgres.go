@@ -204,6 +204,17 @@ func (s *postgresStore) UpdateStatus(ctx context.Context, tx database.Tx, u Stat
 	return err
 }
 
+func (s *postgresStore) SetCustomDomain(ctx context.Context, tx database.Tx, deploymentID, customDomain string) (Deployment, error) {
+	row, err := db.New(tx).SetDeploymentCustomDomain(ctx, db.SetDeploymentCustomDomainParams{
+		ID:           deploymentID,
+		CustomDomain: customDomain,
+	})
+	if err != nil {
+		return Deployment{}, err
+	}
+	return deploymentFromRow(row), nil
+}
+
 func (s *postgresStore) SupersedePreviousRunning(ctx context.Context, tx database.Tx, environmentID, serverID, deploymentID string) error {
 	return db.New(tx).SupersedePreviousRunning(ctx, db.SupersedePreviousRunningParams{
 		EnvironmentID: environmentID,
@@ -253,6 +264,7 @@ func deploymentFromRow(r db.Deployment) Deployment {
 		CommitSha:     r.CommitSha,
 		BuiltImageRef: r.BuiltImageRef,
 		RouteURL:      r.RouteUrl,
+		CustomDomain:  r.CustomDomain,
 	}
 }
 
