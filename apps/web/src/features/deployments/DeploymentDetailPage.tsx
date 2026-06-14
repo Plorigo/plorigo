@@ -7,7 +7,7 @@ import { Timeline } from "@/components/Timeline";
 import { Badge, EmptyState, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
 import { isTerminalDeploymentStatus, useDeployment, useDeploymentEvents } from "@/lib/queries";
 import { statusTone } from "@/lib/status";
-import { deploymentTimeline } from "./timeline";
+import { deploymentRefLabel, deploymentTimeline, shortRepoUrl } from "./timeline";
 
 export function DeploymentDetailPage() {
   const { deploymentId } = useParams({ strict: false }) as { deploymentId?: string };
@@ -35,7 +35,8 @@ export function DeploymentDetailPage() {
   }
 
   const d = dep.data;
-  const steps = deploymentTimeline(events.data ?? [], d.status);
+  const isGit = d.sourceKind === "git";
+  const steps = deploymentTimeline(events.data ?? [], d.status, d.sourceKind);
   const logs = (events.data ?? []).filter((e) => e.kind === "log");
 
   return (
@@ -45,7 +46,7 @@ export function DeploymentDetailPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="truncate font-mono text-xl font-semibold tracking-tight text-foreground">{d.imageRef}</h1>
+            <h1 className="truncate font-mono text-xl font-semibold tracking-tight text-foreground">{deploymentRefLabel(d)}</h1>
             <StatusDot tone={statusTone(d.status)} label={d.status} />
           </div>
           <p className="mt-1.5 text-sm text-muted-foreground">Deployment {d.id.slice(0, 8)}</p>
@@ -55,14 +56,21 @@ export function DeploymentDetailPage() {
       {d.status === "failed" && (
         <FailureSummary
           headline={d.message || "The deployment failed."}
-          suggestion="The container did not reach a healthy state. Check the image reference and that the app listens on the container port you set, then deploy again — any previous running release is kept."
+          suggestion={
+            isGit
+              ? "The build or container did not succeed. Check that the repo has a Dockerfile at its root and that the app listens on the container port you set, then deploy again — any previous running release is kept."
+              : "The container did not reach a healthy state. Check the image reference and that the app listens on the container port you set, then deploy again — any previous running release is kept."
+          }
           logs={logs.slice(-6).map((l) => l.message)}
         />
       )}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
         <Panel>
-          <PanelHeader title="Timeline" description="Pull → start → health check → running." />
+          <PanelHeader
+            title="Timeline"
+            description={isGit ? "Clone → build → start → running." : "Pull → start → health check → running."}
+          />
           <div className="p-5">
             <Timeline steps={steps} />
           </div>
@@ -82,7 +90,27 @@ export function DeploymentDetailPage() {
                 )
               }
             />
-            <Row label="Image" value={<span className="truncate font-mono text-foreground">{d.imageRef}</span>} />
+            {isGit ? (
+              <>
+                <Row label="Source" value={<span className="truncate font-mono text-foreground">{shortRepoUrl(d.cloneUrl)}</span>} />
+                <Row
+                  label="Branch"
+                  value={d.gitRef ? <span className="font-mono text-foreground">{d.gitRef}</span> : <span className="text-muted-foreground">default</span>}
+                />
+                <Row
+                  label="Commit"
+                  value={
+                    d.commitSha ? (
+                      <span className="font-mono text-foreground">{d.commitSha.slice(0, 12)}</span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )
+                  }
+                />
+              </>
+            ) : (
+              <Row label="Image" value={<span className="truncate font-mono text-foreground">{d.imageRef}</span>} />
+            )}
             <Row label="Created" value={<span className="text-muted-foreground">{new Date(d.createdAt).toLocaleString()}</span>} />
             {d.hostPort > 0 && (
               <p className="border-t border-border pt-3 text-xs text-muted-foreground">
@@ -99,7 +127,13 @@ export function DeploymentDetailPage() {
           <div className="p-4">
             <EmptyState
               title="No logs yet"
-              body={live ? "Logs appear here as the agent pulls and starts the container." : "This deployment produced no captured logs."}
+              body={
+                live
+                  ? isGit
+                    ? "Logs appear here as the agent clones, builds, and starts the container."
+                    : "Logs appear here as the agent pulls and starts the container."
+                  : "This deployment produced no captured logs."
+              }
             />
           </div>
         ) : (

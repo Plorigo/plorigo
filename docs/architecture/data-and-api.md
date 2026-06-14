@@ -59,6 +59,12 @@ on top of it is built or committed. For what's actually planned, see [ROADMAP.md
   plaintext. A `project_sources` row records how the repo is reached in an `access` column
   (`oauth` | `public` | `app`); a **public** source has a **NULL `connection_id`** and stores no
   credential at all, so `connection_id` is nullable and the reads `LEFT JOIN source_connections`.
+- A `deployments` row records a **`source_kind`** (`image` | `git`). A `git` deployment also
+  stores `clone_url`, `git_ref`, `source_access` (`public` only for now), and the
+  agent-reported `commit_sha` / `built_image_ref`; `image_ref` is empty until/unless built. The
+  dashboard triggers it with `DeploymentService.CreateDeploymentFromSource`, which resolves the
+  project's source **server-side** (the request carries no repo URL) — see
+  [deployment-engine.md](./deployment-engine.md).
 
 ## API: ConnectRPC + Protocol Buffers
 

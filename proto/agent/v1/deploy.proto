@@ -30,23 +30,32 @@ message PollDeploymentRequest {
 message PollDeploymentResponse {
   bool has_work = 1;
   string deployment_id = 2;
-  string image_ref = 3;
+  string image_ref = 3; // set for image deployments; empty for git (built on the server)
   int32 container_port = 4;
   map<string, string> env = 5;
   // app_label is the stable identifier the agent stamps on the container (the
   // environment id) so a redeploy can find and replace the previous container.
   string app_label = 6;
+  // Build-from-Git fields, set only when source_kind == "git". The agent clones
+  // clone_url at git_ref, builds the Dockerfile to built_image_tag, then runs that tag.
+  // No credential is sent: this slice builds PUBLIC repositories only.
+  string source_kind = 7;      // "image" | "git"
+  string clone_url = 8;        // the repo to clone (git)
+  string git_ref = 9;          // the branch/tag to build (git)
+  string built_image_tag = 10; // the local tag the agent should build to and run (git)
 }
 
 message ReportDeploymentRequest {
   string agent_id = 1;
   string credential = 2;
   string deployment_id = 3;
-  string status = 4;             // pulling|starting|running|failed
+  string status = 4;             // cloning|building|pulling|starting|running|failed
   int32 host_port = 5;           // set once the container is bound (0 otherwise)
   string container_id = 6;       // set once the container is created
-  repeated string log_lines = 7; // new runtime log lines since the last report
+  repeated string log_lines = 7; // new clone/build/runtime log lines since the last report
   string message = 8;            // human-readable status line
+  string commit_sha = 9;         // the exact commit built (git deployments)
+  string built_image_ref = 10;   // the local image tag the agent built (git deployments)
 }
 
 message ReportDeploymentResponse {}

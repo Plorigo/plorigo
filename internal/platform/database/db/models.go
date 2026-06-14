@@ -70,6 +70,12 @@ type Deployment struct {
 	Message       string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	SourceKind    string
+	SourceAccess  string
+	CloneUrl      string
+	GitRef        string
+	CommitSha     string
+	BuiltImageRef string
 }
 
 type DeploymentEvent struct {

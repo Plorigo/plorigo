@@ -687,6 +687,104 @@ func TestIntegration_DeploymentClaimAndReport(t *testing.T) {
 	}
 }
 
+func TestIntegration_GitDeploymentClaimAndReport(t *testing.T) {
+	a := newApp(t)
+	ctx := context.Background()
+	authSvc := a.auth.Service()
+	projSvc := a.projects.Service()
+	envSvc := a.environments.Service()
+	serversSvc := a.servers.Service()
+	agentsSvc := a.agents.Service()
+	depSvc := a.deployments.Service()
+
+	owner, _ := registerAndLogin(t, authSvc, ctx, "git-owner")
+	ownerCtx := principal.NewContext(ctx, principal.Principal{UserID: owner.User.ID, Method: principal.MethodSession})
+	wss, _ := projSvc.ListMyWorkspaces(ctx, owner.User.ID)
+	ws := wss[0]
+	proj, _ := projSvc.Create(ownerCtx, projects.CreateInput{WorkspaceID: ws.ID, Name: "Git App"})
+	env, _ := envSvc.Create(ownerCtx, environments.CreateInput{ProjectID: proj.ID, Name: "Prod"})
+	srv, _ := serversSvc.Create(ownerCtx, servers.CreateInput{WorkspaceID: ws.ID, Name: "Edge"})
+
+	// A connection-less public source on the project. Insert directly to keep the test off
+	// the network; the sources module's connect path is covered by its own tests.
+	if _, err := a.db.Pool.Exec(ctx,
+		`INSERT INTO project_sources (project_id, owner, repo, full_name, branch, default_branch, access, html_url)
+		 VALUES ($1, 'octocat', 'hello', 'octocat/hello', 'main', 'main', 'public', 'https://github.com/octocat/hello')`,
+		proj.ID); err != nil {
+		t.Fatalf("insert public source: %v", err)
+	}
+
+	// Register an agent for the server to obtain a durable credential.
+	tok, err := agentsSvc.CreateRegistrationToken(ownerCtx, srv.ID)
+	if err != nil {
+		t.Fatalf("CreateRegistrationToken: %v", err)
+	}
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	reg, err := agentsSvc.Register(ctx, agents.RegisterInput{RegistrationToken: tok.Raw, PublicKey: pub, AgentVersion: "test"})
+	if err != nil {
+		t.Fatalf("Register agent: %v", err)
+	}
+
+	// Create from source records a queued git deployment with the derived clone URL and the
+	// source's default branch (no explicit ref given).
+	dep, err := depSvc.CreateFromSource(ownerCtx, deployments.CreateFromSourceInput{EnvironmentID: env.ID, ServerID: srv.ID, ContainerPort: 80})
+	if err != nil {
+		t.Fatalf("CreateFromSource: %v", err)
+	}
+	if dep.SourceKind != deployments.SourceGit || dep.SourceAccess != "public" {
+		t.Fatalf("dep = %+v, want a public git deployment", dep)
+	}
+	if dep.CloneURL != "https://github.com/octocat/hello.git" || dep.GitRef != "main" {
+		t.Fatalf("dep = %+v, want derived clone url + default-branch ref", dep)
+	}
+
+	// The agent claims it and receives the source fields + a build tag, and no image ref.
+	claimed, err := depSvc.PollDeployment(ctx, deployments.PollInput{AgentID: reg.AgentID, Credential: reg.Credential})
+	if err != nil {
+		t.Fatalf("PollDeployment: %v", err)
+	}
+	if !claimed.HasWork || claimed.SourceKind != deployments.SourceGit || claimed.CloneURL != dep.CloneURL || claimed.GitRef != "main" {
+		t.Fatalf("claimed = %+v, want the git source fields", claimed)
+	}
+	if claimed.BuiltImageTag == "" || claimed.ImageRef != "" {
+		t.Fatalf("claimed = %+v, want a build tag and no pre-built image ref", claimed)
+	}
+
+	// Report the build phases, then running with the commit + built image.
+	for _, st := range []string{deployments.StatusCloning, deployments.StatusBuilding} {
+		if err := depSvc.ReportDeployment(ctx, deployments.ReportInput{
+			AgentID: reg.AgentID, Credential: reg.Credential, DeploymentID: dep.ID, Status: st, Message: st,
+		}); err != nil {
+			t.Fatalf("ReportDeployment(%s): %v", st, err)
+		}
+	}
+	if err := depSvc.ReportDeployment(ctx, deployments.ReportInput{
+		AgentID: reg.AgentID, Credential: reg.Credential, DeploymentID: dep.ID,
+		Status: deployments.StatusRunning, HostPort: 32790, ContainerID: "ctr-1",
+		CommitSha: "abc123def456", BuiltImageRef: claimed.BuiltImageTag, Message: "running",
+	}); err != nil {
+		t.Fatalf("ReportDeployment(running): %v", err)
+	}
+
+	got, err := depSvc.Get(ownerCtx, dep.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != deployments.StatusRunning || got.CommitSha != "abc123def456" || got.BuiltImageRef != claimed.BuiltImageTag {
+		t.Fatalf("after report dep = %+v, want running with commit + built image", got)
+	}
+
+	// A project with no connected source can't deploy from source.
+	bare, _ := projSvc.Create(ownerCtx, projects.CreateInput{WorkspaceID: ws.ID, Name: "No Source"})
+	bareEnv, _ := envSvc.Create(ownerCtx, environments.CreateInput{ProjectID: bare.ID, Name: "Prod"})
+	if _, err := depSvc.CreateFromSource(ownerCtx, deployments.CreateFromSourceInput{EnvironmentID: bareEnv.ID, ServerID: srv.ID, ContainerPort: 80}); !isKind(err, problem.KindNotFound) {
+		t.Fatalf("no-source create: got %v, want NotFound", err)
+	}
+}
+
 func TestIntegration_AgentHeartbeatRecordsHealth(t *testing.T) {
 	a := newApp(t)
 	ctx := context.Background()

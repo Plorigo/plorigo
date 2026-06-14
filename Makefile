@@ -25,9 +25,13 @@ SEED_PASSWORD ?= devpassword
 # Output path for the linux agent binary the e2e harness installs into a container.
 E2E_AGENT_BIN ?= dist/plorigo-agent
 
+# Output path for the NATIVE agent binary the build e2e runs directly on the host (it needs
+# the host's Docker daemon + `docker` CLI, so it runs as a host process, not in a container).
+E2E_AGENT_NATIVE_BIN ?= dist/plorigo-agent-native
+
 .DEFAULT_GOAL := help
 
-.PHONY: help setup generate proto sqlc check-generated verify build build-embed web web-check dev seed test lint fmt tidy migrate e2e-agent
+.PHONY: help setup generate proto sqlc check-generated verify build build-embed web web-check dev seed test lint fmt tidy migrate e2e-agent e2e-build
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -115,3 +119,14 @@ e2e-agent: check-generated migrate ## Run the agent install e2e on a real contai
 	APP_MASTER_KEY="$(APP_MASTER_KEY)" DATABASE_URL="$(DATABASE_URL)" \
 		PLORIGO_E2E_AGENT_BIN="$(CURDIR)/$(E2E_AGENT_BIN)" \
 		go test -tags e2e -run TestE2EAgentInstall -count=1 -v ./internal/app/...
+
+# Build-and-deploy from a public Git source, end to end. Builds a NATIVE agent binary and
+# runs it on the host against an in-process control plane; the agent clones a public repo,
+# builds its Dockerfile with BuildKit, and runs it on a published port. Needs Docker (with
+# the `docker` CLI), a migrated Postgres, and network access to clone. Local-only (not in CI).
+# Override the repos with PLORIGO_E2E_BUILD_OWNER/REPO/BRANCH/PORT. See docs/development.md.
+e2e-build: check-generated migrate ## Run the build-from-Git e2e on real Docker (Docker + Postgres + network; not in CI)
+	CGO_ENABLED=0 go build -o $(E2E_AGENT_NATIVE_BIN) ./cmd/agent
+	APP_MASTER_KEY="$(APP_MASTER_KEY)" DATABASE_URL="$(DATABASE_URL)" \
+		PLORIGO_E2E_AGENT_BIN="$(CURDIR)/$(E2E_AGENT_NATIVE_BIN)" \
+		go test -tags e2e -run TestE2EBuildDeploy -count=1 -v ./internal/app/...

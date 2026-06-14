@@ -254,6 +254,15 @@ type fakeRuntime struct {
 	removeErr   error
 	replaceKeep string
 	removed     []string
+
+	cloneSHA     string
+	cloneErr     error
+	buildErr     error
+	builtTag     string // the tag build() was asked to produce
+	ranImage     string // the image run() was asked to start
+	ranPort      int32  // the container port run() was asked to publish
+	detectedPort int32  // the port detectPort() returns (0 -> default 8080)
+	detectErr    error
 }
 
 func (f *fakeRuntime) pull(_ context.Context, _ string, emit func(string)) error {
@@ -262,8 +271,40 @@ func (f *fakeRuntime) pull(_ context.Context, _ string, emit func(string)) error
 	return nil
 }
 
-func (f *fakeRuntime) run(_ context.Context, _ runInput) (string, int32, error) {
+func (f *fakeRuntime) clone(_ context.Context, _, _, _ string, emit func(string)) (string, error) {
+	f.ops = append(f.ops, "clone")
+	emit("cloned")
+	if f.cloneErr != nil {
+		return "", f.cloneErr
+	}
+	if f.cloneSHA == "" {
+		return "deadbeefcafef00d", nil
+	}
+	return f.cloneSHA, nil
+}
+
+func (f *fakeRuntime) build(_ context.Context, _, tag string, emit func(string)) error {
+	f.ops = append(f.ops, "build")
+	f.builtTag = tag
+	emit("built")
+	return f.buildErr
+}
+
+func (f *fakeRuntime) detectPort(_ context.Context, _ string) (int32, error) {
+	f.ops = append(f.ops, "detect")
+	if f.detectErr != nil {
+		return 0, f.detectErr
+	}
+	if f.detectedPort == 0 {
+		return 8080, nil
+	}
+	return f.detectedPort, nil
+}
+
+func (f *fakeRuntime) run(_ context.Context, in runInput) (string, int32, error) {
 	f.ops = append(f.ops, "run")
+	f.ranImage = in.imageRef
+	f.ranPort = in.containerPort
 	return f.containerID, f.hostPort, f.runErr
 }
 
@@ -318,6 +359,154 @@ func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *test
 	}
 	if got := deploy.reports[len(deploy.reports)-1].GetStatus(); got != statusRunning {
 		t.Fatalf("last report status = %q, want %q", got, statusRunning)
+	}
+}
+
+func TestExecuteDeployment_GitClonesAndBuildsThenRunsBuiltImage(t *testing.T) {
+	oldHealthCheck := runHealthCheck
+	defer func() { runHealthCheck = oldHealthCheck }()
+
+	runtime := &fakeRuntime{containerID: "new-container", hostPort: 32768, cloneSHA: "commit-sha-1"}
+	runHealthCheck = func(_ context.Context, _ int32) error {
+		runtime.ops = append(runtime.ops, "health")
+		return nil
+	}
+	deploy := &fakeDeployClient{}
+	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
+
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+		HasWork:       true,
+		DeploymentId:  "dep-1",
+		ContainerPort: 80,
+		AppLabel:      "env-1",
+		SourceKind:    "git",
+		CloneUrl:      "https://github.com/o/r.git",
+		GitRef:        "main",
+		BuiltImageTag: "plorigo-build:dep-1",
+	})
+
+	// Git path clones and builds first, then runs the built image — and never pulls.
+	wantOps := []string{"clone", "build", "run", "health", "replace", "logs"}
+	if !reflect.DeepEqual(runtime.ops, wantOps) {
+		t.Fatalf("ops = %v, want %v (clone+build, no pull)", runtime.ops, wantOps)
+	}
+	if runtime.builtTag != "plorigo-build:dep-1" || runtime.ranImage != "plorigo-build:dep-1" {
+		t.Fatalf("built/ran image = %q/%q, want the built tag", runtime.builtTag, runtime.ranImage)
+	}
+	last := deploy.reports[len(deploy.reports)-1]
+	if last.GetStatus() != statusRunning || last.GetCommitSha() != "commit-sha-1" || last.GetBuiltImageRef() != "plorigo-build:dep-1" {
+		t.Fatalf("last report = %+v, want running with commit + built image", last)
+	}
+}
+
+func TestExecuteDeployment_GitCloneFailureReportsFailedBeforeBuild(t *testing.T) {
+	runtime := &fakeRuntime{cloneErr: errors.New("repo not found")}
+	deploy := &fakeDeployClient{}
+	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
+
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+		HasWork: true, DeploymentId: "dep-1", ContainerPort: 80, AppLabel: "env-1",
+		SourceKind: "git", CloneUrl: "https://github.com/o/missing.git", GitRef: "main", BuiltImageTag: "plorigo-build:dep-1",
+	})
+
+	if !reflect.DeepEqual(runtime.ops, []string{"clone"}) {
+		t.Fatalf("ops = %v, want clone only (no build/run after a clone failure)", runtime.ops)
+	}
+	last := deploy.reports[len(deploy.reports)-1]
+	if last.GetStatus() != statusFailed || !strings.Contains(last.GetMessage(), "clone failed") {
+		t.Fatalf("last report = status %q message %q, want a clone-failed report", last.GetStatus(), last.GetMessage())
+	}
+}
+
+func TestExecuteDeployment_GitBuildFailureReportsFailedBeforeRun(t *testing.T) {
+	runtime := &fakeRuntime{buildErr: errors.New("no Dockerfile at the repository root")}
+	deploy := &fakeDeployClient{}
+	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
+
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+		HasWork: true, DeploymentId: "dep-1", ContainerPort: 80, AppLabel: "env-1",
+		SourceKind: "git", CloneUrl: "https://github.com/o/r.git", GitRef: "main", BuiltImageTag: "plorigo-build:dep-1",
+	})
+
+	if !reflect.DeepEqual(runtime.ops, []string{"clone", "build"}) {
+		t.Fatalf("ops = %v, want clone+build only (no run after a build failure)", runtime.ops)
+	}
+	last := deploy.reports[len(deploy.reports)-1]
+	if last.GetStatus() != statusFailed || !strings.Contains(last.GetMessage(), "build failed") {
+		t.Fatalf("last report = status %q message %q, want a build-failed report", last.GetStatus(), last.GetMessage())
+	}
+}
+
+func TestExecuteDeployment_GitAutoDetectsPortWhenUnset(t *testing.T) {
+	oldHealthCheck := runHealthCheck
+	defer func() { runHealthCheck = oldHealthCheck }()
+
+	runtime := &fakeRuntime{containerID: "new-container", hostPort: 32768, detectedPort: 3000}
+	runHealthCheck = func(_ context.Context, _ int32) error {
+		runtime.ops = append(runtime.ops, "health")
+		return nil
+	}
+	deploy := &fakeDeployClient{}
+	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
+
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+		HasWork: true, DeploymentId: "dep-1", ContainerPort: 0, AppLabel: "env-1",
+		SourceKind: "git", CloneUrl: "https://github.com/o/r.git", GitRef: "main", BuiltImageTag: "plorigo-build:dep-1",
+	})
+
+	// With no port set, the agent detects it from the built image before running.
+	wantOps := []string{"clone", "build", "detect", "run", "health", "replace", "logs"}
+	if !reflect.DeepEqual(runtime.ops, wantOps) {
+		t.Fatalf("ops = %v, want %v (detect between build and run)", runtime.ops, wantOps)
+	}
+	if runtime.ranPort != 3000 {
+		t.Fatalf("ran port = %d, want the detected 3000", runtime.ranPort)
+	}
+}
+
+func TestExecuteDeployment_GitExplicitPortSkipsDetect(t *testing.T) {
+	oldHealthCheck := runHealthCheck
+	defer func() { runHealthCheck = oldHealthCheck }()
+
+	runtime := &fakeRuntime{containerID: "new-container", hostPort: 32768, detectedPort: 3000}
+	runHealthCheck = func(_ context.Context, _ int32) error {
+		runtime.ops = append(runtime.ops, "health")
+		return nil
+	}
+	deploy := &fakeDeployClient{}
+	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
+
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+		HasWork: true, DeploymentId: "dep-1", ContainerPort: 5000, AppLabel: "env-1",
+		SourceKind: "git", CloneUrl: "https://github.com/o/r.git", GitRef: "main", BuiltImageTag: "plorigo-build:dep-1",
+	})
+
+	// An explicit port is honored as-is — no detection.
+	wantOps := []string{"clone", "build", "run", "health", "replace", "logs"}
+	if !reflect.DeepEqual(runtime.ops, wantOps) {
+		t.Fatalf("ops = %v, want %v (no detect when a port is set)", runtime.ops, wantOps)
+	}
+	if runtime.ranPort != 5000 {
+		t.Fatalf("ran port = %d, want the explicit 5000", runtime.ranPort)
+	}
+}
+
+func TestExecuteDeployment_GitPortDetectFailureReportsFailed(t *testing.T) {
+	runtime := &fakeRuntime{containerID: "new-container", hostPort: 32768, detectErr: errors.New("the image exposes no TCP port")}
+	deploy := &fakeDeployClient{}
+	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
+
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &agentv1.PollDeploymentResponse{
+		HasWork: true, DeploymentId: "dep-1", ContainerPort: 0, AppLabel: "env-1",
+		SourceKind: "git", CloneUrl: "https://github.com/o/r.git", GitRef: "main", BuiltImageTag: "plorigo-build:dep-1",
+	})
+
+	if !reflect.DeepEqual(runtime.ops, []string{"clone", "build", "detect"}) {
+		t.Fatalf("ops = %v, want clone+build+detect only (no run when no port can be determined)", runtime.ops)
+	}
+	last := deploy.reports[len(deploy.reports)-1]
+	if last.GetStatus() != statusFailed || !strings.Contains(last.GetMessage(), "port") {
+		t.Fatalf("last report = status %q message %q, want a port-detection failure", last.GetStatus(), last.GetMessage())
 	}
 }
 

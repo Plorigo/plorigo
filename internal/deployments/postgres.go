@@ -79,6 +79,24 @@ func (s *postgresStore) EnvVarsForEnvironment(ctx context.Context, environmentID
 	return out, nil
 }
 
+func (s *postgresStore) SourceForProject(ctx context.Context, projectID string) (Source, bool, error) {
+	row, err := db.New(s.pool).GetProjectSourceForDeploy(ctx, projectID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Source{}, false, nil
+		}
+		return Source{}, false, err
+	}
+	return Source{
+		// Provider is GitHub-only today (project_sources.provider CHECK); construct the
+		// standard clone URL from owner/repo.
+		CloneURL:      "https://github.com/" + row.Owner + "/" + row.Repo + ".git",
+		Branch:        row.Branch,
+		DefaultBranch: row.DefaultBranch,
+		Access:        row.Access,
+	}, true, nil
+}
+
 func (s *postgresStore) InsertDeployment(ctx context.Context, tx database.Tx, d NewDeployment) (Deployment, error) {
 	row, err := db.New(tx).CreateDeployment(ctx, db.CreateDeploymentParams{
 		EnvironmentID: d.EnvironmentID,
@@ -87,6 +105,23 @@ func (s *postgresStore) InsertDeployment(ctx context.Context, tx database.Tx, d 
 		ServerID:      d.ServerID,
 		ImageRef:      d.ImageRef,
 		ContainerPort: d.ContainerPort,
+	})
+	if err != nil {
+		return Deployment{}, err
+	}
+	return deploymentFromRow(row), nil
+}
+
+func (s *postgresStore) InsertDeploymentFromGit(ctx context.Context, tx database.Tx, d NewDeploymentFromGit) (Deployment, error) {
+	row, err := db.New(tx).CreateDeploymentFromGit(ctx, db.CreateDeploymentFromGitParams{
+		EnvironmentID: d.EnvironmentID,
+		ProjectID:     d.ProjectID,
+		WorkspaceID:   d.WorkspaceID,
+		ServerID:      d.ServerID,
+		ContainerPort: d.ContainerPort,
+		SourceAccess:  d.SourceAccess,
+		CloneUrl:      d.CloneURL,
+		GitRef:        d.GitRef,
 	})
 	if err != nil {
 		return Deployment{}, err
@@ -157,11 +192,13 @@ func (s *postgresStore) ClaimNextForServer(ctx context.Context, tx database.Tx, 
 
 func (s *postgresStore) UpdateStatus(ctx context.Context, tx database.Tx, u StatusUpdate) error {
 	_, err := db.New(tx).UpdateDeploymentStatus(ctx, db.UpdateDeploymentStatusParams{
-		ID:          u.DeploymentID,
-		Status:      u.Status,
-		Message:     u.Message,
-		HostPort:    u.HostPort,
-		ContainerID: u.ContainerID,
+		ID:            u.DeploymentID,
+		Status:        u.Status,
+		Message:       u.Message,
+		HostPort:      u.HostPort,
+		ContainerID:   u.ContainerID,
+		CommitSha:     u.CommitSha,
+		BuiltImageRef: u.BuiltImageRef,
 	})
 	return err
 }
@@ -207,6 +244,12 @@ func deploymentFromRow(r db.Deployment) Deployment {
 		Message:       r.Message,
 		CreatedAt:     r.CreatedAt,
 		UpdatedAt:     r.UpdatedAt,
+		SourceKind:    r.SourceKind,
+		SourceAccess:  r.SourceAccess,
+		CloneURL:      r.CloneUrl,
+		GitRef:        r.GitRef,
+		CommitSha:     r.CommitSha,
+		BuiltImageRef: r.BuiltImageRef,
 	}
 }
 
