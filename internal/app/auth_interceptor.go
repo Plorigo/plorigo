@@ -39,6 +39,8 @@ var publicProcedures = map[string]bool{
 	// its durable agent credential (validated in the deployments service), not a session.
 	"/agent.v1.DeployService/PollDeployment":   true,
 	"/agent.v1.DeployService/ReportDeployment": true,
+	"/agent.v1.DeployService/SyncRoutes":       true,
+	"/agent.v1.DeployService/ReportRouteSync":  true,
 }
 
 // authInterceptor resolves the caller's principal from the request, applies a CSRF

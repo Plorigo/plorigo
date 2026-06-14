@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import {
   ArrowLeft,
   Container,
+  Copy,
   ExternalLink,
   GitBranch,
   GitFork,
@@ -19,6 +20,13 @@ import { toast } from "sonner";
 
 import { Badge, Button, EmptyState, Input, Panel, PanelHeader, Select, Skeleton, StatusDot } from "@/components/ui";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Table,
   TableBody,
   TableCell,
@@ -26,14 +34,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { deploymentClient, envVarClient } from "@/lib/clients";
+import type { Domain } from "@/gen/controlplane/v1/domains_pb";
+import type { Service } from "@/gen/controlplane/v1/services_pb";
+import { deploymentClient, domainClient, envVarClient } from "@/lib/clients";
 import {
   useAgents,
   useDeploymentsByService,
+  useDomainsByService,
   useEnvVars,
   useServers,
   useService,
 } from "@/lib/queries";
+import { useEffectiveProjectId } from "@/lib/projectScope";
 import { pickDefaultServer, serverStatusLabel } from "@/lib/serverSelection";
 import { statusTone } from "@/lib/status";
 import { useWorkspaceStore } from "@/store";
@@ -50,7 +62,8 @@ export function ServiceDetailPage() {
     serviceId?: string;
   };
   const id = serviceId ?? "";
-  const pid = projectId ?? "";
+  const scopedProjectId = useEffectiveProjectId();
+  const pid = projectId ?? scopedProjectId;
   const navigate = useNavigate();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
 
@@ -97,7 +110,10 @@ export function ServiceDetailPage() {
     try {
       const { deployment } = await deploymentClient.createDeploymentForService({ serviceId: id, serverId });
       if (!deployment) throw new Error("the deployment was not created");
-      void navigate({ to: "/deployments/$deploymentId", params: { deploymentId: deployment.id } });
+      void navigate({
+        to: "/projects/$projectId/deployments/$deploymentId",
+        params: { projectId: pid, deploymentId: deployment.id },
+      });
     } catch (err) {
       toast.error(err instanceof ConnectError ? err.message : "Could not start the deployment");
       setRedeploying(false);
@@ -242,6 +258,8 @@ export function ServiceDetailPage() {
         <EnvVarsPanel serviceId={id} />
       </div>
 
+      <DomainsPanel service={s} />
+
       <Panel>
         <PanelHeader title="Deployments" description="This service's deployment history." />
         {deployments.isLoading ? (
@@ -271,7 +289,12 @@ export function ServiceDetailPage() {
                   <TableRow
                     key={d.id}
                     className="cursor-pointer"
-                    onClick={() => navigate({ to: "/deployments/$deploymentId", params: { deploymentId: d.id } })}
+                    onClick={() =>
+                      navigate({
+                        to: "/projects/$projectId/deployments/$deploymentId",
+                        params: { projectId: pid, deploymentId: d.id },
+                      })
+                    }
                   >
                     <TableCell>
                       <p className="truncate font-mono text-sm font-medium text-foreground">{deploymentRefLabel(d)}</p>
@@ -290,6 +313,239 @@ export function ServiceDetailPage() {
         )}
       </Panel>
     </div>
+  );
+}
+
+function DomainsPanel({ service }: { service: Service }) {
+  const queryClient = useQueryClient();
+  const domains = useDomainsByService(service.id);
+  const [open, setOpen] = useState(false);
+  const [hostname, setHostname] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [verifying, setVerifying] = useState("");
+  const publicSvc = isPublic(service);
+  const rows = domains.data ?? [];
+  const generatedStatus = !publicSvc ? "Private service" : service.routeUrl ? "Active" : "Waiting for deployment";
+  const generatedTone = !publicSvc ? "purple" : service.routeUrl ? "green" : "amber";
+
+  async function invalidate() {
+    await queryClient.invalidateQueries({ queryKey: ["domains", "service", service.id] });
+  }
+
+  async function copy(text: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`Copied ${label}`);
+    } catch {
+      toast.error(`Could not copy ${label}`);
+    }
+  }
+
+  async function onAdd(e: FormEvent) {
+    e.preventDefault();
+    const host = hostname.trim();
+    if (!host || busy) return;
+    setBusy(true);
+    try {
+      await domainClient.createDomain({ serviceId: service.id, hostname: host });
+      await invalidate();
+      setHostname("");
+      setOpen(false);
+      toast.success("Domain added");
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not add the domain");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onVerify(domain: Domain) {
+    setVerifying(domain.id);
+    try {
+      await domainClient.verifyDomain({ id: domain.id });
+      await invalidate();
+      toast.success("Domain checked");
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not verify the domain");
+    } finally {
+      setVerifying("");
+    }
+  }
+
+  async function onDelete(domain: Domain) {
+    try {
+      await domainClient.deleteDomain({ id: domain.id });
+      await invalidate();
+      toast.success(`Removed ${domain.hostname}`);
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not remove the domain");
+    }
+  }
+
+  return (
+    <Panel>
+      <PanelHeader
+        title="Domains"
+        description="Generated and custom hostnames for this service."
+        action={
+          <Button size="sm" onClick={() => setOpen(true)}>
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            Add domain
+          </Button>
+        }
+      />
+      <div className="space-y-4 p-4">
+        <div className="rounded-lg border border-border bg-background px-3 py-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Globe className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                <p className="text-sm font-medium text-foreground">Generated domain</p>
+                <Badge tone={generatedTone}>{generatedStatus}</Badge>
+              </div>
+              {service.routeUrl ? (
+                <a
+                  href={service.routeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 block truncate font-mono text-xs text-blue-400 hover:text-blue-300 hover:underline"
+                >
+                  {service.routeUrl}
+                </a>
+              ) : (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {publicSvc ? "Deploy this service to create its generated domain." : "Private services do not receive public domains."}
+                </p>
+              )}
+            </div>
+            {service.routeUrl && (
+              <div className="flex gap-2">
+                <Button size="sm" variant="secondary" onClick={() => copy(service.routeUrl, "generated domain")}>
+                  <Copy className="h-4 w-4" aria-hidden="true" />
+                  Copy
+                </Button>
+                <a
+                  href={service.routeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-foreground shadow-sm transition hover:bg-accent"
+                >
+                  <ExternalLink className="h-4 w-4" aria-hidden="true" />
+                  Open
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {domains.isLoading ? (
+          <Skeleton className="h-36 w-full" />
+        ) : rows.length === 0 ? (
+          <EmptyState
+            title="No custom domains"
+            body="Add a hostname, copy the DNS record to your provider, then verify it here."
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <Table className="min-w-[960px] table-fixed">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[34%]">Domain</TableHead>
+                  <TableHead className="w-[140px]">Status</TableHead>
+                  <TableHead className="w-[260px]">DNS record</TableHead>
+                  <TableHead className="w-[132px]">Last checked</TableHead>
+                  <TableHead className="w-[172px] text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((domain) => (
+                  <TableRow key={domain.id}>
+                    <TableCell className="whitespace-normal align-top">
+                      <p className="truncate font-mono text-sm font-medium text-foreground">{domain.hostname}</p>
+                      {domain.statusMessage && (
+                        <p className="mt-1 max-w-full break-words text-xs leading-5 text-muted-foreground">{domain.statusMessage}</p>
+                      )}
+                    </TableCell>
+                    <TableCell className="align-top">
+                      <StatusDot tone={domainTone(domain.status)} label={formatDomainStatus(domain.status)} />
+                    </TableCell>
+                    <TableCell className="align-top">
+                      {domain.dnsRecordType && domain.dnsRecordValue ? (
+                        <div className="space-y-1 font-mono text-xs">
+                          <div className="flex items-center gap-2">
+                            <Badge tone="blue">{domain.dnsRecordType}</Badge>
+                            <span className="min-w-0 truncate text-muted-foreground">{domain.dnsRecordName}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => copy(domain.dnsRecordValue, "DNS value")}
+                            className="flex w-full items-center gap-1 text-left text-foreground hover:underline"
+                          >
+                            <span className="min-w-0 truncate">{domain.dnsRecordValue}</span>
+                            <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">Waiting for a generated domain</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="align-top text-muted-foreground">
+                      {domain.lastCheckedAt ? timeAgo(domain.lastCheckedAt) : "—"}
+                    </TableCell>
+                    <TableCell className="align-top">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          disabled={verifying === domain.id}
+                          onClick={() => onVerify(domain)}
+                        >
+                          <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                          {verifying === domain.id ? "Checking…" : "Verify"}
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => onDelete(domain)} aria-label={`Remove ${domain.hostname}`}>
+                          <Trash2 className="h-4 w-4" aria-hidden="true" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add custom domain</DialogTitle>
+            <DialogDescription>Enter the hostname you want to route to this service.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={onAdd} className="space-y-4">
+            <div>
+              <span className="mb-1.5 block text-xs font-medium text-foreground">Domain</span>
+              <Input
+                value={hostname}
+                onChange={(e) => setHostname(e.target.value)}
+                placeholder="app.example.com"
+                autoCapitalize="none"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={busy || !hostname.trim()}>
+                {busy ? "Adding…" : "Add domain"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </Panel>
   );
 }
 
@@ -401,6 +657,16 @@ function timeAgo(iso: string): string {
   const hrs = Math.round(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return new Date(iso).toLocaleDateString();
+}
+
+function domainTone(status: string) {
+  if (status === "pending_dns" || status === "verified") return "blue";
+  if (status === "blocked") return "amber";
+  return statusTone(status);
+}
+
+function formatDomainStatus(status: string): string {
+  return status.replaceAll("_", " ");
 }
 
 function Row({ label, value }: { label: string; value: ReactNode }) {

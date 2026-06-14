@@ -268,6 +268,33 @@ func (s *postgresStore) AppendEvent(ctx context.Context, tx database.Tx, e NewEv
 	return err
 }
 
+func (s *postgresStore) VerifiedDomainsForServices(ctx context.Context, serviceIDs []string) (map[string][]string, error) {
+	if len(serviceIDs) == 0 {
+		return map[string][]string{}, nil
+	}
+	rows, err := db.New(s.pool).VerifiedDomainsForServices(ctx, serviceIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]string, len(serviceIDs))
+	for _, r := range rows {
+		out[r.ServiceID] = append(out[r.ServiceID], r.Hostname)
+	}
+	return out, nil
+}
+
+func (s *postgresStore) MarkDomainsRouteSync(ctx context.Context, tx database.Tx, serviceID string, hostnames []string, status, message string) error {
+	if len(hostnames) == 0 {
+		return nil
+	}
+	return db.New(tx).MarkDomainsRouteSync(ctx, db.MarkDomainsRouteSyncParams{
+		ServiceID:     serviceID,
+		Column2:       hostnames,
+		Status:        status,
+		StatusMessage: message,
+	})
+}
+
 func deploymentsFromRows(rows []db.Deployment) []Deployment {
 	out := make([]Deployment, 0, len(rows))
 	for _, r := range rows {

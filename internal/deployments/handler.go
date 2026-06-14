@@ -141,6 +141,51 @@ func (h *gatewayHandler) ReportDeployment(ctx context.Context, req *connect.Requ
 	return connect.NewResponse(&agentv1.ReportDeploymentResponse{}), nil
 }
 
+func (h *gatewayHandler) SyncRoutes(ctx context.Context, req *connect.Request[agentv1.SyncRoutesRequest]) (*connect.Response[agentv1.SyncRoutesResponse], error) {
+	routes := make([]ManagedRoute, 0, len(req.Msg.GetRoutes()))
+	for _, r := range req.Msg.GetRoutes() {
+		routes = append(routes, ManagedRoute{
+			ServiceID:    r.GetServiceId(),
+			DeploymentID: r.GetDeploymentId(),
+			HostPort:     r.GetHostPort(),
+		})
+	}
+	overrides, err := h.svc.SyncRoutes(ctx, SyncRoutesInput{
+		AgentID:    req.Msg.GetAgentId(),
+		Credential: req.Msg.GetCredential(),
+		Routes:     routes,
+	})
+	if err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	out := make([]*agentv1.RouteOverride, 0, len(overrides))
+	for _, o := range overrides {
+		out = append(out, &agentv1.RouteOverride{ServiceId: o.ServiceID, Hostnames: o.Hostnames})
+	}
+	return connect.NewResponse(&agentv1.SyncRoutesResponse{Overrides: out}), nil
+}
+
+func (h *gatewayHandler) ReportRouteSync(ctx context.Context, req *connect.Request[agentv1.ReportRouteSyncRequest]) (*connect.Response[agentv1.ReportRouteSyncResponse], error) {
+	results := make([]RouteSyncResult, 0, len(req.Msg.GetResults()))
+	for _, r := range req.Msg.GetResults() {
+		results = append(results, RouteSyncResult{
+			ServiceID:    r.GetServiceId(),
+			DeploymentID: r.GetDeploymentId(),
+			Hostnames:    r.GetHostnames(),
+			OK:           r.GetOk(),
+			Message:      r.GetMessage(),
+		})
+	}
+	if err := h.svc.ReportRouteSync(ctx, ReportRouteSyncInput{
+		AgentID:    req.Msg.GetAgentId(),
+		Credential: req.Msg.GetCredential(),
+		Results:    results,
+	}); err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&agentv1.ReportRouteSyncResponse{}), nil
+}
+
 func toProtos(ds []Deployment) []*controlplanev1.Deployment {
 	out := make([]*controlplanev1.Deployment, 0, len(ds))
 	for _, d := range ds {

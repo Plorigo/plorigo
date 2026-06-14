@@ -4,6 +4,7 @@ import {
   agentClient,
   authClient,
   deploymentClient,
+  domainClient,
   environmentClient,
   envVarClient,
   projectClient,
@@ -135,6 +136,14 @@ export function useServicesByProject(projectId: string) {
   });
 }
 
+export function useServicesByWorkspace(workspaceId: string) {
+  return useQuery({
+    queryKey: ["services", "workspace", workspaceId],
+    queryFn: async () => (await serviceClient.listServicesByWorkspace({ workspaceId })).services,
+    enabled: workspaceId.length > 0,
+  });
+}
+
 export function useServicesByEnvironment(environmentId: string) {
   return useQuery({
     queryKey: ["services", "environment", environmentId],
@@ -188,6 +197,30 @@ export function useDeploymentsByService(serviceId: string) {
       (await deploymentClient.listDeploymentsByService({ serviceId })).deployments,
     enabled: serviceId.length > 0 && !isPrototypeId(serviceId),
     refetchInterval: 5000,
+  });
+}
+
+export function useDomainsByService(serviceId: string) {
+  return useQuery({
+    queryKey: ["domains", "service", serviceId],
+    queryFn: async () => (await domainClient.listDomainsByService({ serviceId })).domains,
+    enabled: serviceId.length > 0 && !isPrototypeId(serviceId),
+  });
+}
+
+export function useDomainsByProject(projectId: string) {
+  return useQuery({
+    queryKey: ["domains", "project", projectId],
+    queryFn: async () => (await domainClient.listDomainsByProject({ projectId })).domains,
+    enabled: projectId.length > 0 && !isPrototypeId(projectId),
+  });
+}
+
+export function useDomainsByWorkspace(workspaceId: string) {
+  return useQuery({
+    queryKey: ["domains", "workspace", workspaceId],
+    queryFn: async () => (await domainClient.listDomainsByWorkspace({ workspaceId })).domains,
+    enabled: workspaceId.length > 0,
   });
 }
 

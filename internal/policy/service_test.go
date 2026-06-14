@@ -41,6 +41,10 @@ func TestAuthorizeMatrix(t *testing.T) {
 		{authz.RoleMember, authz.ActionEnvVarDelete, true},
 		{authz.RoleViewer, authz.ActionEnvVarRead, true},
 		{authz.RoleViewer, authz.ActionEnvVarSet, false},
+		{authz.RoleMember, authz.ActionDomainCreate, true},
+		{authz.RoleMember, authz.ActionDomainVerify, true},
+		{authz.RoleViewer, authz.ActionDomainRead, true},
+		{authz.RoleViewer, authz.ActionDomainCreate, false},
 	}
 	for _, c := range cases {
 		svc := New(Deps{Membership: fakeMembers{role: c.role, ok: true}})

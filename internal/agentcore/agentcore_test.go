@@ -234,7 +234,9 @@ func TestRunResumesFromPersistedIdentity(t *testing.T) {
 }
 
 type fakeDeployClient struct {
-	reports []*agentv1.ReportDeploymentRequest
+	reports          []*agentv1.ReportDeploymentRequest
+	routeSync        *agentv1.SyncRoutesResponse
+	routeSyncReports []*agentv1.ReportRouteSyncRequest
 }
 
 func (f *fakeDeployClient) PollDeployment(_ context.Context, _ *connect.Request[agentv1.PollDeploymentRequest]) (*connect.Response[agentv1.PollDeploymentResponse], error) {
@@ -244,6 +246,18 @@ func (f *fakeDeployClient) PollDeployment(_ context.Context, _ *connect.Request[
 func (f *fakeDeployClient) ReportDeployment(_ context.Context, req *connect.Request[agentv1.ReportDeploymentRequest]) (*connect.Response[agentv1.ReportDeploymentResponse], error) {
 	f.reports = append(f.reports, req.Msg)
 	return connect.NewResponse(&agentv1.ReportDeploymentResponse{}), nil
+}
+
+func (f *fakeDeployClient) SyncRoutes(_ context.Context, _ *connect.Request[agentv1.SyncRoutesRequest]) (*connect.Response[agentv1.SyncRoutesResponse], error) {
+	if f.routeSync != nil {
+		return connect.NewResponse(f.routeSync), nil
+	}
+	return connect.NewResponse(&agentv1.SyncRoutesResponse{}), nil
+}
+
+func (f *fakeDeployClient) ReportRouteSync(_ context.Context, req *connect.Request[agentv1.ReportRouteSyncRequest]) (*connect.Response[agentv1.ReportRouteSyncResponse], error) {
+	f.routeSyncReports = append(f.routeSyncReports, req.Msg)
+	return connect.NewResponse(&agentv1.ReportRouteSyncResponse{}), nil
 }
 
 // syncDeployClient is a mutex-guarded DeployServiceClient for the runtimeLogLoop test,
@@ -270,6 +284,14 @@ func (c *syncDeployClient) ReportDeployment(_ context.Context, req *connect.Requ
 	return connect.NewResponse(&agentv1.ReportDeploymentResponse{}), nil
 }
 
+func (c *syncDeployClient) SyncRoutes(context.Context, *connect.Request[agentv1.SyncRoutesRequest]) (*connect.Response[agentv1.SyncRoutesResponse], error) {
+	return connect.NewResponse(&agentv1.SyncRoutesResponse{}), nil
+}
+
+func (c *syncDeployClient) ReportRouteSync(context.Context, *connect.Request[agentv1.ReportRouteSyncRequest]) (*connect.Response[agentv1.ReportRouteSyncResponse], error) {
+	return connect.NewResponse(&agentv1.ReportRouteSyncResponse{}), nil
+}
+
 func (c *syncDeployClient) snapshot() []*agentv1.ReportDeploymentRequest {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -287,6 +309,7 @@ type fakeRuntime struct {
 	removeErr   error
 	replaceKeep string
 	removed     []string
+	current     managedRoute
 
 	cloneSHA     string
 	cloneErr     error
@@ -346,6 +369,12 @@ func (f *fakeRuntime) run(_ context.Context, in runInput) (string, int32, error)
 	f.ops = append(f.ops, "run")
 	f.ranImage = in.imageRef
 	f.ranPort = in.containerPort
+	f.current = managedRoute{
+		ServiceID:    in.appLabel,
+		DeploymentID: in.deploymentID,
+		ContainerID:  f.containerID,
+		HostPort:     f.hostPort,
+	}
 	return f.containerID, f.hostPort, f.runErr
 }
 
@@ -383,6 +412,9 @@ func (f *fakeRuntime) logsSince(_ context.Context, id, since string, _ int) ([]s
 
 func (f *fakeRuntime) listManagedRoutes(_ context.Context) ([]managedRoute, error) {
 	f.ops = append(f.ops, "routes")
+	if f.current.ServiceID != "" {
+		return routesForDeployment(f.routes, f.current), f.routesErr
+	}
 	return f.routes, f.routesErr
 }
 
@@ -446,7 +478,7 @@ func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *test
 		AppLabel:      "env-1",
 	})
 
-	wantOps := []string{"pull", "run", "health", "routes", "route", "replace", "logs"}
+	wantOps := []string{"pull", "run", "health", "routes", "route", "replace", "logs", "routes", "route"}
 	if !reflect.DeepEqual(runtime.ops, wantOps) {
 		t.Fatalf("ops = %v, want %v", runtime.ops, wantOps)
 	}
@@ -505,7 +537,7 @@ func TestExecuteDeployment_GitClonesAndBuildsThenRunsBuiltImage(t *testing.T) {
 	})
 
 	// Git path clones and builds first, then runs the built image — and never pulls.
-	wantOps := []string{"clone", "build", "run", "health", "routes", "route", "replace", "logs"}
+	wantOps := []string{"clone", "build", "run", "health", "routes", "route", "replace", "logs", "routes", "route"}
 	if !reflect.DeepEqual(runtime.ops, wantOps) {
 		t.Fatalf("ops = %v, want %v (clone+build, no pull)", runtime.ops, wantOps)
 	}
@@ -578,7 +610,7 @@ func TestExecuteDeployment_GitAutoDetectsPortWhenUnset(t *testing.T) {
 	})
 
 	// With no port set, the agent detects it from the built image before running.
-	wantOps := []string{"clone", "build", "detect", "run", "health", "routes", "route", "replace", "logs"}
+	wantOps := []string{"clone", "build", "detect", "run", "health", "routes", "route", "replace", "logs", "routes", "route"}
 	if !reflect.DeepEqual(runtime.ops, wantOps) {
 		t.Fatalf("ops = %v, want %v (detect between build and run)", runtime.ops, wantOps)
 	}
@@ -605,7 +637,7 @@ func TestExecuteDeployment_GitExplicitPortSkipsDetect(t *testing.T) {
 	})
 
 	// An explicit port is honored as-is — no detection.
-	wantOps := []string{"clone", "build", "run", "health", "routes", "route", "replace", "logs"}
+	wantOps := []string{"clone", "build", "run", "health", "routes", "route", "replace", "logs", "routes", "route"}
 	if !reflect.DeepEqual(runtime.ops, wantOps) {
 		t.Fatalf("ops = %v, want %v (no detect when a port is set)", runtime.ops, wantOps)
 	}
@@ -728,7 +760,7 @@ func TestExecuteDeployment_RetirePreviousFailureKeepsHealthyReplacement(t *testi
 		AppLabel:      "env-1",
 	})
 
-	wantOps := []string{"pull", "run", "health", "routes", "route", "replace", "logs"}
+	wantOps := []string{"pull", "run", "health", "routes", "route", "replace", "logs", "routes", "route"}
 	if !reflect.DeepEqual(runtime.ops, wantOps) {
 		t.Fatalf("ops = %v, want %v", runtime.ops, wantOps)
 	}

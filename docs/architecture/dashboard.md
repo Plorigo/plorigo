@@ -55,7 +55,12 @@ separate concern and can make its own choice.)
 > public/private visibility toggle and calls `ServiceService.CreateService(deploy_now)`. A
 > **service detail page** at `/projects/$projectId/services/$serviceId` shows the source, port,
 > visibility, env vars, and deployment history, with a **Redeploy** action
-> (`CreateDeploymentForService`). Env-var management is **service-scoped**.
+> (`CreateDeploymentForService`). Env-var management is **service-scoped**. Domains appear in
+> two places: the service detail page shows that service's generated domain and custom domains,
+> while `/domains` is the scoped domain-management surface. With a project selected it lists
+> domains for that project's services; without a project selected it lists all workspace custom
+> domains, including the service they route to, copyable DNS records, verification, and
+> plain-English blocked/failed states.
 
 > [!NOTE]
 > Beyond the structure above, specific screens and navigation are product scope, not

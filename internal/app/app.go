@@ -11,6 +11,7 @@ import (
 	"github.com/plorigo/plorigo/internal/agents"
 	"github.com/plorigo/plorigo/internal/auth"
 	"github.com/plorigo/plorigo/internal/deployments"
+	"github.com/plorigo/plorigo/internal/domains"
 	"github.com/plorigo/plorigo/internal/environments"
 	"github.com/plorigo/plorigo/internal/envvars"
 	"github.com/plorigo/plorigo/internal/platform/config"
@@ -40,6 +41,7 @@ type App struct {
 	secrets      *secrets.Module
 	servers      *servers.Module
 	deployments  *deployments.Module
+	domains      *domains.Module
 	sources      *sources.Module
 	services     *services.Module
 }

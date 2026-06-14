@@ -8,6 +8,7 @@ import (
 	"github.com/plorigo/plorigo/internal/audit"
 	"github.com/plorigo/plorigo/internal/auth"
 	"github.com/plorigo/plorigo/internal/deployments"
+	"github.com/plorigo/plorigo/internal/domains"
 	"github.com/plorigo/plorigo/internal/environments"
 	"github.com/plorigo/plorigo/internal/envvars"
 	"github.com/plorigo/plorigo/internal/membership"
@@ -106,6 +107,15 @@ func (a *App) buildModules() error {
 	// resolved through environment -> project); also serves the agent-facing
 	// DeployService gateway (claim/report), public like the agent registration gateway.
 	a.deployments = deployments.New(deployments.Deps{
+		DB:     a.db,
+		Audit:  auditSvc,
+		Policy: policySvc,
+		Log:    a.log,
+	})
+
+	// domains attach one or more custom hostnames to a service. They authorize through the
+	// owning service's denormalized workspace and use DNS lookups for explicit verification.
+	a.domains = domains.New(domains.Deps{
 		DB:     a.db,
 		Audit:  auditSvc,
 		Policy: policySvc,

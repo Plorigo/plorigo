@@ -6,6 +6,7 @@ import { Badge, Button, EmptyState, Panel, PanelHeader, Select, Skeleton, Status
 import { useDemoData } from "@/lib/demo";
 import { errorMessage, formatDate } from "@/lib/format";
 import { configItems, domains } from "@/lib/mockDashboard";
+import { useEffectiveProjectId } from "@/lib/projectScope";
 import { useEnvironments, useEnvVars, useProjects, useSecrets } from "@/lib/queries";
 import { statusTone } from "@/lib/status";
 import { useWorkspaceStore } from "@/store";
@@ -28,7 +29,7 @@ interface ConfigRow {
 export function ResourcesPage() {
   const demo = useDemoData();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
-  const selectedProjectId = useWorkspaceStore((s) => s.projectId);
+  const selectedProjectId = useEffectiveProjectId();
   const projects = useProjects(workspaceId);
 
   const [localProjectId, setLocalProjectId] = useState("");

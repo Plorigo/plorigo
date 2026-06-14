@@ -63,6 +63,10 @@ type fakeStore struct {
 	superseded       bool
 	routeServiceID   string
 	routeURLReported string
+	verifiedDomains  map[string][]string
+	routeSyncStatus  string
+	routeSyncMessage string
+	routeSyncHosts   []string
 }
 
 func (f *fakeStore) WorkspaceAndProjectForEnvironment(_ context.Context, _ string) (string, string, bool, error) {
@@ -159,6 +163,19 @@ func (f *fakeStore) UpdateServiceRouteURL(_ context.Context, _ database.Tx, serv
 }
 func (f *fakeStore) AppendEvent(_ context.Context, _ database.Tx, e NewEvent) error {
 	f.events = append(f.events, e)
+	return nil
+}
+func (f *fakeStore) VerifiedDomainsForServices(_ context.Context, serviceIDs []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	for _, serviceID := range serviceIDs {
+		out[serviceID] = f.verifiedDomains[serviceID]
+	}
+	return out, nil
+}
+func (f *fakeStore) MarkDomainsRouteSync(_ context.Context, _ database.Tx, _ string, hostnames []string, status, message string) error {
+	f.routeSyncHosts = append([]string(nil), hostnames...)
+	f.routeSyncStatus = status
+	f.routeSyncMessage = message
 	return nil
 }
 
@@ -616,6 +633,55 @@ func TestReportDeployment_BuildPhasesAndCommitAccepted(t *testing.T) {
 	last := store.statusUpdates[len(store.statusUpdates)-1]
 	if last.CommitSha != "deadbeef" || last.BuiltImageRef != "plorigo-build:"+testDeployID {
 		t.Errorf("status update = %+v, want commit + built image carried", last)
+	}
+}
+
+func TestSyncRoutes_ReturnsVerifiedDomainsForAgentOwnedRoutes(t *testing.T) {
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		getDep: Deployment{ID: testDeployID, ServiceID: testServiceID, ServerID: testServerID}, getOK: true,
+		verifiedDomains: map[string][]string{testServiceID: {"app.example.com", "api.example.com"}},
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	overrides, err := svc.SyncRoutes(context.Background(), SyncRoutesInput{
+		AgentID: testAgentID, Credential: "plag_x",
+		Routes: []ManagedRoute{{ServiceID: testServiceID, DeploymentID: testDeployID, HostPort: 32768}},
+	})
+	if err != nil {
+		t.Fatalf("SyncRoutes: %v", err)
+	}
+	if len(overrides) != 1 || len(overrides[0].Hostnames) != 2 {
+		t.Fatalf("overrides = %+v, want two custom hostnames", overrides)
+	}
+}
+
+func TestReportRouteSync_MarksDomainsActiveOrFailed(t *testing.T) {
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		getDep: Deployment{ID: testDeployID, ServiceID: testServiceID, ServerID: testServerID}, getOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	if err := svc.ReportRouteSync(context.Background(), ReportRouteSyncInput{
+		AgentID: testAgentID, Credential: "plag_x",
+		Results: []RouteSyncResult{{
+			ServiceID: testServiceID, DeploymentID: testDeployID, Hostnames: []string{"app.example.com"}, OK: true,
+		}},
+	}); err != nil {
+		t.Fatalf("ReportRouteSync active: %v", err)
+	}
+	if store.routeSyncStatus != "active" || store.routeSyncHosts[0] != "app.example.com" {
+		t.Fatalf("route sync = status %q hosts %v, want active app.example.com", store.routeSyncStatus, store.routeSyncHosts)
+	}
+	if err := svc.ReportRouteSync(context.Background(), ReportRouteSyncInput{
+		AgentID: testAgentID, Credential: "plag_x",
+		Results: []RouteSyncResult{{
+			ServiceID: testServiceID, DeploymentID: testDeployID, Hostnames: []string{"app.example.com"}, OK: false, Message: "reload failed",
+		}},
+	}); err != nil {
+		t.Fatalf("ReportRouteSync failed: %v", err)
+	}
+	if store.routeSyncStatus != "failed" || store.routeSyncMessage != "reload failed" {
+		t.Fatalf("route sync = status %q message %q, want failed reload failed", store.routeSyncStatus, store.routeSyncMessage)
 	}
 }
 

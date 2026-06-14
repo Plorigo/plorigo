@@ -73,6 +73,12 @@ latest running deployment); a **private** one has none (see
 **`service_id`** (its owning service); `environment_id` / `project_id` / `workspace_id` stay
 denormalized alongside it.
 
+Custom domains are service-scoped in the `domains` table. A service can have multiple custom
+hostnames, while each hostname is unique within a workspace so routing cannot be ambiguous.
+The generated `route_url` stays the baseline address and DNS target. Domain rows track
+plain-English state (`blocked`, `pending_dns`, `verified`, `active`, `failed`) plus the last
+verification time; automatic HTTPS is a later slice.
+
 ### Migration conventions
 
 - Migrations are **forward-only** and reviewed like code.

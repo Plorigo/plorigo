@@ -34,6 +34,29 @@ func TestCaddyRender_StableSortedRoutes(t *testing.T) {
 	}
 }
 
+func TestCaddyRender_IncludesMultipleCustomHostsForService(t *testing.T) {
+	m := testCaddyManager(t)
+	got, err := m.render([]managedRoute{{
+		ServiceID:    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		DeploymentID: "dep-a",
+		ContainerID:  "c-a",
+		HostPort:     3001,
+		CustomHosts:  []string{"api.example.com", "app.example.com"},
+	}})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{
+		"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.example.test",
+		"api.example.com",
+		"app.example.com",
+	} {
+		if !strings.Contains(got, siteAddress(want, 8081)+" {\n\treverse_proxy 127.0.0.1:3001") {
+			t.Fatalf("rendered config missing route for %s:\n%s", want, got)
+		}
+	}
+}
+
 func TestCaddyRender_RejectsUnsafeHostParts(t *testing.T) {
 	m := testCaddyManager(t)
 	if _, err := m.render([]managedRoute{{ServiceID: "bad label", DeploymentID: "dep", ContainerID: "c", HostPort: 3000}}); err == nil {

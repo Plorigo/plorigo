@@ -13,6 +13,7 @@ import {
 import { useCurrentUser, useLogout } from "@/lib/auth";
 import { plorigoLogoBlack } from "@/lib/brand";
 import { cn } from "@/lib/cn";
+import { useEffectiveProjectId } from "@/lib/projectScope";
 import { useWorkspaces } from "@/lib/queries";
 import { useWorkspaceStore } from "@/store";
 import { navItems, type NavItem } from "./nav";
@@ -25,7 +26,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { data: user } = useCurrentUser();
   const workspaces = useWorkspaces();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
-  const projectId = useWorkspaceStore((s) => s.projectId);
+  const projectId = useEffectiveProjectId();
   const clearProject = useWorkspaceStore((s) => s.clearProject);
   const logout = useLogout();
 
@@ -39,6 +40,25 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   const renderItem = (item: NavItem) => {
     const Icon = item.icon;
+    if (projectId && item.projectTo) {
+      return (
+        <Link
+          key={item.to}
+          to={item.projectTo}
+          params={{ projectId }}
+          onClick={onNavigate}
+          activeOptions={{ exact: item.projectTo === "/projects/$projectId" }}
+          className="flex h-9 items-center gap-2.5 rounded-md px-2.5 text-sm font-medium transition"
+          activeProps={{ className: "bg-accent text-accent-foreground" }}
+          inactiveProps={{
+            className: "text-muted-foreground hover:bg-accent/60 hover:text-foreground",
+          }}
+        >
+          <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span className="truncate">{item.label}</span>
+        </Link>
+      );
+    }
     return (
       <Link
         key={item.to}

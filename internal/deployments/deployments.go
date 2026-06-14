@@ -186,6 +186,42 @@ type ReportInput struct {
 	RouteURL      string // the real deployment URL computed by the agent
 }
 
+// ManagedRoute is one public service route the agent is currently serving.
+type ManagedRoute struct {
+	ServiceID    string
+	DeploymentID string
+	HostPort     int32
+}
+
+// RouteOverride carries verified custom hostnames for a managed service route.
+type RouteOverride struct {
+	ServiceID string
+	Hostnames []string
+}
+
+// SyncRoutesInput is the agent's request for custom hostnames to add to its Caddy routes.
+type SyncRoutesInput struct {
+	AgentID    string
+	Credential string
+	Routes     []ManagedRoute
+}
+
+// RouteSyncResult reports whether the agent activated or failed custom hostnames.
+type RouteSyncResult struct {
+	ServiceID    string
+	DeploymentID string
+	Hostnames    []string
+	OK           bool
+	Message      string
+}
+
+// ReportRouteSyncInput is the agent's Caddy route-sync result report.
+type ReportRouteSyncInput struct {
+	AgentID    string
+	Credential string
+	Results    []RouteSyncResult
+}
+
 // Service is the surface other code depends on. It backs both the dashboard-facing
 // controlplane.v1.DeploymentService and the agent-facing agent.v1.DeployService.
 type Service interface {
@@ -208,4 +244,6 @@ type Service interface {
 	// Agent gateway (credential-authenticated, NOT policy-authorized — like Heartbeat).
 	PollDeployment(ctx context.Context, in PollInput) (Claimed, error)
 	ReportDeployment(ctx context.Context, in ReportInput) error
+	SyncRoutes(ctx context.Context, in SyncRoutesInput) ([]RouteOverride, error)
+	ReportRouteSync(ctx context.Context, in ReportRouteSyncInput) error
 }

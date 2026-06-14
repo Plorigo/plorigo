@@ -7,6 +7,7 @@ import { BackupsPage } from "./features/backups/BackupsPage";
 import { DeploymentDetailPage } from "./features/deployments/DeploymentDetailPage";
 import { DeploymentsPage } from "./features/deployments/DeploymentsPage";
 import { NewDeploymentPage } from "./features/deployments/new/NewDeploymentPage";
+import { DomainsPage } from "./features/domains/DomainsPage";
 import { OverviewPage } from "./features/overview/OverviewPage";
 import { ProjectDetailPage } from "./features/projects/ProjectDetailPage";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
@@ -55,9 +56,25 @@ const serviceDetailRoute = createRoute({
   path: "/projects/$projectId/services/$serviceId",
   component: ServiceDetailPage,
 });
+const domainsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/domains", component: DomainsPage });
+const projectDomainsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/projects/$projectId/domains",
+  component: DomainsPage,
+});
 const serversRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/servers", component: ServersPage });
 const resourcesRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/resources", component: ResourcesPage });
+const projectResourcesRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/projects/$projectId/resources",
+  component: ResourcesPage,
+});
 const deploymentsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/deployments", component: DeploymentsPage });
+const projectDeploymentsRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/projects/$projectId/deployments",
+  component: DeploymentsPage,
+});
 // Static "/deployments/new" must be registered before the dynamic "/deployments/$deploymentId"
 // so it's never parsed as a deployment id (mirrors projectsNewRoute vs projectDetailRoute).
 const deploymentsNewRoute = createRoute({
@@ -72,10 +89,20 @@ const deploymentDetailRoute = createRoute({
   path: "/deployments/$deploymentId",
   component: DeploymentDetailPage,
 });
+const projectDeploymentDetailRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/projects/$projectId/deployments/$deploymentId",
+  component: DeploymentDetailPage,
+});
 const backupsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/backups", component: BackupsPage });
 const securityRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/security", component: SecurityPage });
 const teamRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/team", component: TeamPage });
 const activityRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/activity", component: ActivityPage });
+const projectActivityRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/projects/$projectId/activity",
+  component: ActivityPage,
+});
 
 // The auth screens are public — siblings of the protected layout.
 const loginRoute = createRoute({ getParentRoute: () => rootRoute, path: "/login", component: LoginPage });
@@ -91,15 +118,21 @@ export const routeTree = rootRoute.addChildren([
     projectsNewRoute,
     projectDetailRoute,
     serviceDetailRoute,
+    domainsRoute,
+    projectDomainsRoute,
     serversRoute,
     resourcesRoute,
+    projectResourcesRoute,
     deploymentsRoute,
+    projectDeploymentsRoute,
     deploymentsNewRoute,
     deploymentDetailRoute,
+    projectDeploymentDetailRoute,
     backupsRoute,
     securityRoute,
     teamRoute,
     activityRoute,
+    projectActivityRoute,
   ]),
   loginRoute,
   registerRoute,

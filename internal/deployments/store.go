@@ -62,6 +62,8 @@ type Store interface {
 	// reported route (a sibling write Rule 2 permits, committed in the report tx).
 	UpdateServiceRouteURL(ctx context.Context, tx database.Tx, serviceID, routeURL string) error
 	AppendEvent(ctx context.Context, tx database.Tx, e NewEvent) error
+	VerifiedDomainsForServices(ctx context.Context, serviceIDs []string) (map[string][]string, error)
+	MarkDomainsRouteSync(ctx context.Context, tx database.Tx, serviceID string, hostnames []string, status, message string) error
 }
 
 // NewDeployment is the data to insert a queued image deployment.
