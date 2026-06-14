@@ -21,11 +21,20 @@ import (
 const (
 	StatusQueued     = "queued"     // recorded by the control plane, not yet claimed
 	StatusAssigned   = "assigned"   // claimed by the server's agent
-	StatusPulling    = "pulling"    // the agent is pulling the image
+	StatusCloning    = "cloning"    // the agent is cloning the source repo (git)
+	StatusBuilding   = "building"   // the agent is building the image (git)
+	StatusPulling    = "pulling"    // the agent is pulling the image (image)
 	StatusStarting   = "starting"   // the agent is creating/starting the container
 	StatusRunning    = "running"    // the container is up and passed its health check
 	StatusFailed     = "failed"     // the attempt failed (see message / logs)
 	StatusSuperseded = "superseded" // replaced by a newer running deployment
+)
+
+// Source kinds: an image deployment runs a pre-built image; a git deployment clones a
+// repo and builds its Dockerfile on the server first.
+const (
+	SourceImage = "image"
+	SourceGit   = "git"
 )
 
 // Deployment event kinds.
@@ -50,6 +59,15 @@ type Deployment struct {
 	Message       string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+
+	// Build-from-Git. SourceKind is SourceImage or SourceGit; the rest are set only for
+	// git deployments. CommitSha and BuiltImageRef are filled by the agent after build.
+	SourceKind    string
+	SourceAccess  string
+	CloneURL      string
+	GitRef        string
+	CommitSha     string
+	BuiltImageRef string
 }
 
 // Event is one entry in a deployment's timeline: a status transition (KindStatus) or
@@ -64,12 +82,22 @@ type Event struct {
 	CreatedAt    time.Time
 }
 
-// CreateInput is what the dashboard supplies to trigger a deployment.
+// CreateInput is what the dashboard supplies to trigger a pre-built-image deployment.
 type CreateInput struct {
 	EnvironmentID string
 	ServerID      string
 	ImageRef      string
 	ContainerPort int32
+}
+
+// CreateFromSourceInput is what the dashboard supplies to build-and-deploy the project's
+// connected repository. It carries no repo URL — the service resolves the project's
+// source server-side. GitRef is optional (empty = the source's default branch).
+type CreateFromSourceInput struct {
+	EnvironmentID string
+	ServerID      string
+	ContainerPort int32
+	GitRef        string
 }
 
 // PollInput is what an agent presents to claim the next queued deployment for its
@@ -89,24 +117,35 @@ type Claimed struct {
 	ContainerPort int32
 	Env           map[string]string
 	AppLabel      string
+
+	// Build-from-Git. For a git deployment SourceKind is SourceGit and the agent clones
+	// CloneURL at GitRef, builds the Dockerfile to BuiltImageTag, then runs that tag. No
+	// credential is included: this slice builds public repositories only.
+	SourceKind    string
+	CloneURL      string
+	GitRef        string
+	BuiltImageTag string
 }
 
 // ReportInput is an agent's progress update for a deployment it is executing.
 type ReportInput struct {
-	AgentID      string
-	Credential   string
-	DeploymentID string
-	Status       string
-	HostPort     int32
-	ContainerID  string
-	LogLines     []string
-	Message      string
+	AgentID       string
+	Credential    string
+	DeploymentID  string
+	Status        string
+	HostPort      int32
+	ContainerID   string
+	LogLines      []string
+	Message       string
+	CommitSha     string // the exact commit built (git deployments)
+	BuiltImageRef string // the local image tag the agent built (git deployments)
 }
 
 // Service is the surface other code depends on. It backs both the dashboard-facing
 // controlplane.v1.DeploymentService and the agent-facing agent.v1.DeployService.
 type Service interface {
 	Create(ctx context.Context, in CreateInput) (Deployment, error)
+	CreateFromSource(ctx context.Context, in CreateFromSourceInput) (Deployment, error)
 	Get(ctx context.Context, deploymentID string) (Deployment, error)
 	ListByEnvironment(ctx context.Context, environmentID string) ([]Deployment, error)
 	ListByProject(ctx context.Context, projectID string) ([]Deployment, error)

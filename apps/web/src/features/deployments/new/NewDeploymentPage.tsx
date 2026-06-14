@@ -60,8 +60,9 @@ function templateVisual(t: DeployTemplate) {
 // Project, adapted for BYOS). A "Deploy to" bar fixes the target (project + environment +
 // server); below it a quick image/URL box and two columns — Import Git Repository (the
 // connected account's repos) and Templates — each item carrying its own Deploy/Connect
-// action. Image sources run now; Git sources connect as the project's source (build & deploy
-// from Git is a later slice). An optional ?project= preselects the target and scopes "Back".
+// action. Public images and public Git repos build-and-deploy now; a connected-account
+// (OAuth) repo connects as the project's source (building it needs the GitHub App, later).
+// An optional ?project= preselects the target and scopes "Back".
 export function NewDeploymentPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -87,6 +88,8 @@ export function NewDeploymentPage() {
   // Quick deploy (a public image, or a public Git URL).
   const [quickValue, setQuickValue] = useState("");
   const [quickPort, setQuickPort] = useState("80");
+  // Feedback for the Git-URL port auto-detection (checking / detected / not found).
+  const [portHint, setPortHint] = useState("");
   // Import-a-repo (the connected account).
   const [repoFilter, setRepoFilter] = useState("");
   const [selectedRepoFullName, setSelectedRepoFullName] = useState("");
@@ -159,6 +162,46 @@ export function NewDeploymentPage() {
     setRepoBranch(selectedRepo.defaultBranch || "");
   }, [selectedRepo]);
 
+  const quickIsRepo = looksLikeGitUrl(quickValue);
+
+  // An image deploy needs an explicit port, so default it to 80 when the input becomes an
+  // image (only on the kind flip, so typing an image ref keeps a custom port).
+  useEffect(() => {
+    if (!quickIsRepo) setQuickPort("80");
+  }, [quickIsRepo]);
+
+  // For a Git URL, read the repo's Dockerfile up front and PREFILL the port (from its EXPOSE)
+  // so the user sees it instead of a mysterious blank. Best-effort + debounced; if it can't be
+  // found the field stays blank and the agent still auto-detects from the built image. Public,
+  // unauthenticated GitHub read — re-runs (and clears) when the URL changes, so changing repos
+  // re-detects; a manual edit on the SAME URL sticks (this effect won't re-fire).
+  useEffect(() => {
+    if (!quickIsRepo) return;
+    const gh = parseGitHubRepo(quickValue);
+    if (!gh) {
+      setQuickPort("");
+      setPortHint("Public Git repo — the port is auto-detected from the Dockerfile when it builds.");
+      return;
+    }
+    setQuickPort("");
+    setPortHint("Checking the repo's Dockerfile…");
+    const ctrl = new AbortController();
+    const timer = setTimeout(async () => {
+      const port = await detectDockerfilePort(gh.owner, gh.repo, ctrl.signal);
+      if (ctrl.signal.aborted) return;
+      if (port) {
+        setQuickPort(String(port));
+        setPortHint(`Detected port ${port} from the repo's Dockerfile (edit if needed).`);
+      } else {
+        setPortHint("No EXPOSE found — the port is auto-detected from the built image, or set one.");
+      }
+    }, 600);
+    return () => {
+      ctrl.abort();
+      clearTimeout(timer);
+    };
+  }, [quickValue, quickIsRepo]);
+
   const filteredRepos = useMemo(() => {
     const q = repoFilter.trim().toLowerCase();
     const list = repos.data ?? [];
@@ -225,8 +268,9 @@ export function NewDeploymentPage() {
     }
   }
 
-  // Connect a repository as the project's source. Build-from-Git is a later slice — for now
-  // this sets the project up and you deploy an image to run something.
+  // Connect a connected-account (OAuth) repository as the project's source. Building from a
+  // private/OAuth repo isn't supported yet (the agent gets no credential this slice), so this
+  // stays connect-only; public repos build-and-deploy via deployPublicSource below.
   async function connectOAuthRepo(owner: string, repo: string, branch: string, key: string) {
     setError("");
     if (!projectId) return setError("Pick a project to connect to");
@@ -234,7 +278,7 @@ export function NewDeploymentPage() {
     try {
       await sourceClient.connectRepository({ projectId, owner, repo, branch });
       await invalidateSource();
-      toast.success("Repository connected");
+      toast.success("Repository connected as the project's source");
       void navigate({ to: "/projects/$projectId", params: { projectId } });
     } catch (err) {
       setError(err instanceof ConnectError ? err.message : "Could not connect the repository");
@@ -242,35 +286,53 @@ export function NewDeploymentPage() {
     }
   }
 
-  async function connectPublicUrl(repoUrl: string, branch: string, key: string) {
+  // Build-and-deploy a PUBLIC repository: connect it as the project's source, then trigger a
+  // source deployment. The agent clones the repo, builds its Dockerfile, and runs it. No
+  // credential is involved (public repos only); private repos use the connect-only path above.
+  // port 0 means "auto-detect from the Dockerfile's EXPOSE on the agent".
+  async function deployPublicSource(repoUrl: string, branch: string, port: number, key: string) {
     setError("");
-    if (!projectId) return setError("Pick a project to connect to");
+    if (!projectId) return setError("Pick a project to deploy to");
+    if (!environmentId) return setError("Pick an environment (add one on the project first)");
+    if (!serverId) return setError("Pick a connected server");
     const url = repoUrl.trim();
     if (!url) return setError("Enter a repository URL");
+    if (port !== 0 && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      return setError("Container port must be between 1 and 65535, or blank to auto-detect");
+    }
     setBusyKey(key);
     try {
       await sourceClient.connectPublicRepository({ projectId, repoUrl: url, branch: branch.trim() });
       await invalidateSource();
-      toast.success("Repository connected");
-      void navigate({ to: "/projects/$projectId", params: { projectId } });
+      const { deployment } = await deploymentClient.createDeploymentFromSource({
+        environmentId,
+        serverId,
+        containerPort: port,
+        gitRef: branch.trim(),
+      });
+      if (!deployment) throw new Error("the deployment was not created");
+      await queryClient.invalidateQueries({ queryKey: ["deployments"] });
+      void navigate({ to: "/deployments/$deploymentId", params: { deploymentId: deployment.id } });
     } catch (err) {
-      setError(err instanceof ConnectError ? err.message : "Could not connect the repository");
+      setError(err instanceof ConnectError ? err.message : "Could not build and deploy the repository");
       setBusyKey(null);
     }
   }
 
-  // The quick box deploys an image unless it clearly looks like a Git URL.
-  const quickIsRepo = looksLikeGitUrl(quickValue);
+  // The quick box deploys an image unless it clearly looks like a Git URL — in which case it
+  // builds and deploys a PUBLIC repo. Both need a full target (project + env + server). An
+  // image needs a port; a repo auto-detects it from the Dockerfile when the field is blank
+  // (quickIsRepo is derived above, where it also drives the port-field default).
   const quickReady =
-    quickValue.trim().length > 0 && (quickIsRepo ? canConnect : canDeploy && Number(quickPort) >= 1);
+    quickValue.trim().length > 0 && canDeploy && (quickIsRepo || Number(quickPort) >= 1);
   function runQuick() {
-    if (quickIsRepo) void connectPublicUrl(quickValue, "", "quick");
+    if (quickIsRepo) void deployPublicSource(quickValue, "", quickPort.trim() ? Number(quickPort) : 0, "quick");
     else void deployImage(quickValue, Number(quickPort), "quick");
   }
 
   function runTemplate(t: DeployTemplate) {
     if (templateSourceKind(t) === "image") void deployImage(t.imageRef ?? "", t.containerPort, `tpl:${t.id}`);
-    else void connectPublicUrl(t.repoUrl ?? "", t.defaultBranch ?? "", `tpl:${t.id}`);
+    else void deployPublicSource(t.repoUrl ?? "", t.defaultBranch ?? "", t.containerPort, `tpl:${t.id}`);
   }
 
   return (
@@ -294,8 +356,8 @@ export function NewDeploymentPage() {
         <div className="min-w-0">
           <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Deploy something new</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Run a public image now, or connect a Git repository as the project's source. Pick where it lands, then
-            choose what to deploy.
+            Run a public image, or build and deploy a public Git repo (its Dockerfile builds on your server). Pick
+            where it lands, then choose what to deploy.
           </p>
         </div>
       </div>
@@ -317,7 +379,7 @@ export function NewDeploymentPage() {
           <Panel>
             <PanelHeader
               title="Deploy to"
-              description="Environment and server apply to image deploys; connecting a repo just needs a project."
+              description="Where everything below lands. Public images and public Git repos deploy here; importing a connected-account repo just sets it as the project's source."
             />
             <div className="grid gap-4 p-4 sm:grid-cols-3">
               <Field label="Project" icon={FolderGit2}>
@@ -398,28 +460,29 @@ export function NewDeploymentPage() {
                   />
                 </div>
               </div>
-              {!quickIsRepo && (
-                <div className="w-full sm:w-28">
-                  <span className="mb-1.5 block text-sm font-medium text-foreground">Port</span>
-                  <Input
-                    value={quickPort}
-                    onChange={(e) => setQuickPort(e.target.value)}
-                    inputMode="numeric"
-                    placeholder="80"
-                  />
-                </div>
-              )}
+              <div className="w-full sm:w-28">
+                <span className="mb-1.5 block text-sm font-medium text-foreground">Port</span>
+                <Input
+                  value={quickPort}
+                  onChange={(e) => setQuickPort(e.target.value)}
+                  inputMode="numeric"
+                  placeholder={quickIsRepo ? "Auto" : "80"}
+                />
+              </div>
               <Button onClick={runQuick} disabled={busy || !quickReady}>
                 {quickIsRepo ? <GitFork className="h-4 w-4" aria-hidden="true" /> : <Rocket className="h-4 w-4" aria-hidden="true" />}
-                {busyKey === "quick" ? "Working…" : quickIsRepo ? "Connect" : "Deploy"}
+                {busyKey === "quick" ? "Working…" : "Deploy"}
               </Button>
             </div>
             {quickValue.trim() && (
               <p className="mt-2 text-xs text-muted-foreground">
                 {quickIsRepo
-                  ? `Looks like a Git repository — connects it to ${projectName}.`
+                  ? `Looks like a public Git repository — builds its Dockerfile and deploys to ${projectName}.`
                   : `Deploys this image to ${projectName} on port ${quickPort || "…"}.`}
               </p>
+            )}
+            {quickIsRepo && quickValue.trim() && portHint && (
+              <p className="mt-1 text-xs text-muted-foreground">{portHint}</p>
             )}
           </Panel>
 
@@ -584,10 +647,10 @@ export function NewDeploymentPage() {
                             size="sm"
                             variant="secondary"
                             className="mt-3 w-full"
-                            disabled={busy || (isImg ? !canDeploy : !canConnect)}
+                            disabled={busy || !canDeploy}
                             onClick={() => runTemplate(t)}
                           >
-                            {busyKey === key ? (isImg ? "Starting…" : "Connecting…") : isImg ? "Deploy" : "Use template"}
+                            {busyKey === key ? (isImg ? "Starting…" : "Building…") : "Deploy"}
                           </Button>
                         </div>
                       );
@@ -617,6 +680,34 @@ function looksLikeGitUrl(raw: string): boolean {
   if (!s) return false;
   if (/^(https?:\/\/|git@|ssh:\/\/)/.test(s)) return true;
   return /^(www\.)?github\.com\//.test(s);
+}
+
+// parseGitHubRepo pulls {owner, repo} from a GitHub URL (https, git@, or bare github.com/…).
+// Returns null for non-GitHub URLs (we only auto-read Dockerfiles from GitHub for now).
+function parseGitHubRepo(input: string): { owner: string; repo: string } | null {
+  const s = input.trim().replace(/^git@github\.com:/i, "https://github.com/");
+  const m = /(?:https?:\/\/)?(?:www\.)?github\.com\/([^/\s]+)\/([^/\s#?]+)/i.exec(s);
+  if (!m) return null;
+  return { owner: m[1], repo: m[2].replace(/\.git$/i, "") };
+}
+
+// detectDockerfilePort reads a PUBLIC repo's root Dockerfile (default branch, unauthenticated)
+// and returns its first EXPOSE port. Returns null when there's no Dockerfile/EXPOSE or the
+// lookup fails — purely a UX preview; the agent still detects from the built image at deploy.
+async function detectDockerfilePort(owner: string, repo: string, signal: AbortSignal): Promise<number | null> {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/Dockerfile`, {
+      headers: { Accept: "application/vnd.github.raw" },
+      signal,
+    });
+    if (!res.ok) return null;
+    const m = /^\s*EXPOSE\s+(\d{1,5})/im.exec(await res.text());
+    if (!m) return null;
+    const port = Number(m[1]);
+    return port >= 1 && port <= 65535 ? port : null;
+  } catch {
+    return null; // network/abort/CORS — silently fall back to build-time detection
+  }
 }
 
 // shortRepo strips protocol/host noise from a repo URL for a compact "owner/repo" label.

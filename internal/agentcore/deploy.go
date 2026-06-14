@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"connectrpc.com/connect"
@@ -16,14 +17,27 @@ import (
 // the control plane's deployments.Status* vocabulary). Defined here so the agent binary
 // stays independent of the control-plane module.
 const (
+	statusCloning  = "cloning"
+	statusBuilding = "building"
 	statusPulling  = "pulling"
 	statusStarting = "starting"
 	statusRunning  = "running"
 	statusFailed   = "failed"
 )
 
+// sourceGit is the source_kind for a build-from-Git deployment (vs. a pre-built image).
+const sourceGit = "git"
+
 type deploymentRuntime interface {
 	pull(ctx context.Context, imageRef string, emit func(string)) error
+	// clone fetches the repo at gitRef into dir (shallow, anonymous — public repos only)
+	// and returns the exact commit SHA it checked out.
+	clone(ctx context.Context, cloneURL, gitRef, dir string, emit func(string)) (commitSHA string, err error)
+	// build builds the Dockerfile at the root of dir into the local image tag, with BuildKit.
+	build(ctx context.Context, dir, tag string, emit func(string)) error
+	// detectPort returns the image's exposed port (its Dockerfile/base EXPOSE) so a git
+	// deployment can publish the right port when the caller didn't specify one.
+	detectPort(ctx context.Context, imageTag string) (int32, error)
 	run(ctx context.Context, in runInput) (containerID string, hostPort int32, err error)
 	replacePreviousExcept(ctx context.Context, appLabel, keepID string, emit func(string)) error
 	removeContainer(ctx context.Context, containerID string, emit func(string)) error
@@ -70,20 +84,27 @@ func deployLoop(ctx context.Context, out io.Writer, deploy agentv1connect.Deploy
 }
 
 // executeDeployment runs one claimed deployment end to end, reporting each transition
-// (pulling -> starting -> running, or failed) and the container's recent logs.
+// and the container's recent logs. An image deployment goes pulling -> starting ->
+// running; a git deployment clones and builds first (cloning -> building -> starting ->
+// running). Any step can fail.
 func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect.DeployServiceClient, ident *identity, runtime deploymentRuntime, job *agentv1.PollDeploymentResponse) {
 	depID := job.GetDeploymentId()
+	// commitSHA/builtImageRef are set for git deployments and reported on every transition
+	// after the build so the control plane records what was built.
+	var commitSHA, builtImageRef string
 	report := func(status string, hostPort int32, containerID, message string, logs []string) {
 		st := ident.get()
 		_, err := deploy.ReportDeployment(ctx, connect.NewRequest(&agentv1.ReportDeploymentRequest{
-			AgentId:      st.AgentID,
-			Credential:   st.Credential,
-			DeploymentId: depID,
-			Status:       status,
-			HostPort:     hostPort,
-			ContainerId:  containerID,
-			Message:      message,
-			LogLines:     logs,
+			AgentId:       st.AgentID,
+			Credential:    st.Credential,
+			DeploymentId:  depID,
+			Status:        status,
+			HostPort:      hostPort,
+			ContainerId:   containerID,
+			Message:       message,
+			LogLines:      logs,
+			CommitSha:     commitSHA,
+			BuiltImageRef: builtImageRef,
 		}))
 		if err != nil {
 			fmt.Fprintf(out, "report failed for deployment %s: %v\n", depID, err)
@@ -95,21 +116,43 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 		return
 	}
 
+	// Get the image onto the host: pull a pre-built image, or clone + build a git source.
+	// prepLogs carries the pull/build output forward into the starting report.
 	imageRef := job.GetImageRef()
-	report(statusPulling, 0, "", "pulling image "+imageRef, nil)
-	var pullLines []string
-	if err := runtime.pull(ctx, imageRef, func(l string) { pullLines = appendCapped(pullLines, l, 30) }); err != nil {
-		report(statusFailed, 0, "", "image pull failed: "+err.Error(), pullLines)
-		return
+	containerPort := job.GetContainerPort()
+	var prepLogs []string
+	if job.GetSourceKind() == sourceGit {
+		built, logs, ok := buildFromSource(ctx, out, runtime, job, &commitSHA, report)
+		if !ok {
+			return // buildFromSource already reported the failure
+		}
+		imageRef, builtImageRef, prepLogs = built, built, logs
+
+		// Auto-detect the port from the built image's EXPOSE when the caller didn't set one.
+		if containerPort == 0 {
+			port, err := runtime.detectPort(ctx, built)
+			if err != nil {
+				report(statusFailed, 0, "", "could not determine which port to publish — set a container port, or add an EXPOSE to the Dockerfile: "+err.Error(), prepLogs)
+				return
+			}
+			containerPort = port
+			fmt.Fprintf(out, "auto-detected container port %d for deployment %s\n", port, depID)
+		}
+	} else {
+		report(statusPulling, 0, "", "pulling image "+imageRef, nil)
+		if err := runtime.pull(ctx, imageRef, func(l string) { prepLogs = appendCapped(prepLogs, l, 30) }); err != nil {
+			report(statusFailed, 0, "", "image pull failed: "+err.Error(), prepLogs)
+			return
+		}
 	}
 
-	report(statusStarting, 0, "", "starting container", pullLines)
+	report(statusStarting, 0, "", "starting container", prepLogs)
 	appLabel := job.GetAppLabel()
 	containerID, hostPort, err := runtime.run(ctx, runInput{
 		name:          containerName(depID),
 		imageRef:      imageRef,
 		env:           envSlice(job.GetEnv()),
-		containerPort: job.GetContainerPort(),
+		containerPort: containerPort,
 		appLabel:      appLabel,
 		deploymentID:  depID,
 	})
@@ -133,6 +176,44 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 
 	report(statusRunning, hostPort, containerID, message, runtime.recentLogs(ctx, containerID, maxReportLogLines))
 	fmt.Fprintf(out, "deployment %s running on host port %d\n", depID, hostPort)
+}
+
+// buildFromSource clones the job's repo and builds its Dockerfile into a local image tag,
+// reporting cloning -> building. It returns the built image tag, the commit SHA, and the
+// build logs to carry into the starting report; ok is false when it has already reported a
+// failure (the caller should stop). It sets *commitSHA so later reports include it, and
+// always cleans up the temporary checkout. No credential is used — public repos only.
+func buildFromSource(ctx context.Context, out io.Writer, runtime deploymentRuntime, job *agentv1.PollDeploymentResponse, commitSHA *string, report func(status string, hostPort int32, containerID, message string, logs []string)) (builtImageRef string, prepLogs []string, ok bool) {
+	dir, err := os.MkdirTemp("", "plorigo-build-")
+	if err != nil {
+		report(statusFailed, 0, "", "could not create a build workspace: "+err.Error(), nil)
+		return "", nil, false
+	}
+	// 0700 so the checked-out source isn't world-readable; removed when the build is done.
+	_ = os.Chmod(dir, 0o700)
+	defer func() {
+		if rmErr := os.RemoveAll(dir); rmErr != nil {
+			fmt.Fprintf(out, "warning: could not remove build workspace %s: %v\n", dir, rmErr)
+		}
+	}()
+
+	report(statusCloning, 0, "", "cloning "+job.GetCloneUrl(), nil)
+	var cloneLines []string
+	checkedOut, err := runtime.clone(ctx, job.GetCloneUrl(), job.GetGitRef(), dir, func(l string) { cloneLines = appendCapped(cloneLines, l, 30) })
+	if err != nil {
+		report(statusFailed, 0, "", "clone failed: "+err.Error(), cloneLines)
+		return "", nil, false
+	}
+	*commitSHA = checkedOut
+
+	tag := job.GetBuiltImageTag()
+	report(statusBuilding, 0, "", "building image with BuildKit", cloneLines)
+	var buildLines []string
+	if err := runtime.build(ctx, dir, tag, func(l string) { buildLines = appendCapped(buildLines, l, maxReportLogLines) }); err != nil {
+		report(statusFailed, 0, "", "build failed: "+err.Error(), buildLines)
+		return "", nil, false
+	}
+	return tag, buildLines, true
 }
 
 func cleanupFailedContainer(ctx context.Context, out io.Writer, runtime deploymentRuntime, containerID string) {

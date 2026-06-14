@@ -19,6 +19,24 @@ INSERT INTO deployments (environment_id, project_id, workspace_id, server_id, im
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *;
 
+-- CreateDeploymentFromGit records a queued deployment whose source is a repo+ref to clone
+-- and build on the server (image_ref is filled in by the agent after the build). See
+-- docs/architecture/deployment-engine.md.
+-- name: CreateDeploymentFromGit :one
+INSERT INTO deployments (
+    environment_id, project_id, workspace_id, server_id,
+    container_port, source_kind, source_access, clone_url, git_ref
+)
+VALUES ($1, $2, $3, $4, $5, 'git', $6, $7, $8)
+RETURNING *;
+
+-- GetProjectSourceForDeploy reads a project's connected repository so a git deployment can
+-- resolve its clone URL and access kind, without importing the sources module (a sibling-
+-- table read, which modules.md Rule 2 permits from a module's postgres.go).
+-- name: GetProjectSourceForDeploy :one
+SELECT owner, repo, branch, default_branch, access, html_url
+FROM project_sources WHERE project_id = $1;
+
 -- name: GetDeployment :one
 SELECT * FROM deployments WHERE id = $1;
 
@@ -47,14 +65,17 @@ WHERE id = (
 )
 RETURNING *;
 
--- UpdateDeploymentStatus records a status transition. host_port and container_id are
--- only known later in the flow, so a zero/empty value never clobbers a set one.
+-- UpdateDeploymentStatus records a status transition. host_port, container_id, commit_sha
+-- and built_image_ref are only known later in the flow, so a zero/empty value never
+-- clobbers a set one.
 -- name: UpdateDeploymentStatus :one
 UPDATE deployments
 SET status = sqlc.arg(status),
     message = sqlc.arg(message),
     host_port = CASE WHEN sqlc.arg(host_port)::integer > 0 THEN sqlc.arg(host_port)::integer ELSE host_port END,
     container_id = CASE WHEN sqlc.arg(container_id)::text <> '' THEN sqlc.arg(container_id)::text ELSE container_id END,
+    commit_sha = CASE WHEN sqlc.arg(commit_sha)::text <> '' THEN sqlc.arg(commit_sha)::text ELSE commit_sha END,
+    built_image_ref = CASE WHEN sqlc.arg(built_image_ref)::text <> '' THEN sqlc.arg(built_image_ref)::text ELSE built_image_ref END,
     updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;

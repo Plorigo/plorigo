@@ -26,6 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { deploymentRefLabel } from "@/features/deployments/timeline";
 import { sourceClient } from "@/lib/clients";
 import { useDeploymentsByProject, useEnvironments, useProjectSource } from "@/lib/queries";
 import { statusTone, type Tone } from "@/lib/status";
@@ -183,7 +184,7 @@ export function ProjectOverview({
                     onClick={() => navigate({ to: "/deployments/$deploymentId", params: { deploymentId: d.id } })}
                   >
                     <TableCell>
-                      <p className="truncate font-mono text-sm font-medium text-foreground">{d.imageRef}</p>
+                      <p className="truncate font-mono text-sm font-medium text-foreground">{deploymentRefLabel(d)}</p>
                       <p className="text-xs text-muted-foreground">{d.id.slice(0, 8)}</p>
                     </TableCell>
                     <TableCell className="text-muted-foreground">{envName.get(d.environmentId) ?? "—"}</TableCell>

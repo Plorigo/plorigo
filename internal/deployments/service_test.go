@@ -41,6 +41,10 @@ type fakeStore struct {
 	inserted  NewDeployment
 	insertErr error
 
+	src         Source
+	srcOK       bool
+	insertedGit NewDeploymentFromGit
+
 	getDep Deployment
 	getOK  bool
 
@@ -81,6 +85,28 @@ func (f *fakeStore) InsertDeployment(_ context.Context, _ database.Tx, d NewDepl
 		ImageRef:      d.ImageRef,
 		ContainerPort: d.ContainerPort,
 		Status:        StatusQueued,
+	}, nil
+}
+func (f *fakeStore) SourceForProject(_ context.Context, _ string) (Source, bool, error) {
+	return f.src, f.srcOK, nil
+}
+func (f *fakeStore) InsertDeploymentFromGit(_ context.Context, _ database.Tx, d NewDeploymentFromGit) (Deployment, error) {
+	f.insertedGit = d
+	if f.insertErr != nil {
+		return Deployment{}, f.insertErr
+	}
+	return Deployment{
+		ID:            testDeployID,
+		EnvironmentID: d.EnvironmentID,
+		ProjectID:     d.ProjectID,
+		WorkspaceID:   d.WorkspaceID,
+		ServerID:      d.ServerID,
+		ContainerPort: d.ContainerPort,
+		Status:        StatusQueued,
+		SourceKind:    SourceGit,
+		SourceAccess:  d.SourceAccess,
+		CloneURL:      d.CloneURL,
+		GitRef:        d.GitRef,
 	}, nil
 }
 func (f *fakeStore) GetDeployment(_ context.Context, _ string) (Deployment, bool, error) {
@@ -312,6 +338,136 @@ func TestReportDeployment_InvalidStatus(t *testing.T) {
 	svc := newSvc(&fakeStore{}, fakeAuthz{}, &fakeRecorder{})
 	err := svc.ReportDeployment(context.Background(), ReportInput{AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID, Status: StatusQueued})
 	wantKind(t, err, problem.KindInvalidInput)
+}
+
+func TestCreateFromSource_PublicInsertsGitDeploymentAndAudits(t *testing.T) {
+	store := &fakeStore{
+		envWs: testWorkspace, envProj: testProjectID, envOK: true,
+		serverWs: testWorkspace, serverOK: true,
+		src:   Source{CloneURL: "https://github.com/o/r.git", Branch: "feature", DefaultBranch: "main", Access: "public"},
+		srcOK: true,
+	}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, fakeAuthz{}, rec)
+
+	dep, err := svc.CreateFromSource(authedCtx(), CreateFromSourceInput{EnvironmentID: testEnvID, ServerID: testServerID, ContainerPort: 80})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dep.Status != StatusQueued || dep.SourceKind != SourceGit {
+		t.Errorf("dep = %+v, want queued git deployment", dep)
+	}
+	if store.insertedGit.CloneURL != "https://github.com/o/r.git" || store.insertedGit.SourceAccess != "public" {
+		t.Errorf("inserted = %+v, want public clone url", store.insertedGit)
+	}
+	// No explicit ref: defaults to the source's selected branch.
+	if store.insertedGit.GitRef != "feature" {
+		t.Errorf("git_ref = %q, want the source branch defaulted", store.insertedGit.GitRef)
+	}
+	if store.insertedGit.ProjectID != testProjectID || store.insertedGit.WorkspaceID != testWorkspace {
+		t.Errorf("inserted = %+v, want denormalized project/workspace", store.insertedGit)
+	}
+	if !rec.called || rec.action != "deployment.create" {
+		t.Errorf("audit not recorded: called=%v action=%q", rec.called, rec.action)
+	}
+}
+
+func TestCreateFromSource_DefaultsRefToDefaultBranchWhenNoBranch(t *testing.T) {
+	store := &fakeStore{
+		envWs: testWorkspace, envProj: testProjectID, envOK: true,
+		serverWs: testWorkspace, serverOK: true,
+		src:   Source{CloneURL: "https://github.com/o/r.git", DefaultBranch: "main", Access: "public"},
+		srcOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	if _, err := svc.CreateFromSource(authedCtx(), CreateFromSourceInput{EnvironmentID: testEnvID, ServerID: testServerID, ContainerPort: 80}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.insertedGit.GitRef != "main" {
+		t.Errorf("git_ref = %q, want default branch", store.insertedGit.GitRef)
+	}
+}
+
+func TestCreateFromSource_RejectsPrivateSource(t *testing.T) {
+	store := &fakeStore{
+		envWs: testWorkspace, envProj: testProjectID, envOK: true,
+		serverWs: testWorkspace, serverOK: true,
+		src:   Source{CloneURL: "https://github.com/o/r.git", Branch: "main", Access: "oauth"},
+		srcOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.CreateFromSource(authedCtx(), CreateFromSourceInput{EnvironmentID: testEnvID, ServerID: testServerID, ContainerPort: 80})
+	wantKind(t, err, problem.KindInvalidInput)
+	if store.insertedGit.CloneURL != "" {
+		t.Error("a private source must not insert a deployment (public-first)")
+	}
+}
+
+func TestCreateFromSource_NoSourceNotFound(t *testing.T) {
+	store := &fakeStore{envWs: testWorkspace, envProj: testProjectID, envOK: true, serverWs: testWorkspace, serverOK: true, srcOK: false}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.CreateFromSource(authedCtx(), CreateFromSourceInput{EnvironmentID: testEnvID, ServerID: testServerID, ContainerPort: 80})
+	wantKind(t, err, problem.KindNotFound)
+}
+
+func TestCreateFromSource_DeniedWritesNothing(t *testing.T) {
+	store := &fakeStore{envWs: testWorkspace, envProj: testProjectID, envOK: true, srcOK: true, src: Source{Access: "public"}}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
+	_, err := svc.CreateFromSource(authedCtx(), CreateFromSourceInput{EnvironmentID: testEnvID, ServerID: testServerID, ContainerPort: 80})
+	wantKind(t, err, problem.KindPermissionDenied)
+	if store.insertedGit.CloneURL != "" || rec.called {
+		t.Error("a denied create must not insert or audit")
+	}
+}
+
+func TestPollDeployment_GitClaimCarriesSourceAndBuildTag(t *testing.T) {
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		claimDep: Deployment{
+			ID: testDeployID, EnvironmentID: testEnvID, ContainerPort: 8080,
+			SourceKind: SourceGit, CloneURL: "https://github.com/o/r.git", GitRef: "main",
+		},
+		claimOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	claimed, err := svc.PollDeployment(context.Background(), PollInput{AgentID: testAgentID, Credential: "plag_x"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if claimed.SourceKind != SourceGit || claimed.CloneURL != "https://github.com/o/r.git" || claimed.GitRef != "main" {
+		t.Errorf("claimed = %+v, want git source fields", claimed)
+	}
+	if claimed.BuiltImageTag != "plorigo-build:"+testDeployID {
+		t.Errorf("built tag = %q, want deterministic per-deployment tag", claimed.BuiltImageTag)
+	}
+}
+
+func TestReportDeployment_BuildPhasesAndCommitAccepted(t *testing.T) {
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		getDep: Deployment{ID: testDeployID, ServerID: testServerID, EnvironmentID: testEnvID},
+		getOK:  true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	// 'building' is a valid agent-reported status.
+	if err := svc.ReportDeployment(context.Background(), ReportInput{
+		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID, Status: StatusBuilding, Message: "building image",
+	}); err != nil {
+		t.Fatalf("building report rejected: %v", err)
+	}
+	// 'running' with the built image + commit threads them into the status update.
+	if err := svc.ReportDeployment(context.Background(), ReportInput{
+		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID,
+		Status: StatusRunning, HostPort: 32768, ContainerID: "abc",
+		CommitSha: "deadbeef", BuiltImageRef: "plorigo-build:" + testDeployID,
+	}); err != nil {
+		t.Fatalf("running report rejected: %v", err)
+	}
+	last := store.statusUpdates[len(store.statusUpdates)-1]
+	if last.CommitSha != "deadbeef" || last.BuiltImageRef != "plorigo-build:"+testDeployID {
+		t.Errorf("status update = %+v, want commit + built image carried", last)
+	}
 }
 
 func TestValidateImageRef(t *testing.T) {

@@ -35,6 +35,19 @@ func (h *adminHandler) CreateDeployment(ctx context.Context, req *connect.Reques
 	return connect.NewResponse(&controlplanev1.CreateDeploymentResponse{Deployment: toProto(dep)}), nil
 }
 
+func (h *adminHandler) CreateDeploymentFromSource(ctx context.Context, req *connect.Request[controlplanev1.CreateDeploymentFromSourceRequest]) (*connect.Response[controlplanev1.CreateDeploymentFromSourceResponse], error) {
+	dep, err := h.svc.CreateFromSource(ctx, CreateFromSourceInput{
+		EnvironmentID: req.Msg.GetEnvironmentId(),
+		ServerID:      req.Msg.GetServerId(),
+		ContainerPort: req.Msg.GetContainerPort(),
+		GitRef:        req.Msg.GetGitRef(),
+	})
+	if err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&controlplanev1.CreateDeploymentFromSourceResponse{Deployment: toProto(dep)}), nil
+}
+
 func (h *adminHandler) GetDeployment(ctx context.Context, req *connect.Request[controlplanev1.GetDeploymentRequest]) (*connect.Response[controlplanev1.GetDeploymentResponse], error) {
 	dep, err := h.svc.Get(ctx, req.Msg.GetId())
 	if err != nil {
@@ -103,19 +116,25 @@ func (h *gatewayHandler) PollDeployment(ctx context.Context, req *connect.Reques
 		ContainerPort: claimed.ContainerPort,
 		Env:           claimed.Env,
 		AppLabel:      claimed.AppLabel,
+		SourceKind:    claimed.SourceKind,
+		CloneUrl:      claimed.CloneURL,
+		GitRef:        claimed.GitRef,
+		BuiltImageTag: claimed.BuiltImageTag,
 	}), nil
 }
 
 func (h *gatewayHandler) ReportDeployment(ctx context.Context, req *connect.Request[agentv1.ReportDeploymentRequest]) (*connect.Response[agentv1.ReportDeploymentResponse], error) {
 	if err := h.svc.ReportDeployment(ctx, ReportInput{
-		AgentID:      req.Msg.GetAgentId(),
-		Credential:   req.Msg.GetCredential(),
-		DeploymentID: req.Msg.GetDeploymentId(),
-		Status:       req.Msg.GetStatus(),
-		HostPort:     req.Msg.GetHostPort(),
-		ContainerID:  req.Msg.GetContainerId(),
-		LogLines:     req.Msg.GetLogLines(),
-		Message:      req.Msg.GetMessage(),
+		AgentID:       req.Msg.GetAgentId(),
+		Credential:    req.Msg.GetCredential(),
+		DeploymentID:  req.Msg.GetDeploymentId(),
+		Status:        req.Msg.GetStatus(),
+		HostPort:      req.Msg.GetHostPort(),
+		ContainerID:   req.Msg.GetContainerId(),
+		LogLines:      req.Msg.GetLogLines(),
+		Message:       req.Msg.GetMessage(),
+		CommitSha:     req.Msg.GetCommitSha(),
+		BuiltImageRef: req.Msg.GetBuiltImageRef(),
 	}); err != nil {
 		return nil, problem.ToConnect(err)
 	}
@@ -144,6 +163,12 @@ func toProto(d Deployment) *controlplanev1.Deployment {
 		Message:       d.Message,
 		CreatedAt:     d.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:     d.UpdatedAt.UTC().Format(time.RFC3339),
+		SourceKind:    d.SourceKind,
+		SourceAccess:  d.SourceAccess,
+		CloneUrl:      d.CloneURL,
+		GitRef:        d.GitRef,
+		CommitSha:     d.CommitSha,
+		BuiltImageRef: d.BuiltImageRef,
 	}
 }
 
