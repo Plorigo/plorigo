@@ -509,11 +509,16 @@ func TestReportDeployment_BuildPhasesAndCommitAccepted(t *testing.T) {
 		getOK:  true,
 	}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
-	// 'building' is a valid agent-reported status.
+	// 'building' and 'routing' are valid agent-reported statuses.
 	if err := svc.ReportDeployment(context.Background(), ReportInput{
 		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID, Status: StatusBuilding, Message: "building image",
 	}); err != nil {
 		t.Fatalf("building report rejected: %v", err)
+	}
+	if err := svc.ReportDeployment(context.Background(), ReportInput{
+		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID, Status: StatusRouting, Message: "routing traffic",
+	}); err != nil {
+		t.Fatalf("routing report rejected: %v", err)
 	}
 	// 'running' with the built image + commit threads them into the status update.
 	if err := svc.ReportDeployment(context.Background(), ReportInput{

@@ -6,7 +6,7 @@ package controlplane.v1;
 // The control plane records it as `queued`; the server's agent claims it and reports
 // progress. There are two source kinds: an `image` deployment pulls a PRE-BUILT image;
 // a `git` deployment clones a repo and builds its Dockerfile on the server first. See
-// docs/architecture/deployment-engine.md and agent.md. Caddy routing/SSL are later slices.
+// docs/architecture/deployment-engine.md and agent.md. SSL/custom domains are later slices.
 message Deployment {
   string id = 1;
   string environment_id = 2;
@@ -16,7 +16,7 @@ message Deployment {
   string image_ref = 6;    // the pre-built image (image deployments); empty for git
   int32 container_port = 7; // the port the app listens on inside the container
   int32 host_port = 8;      // the published host port (0 until the agent binds it)
-  string status = 9;        // queued|assigned|cloning|building|pulling|starting|running|failed|superseded
+  string status = 9;        // queued|assigned|cloning|building|pulling|starting|routing|running|failed|superseded
   string message = 10;      // latest human-readable status line
   string created_at = 11;   // RFC 3339
   string updated_at = 12;   // RFC 3339
@@ -29,6 +29,7 @@ message Deployment {
   string git_ref = 16;       // the branch/tag built (git deployments)
   string commit_sha = 17;    // the exact commit the agent built
   string built_image_ref = 18; // the local image tag the agent produced
+  string route_url = 19;      // the real deployment URL (e.g. http://{env-id}.localhost:8083)
 }
 
 // A DeploymentEvent is one entry in a deployment's timeline: either a status

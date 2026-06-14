@@ -367,6 +367,7 @@ func (s *service) ReportDeployment(ctx context.Context, in ReportInput) error {
 			ContainerID:   in.ContainerID,
 			CommitSha:     in.CommitSha,
 			BuiltImageRef: in.BuiltImageRef,
+			RouteURL:      in.RouteURL,
 		}); txErr != nil {
 			return txErr
 		}
@@ -439,7 +440,7 @@ func validateImageRef(raw string) (string, error) {
 
 func isAgentReportableStatus(status string) bool {
 	switch status {
-	case StatusCloning, StatusBuilding, StatusPulling, StatusStarting, StatusRunning, StatusFailed:
+	case StatusCloning, StatusBuilding, StatusPulling, StatusStarting, StatusRouting, StatusRunning, StatusFailed:
 		return true
 	}
 	return false

@@ -66,8 +66,8 @@ WHERE id = (
 RETURNING *;
 
 -- UpdateDeploymentStatus records a status transition. host_port, container_id, commit_sha,
--- built_image_ref, and message are only known at certain points in the flow, so a
--- zero/empty value never clobbers a set one. (The runtime-log tail loop re-reports
+-- built_image_ref, route_url, and message are only known at certain points in the flow,
+-- so a zero/empty value never clobbers a set one. (The runtime-log tail loop re-reports
 -- status='running' with an empty message to attach new log lines; a blank message must
 -- not wipe the deployment's status line.)
 -- name: UpdateDeploymentStatus :one
@@ -78,6 +78,7 @@ SET status = sqlc.arg(status),
     container_id = CASE WHEN sqlc.arg(container_id)::text <> '' THEN sqlc.arg(container_id)::text ELSE container_id END,
     commit_sha = CASE WHEN sqlc.arg(commit_sha)::text <> '' THEN sqlc.arg(commit_sha)::text ELSE commit_sha END,
     built_image_ref = CASE WHEN sqlc.arg(built_image_ref)::text <> '' THEN sqlc.arg(built_image_ref)::text ELSE built_image_ref END,
+    route_url = CASE WHEN sqlc.arg(route_url)::text <> '' THEN sqlc.arg(route_url)::text ELSE route_url END,
     updated_at = now()
 WHERE id = sqlc.arg(id)
 RETURNING *;

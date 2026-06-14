@@ -3,6 +3,8 @@ package agents
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strconv"
 	"time"
 
 	"connectrpc.com/connect"
@@ -152,7 +154,24 @@ const agentInstallScript = "https://raw.githubusercontent.com/Plorigo/plorigo/ma
 // their working copy instead of installing the published agent.
 func installCommand(publicURL, token string, dev bool) string {
 	if dev {
-		return fmt.Sprintf("go run ./cmd/agent --control-plane %s --token %s", publicURL, token)
+		caddyHTTP, caddyAdmin := devCaddyPorts(publicURL)
+		return fmt.Sprintf("go run ./cmd/agent --control-plane %s --token %s --caddy-config .context/plorigo-agent.Caddyfile --caddy-http-port %d --caddy-admin 127.0.0.1:%d", publicURL, token, caddyHTTP, caddyAdmin)
 	}
 	return fmt.Sprintf("curl -fsSL %s | sh -s -- --control-plane %s --token %s", agentInstallScript, publicURL, token)
+}
+
+func devCaddyPorts(publicURL string) (httpPort, adminPort int) {
+	const (
+		defaultHTTP  = 8083
+		defaultAdmin = 8084
+	)
+	u, err := url.Parse(publicURL)
+	if err != nil {
+		return defaultHTTP, defaultAdmin
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port <= 0 || port > 65531 {
+		return defaultHTTP, defaultAdmin
+	}
+	return port + 3, port + 4
 }

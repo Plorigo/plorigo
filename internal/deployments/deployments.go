@@ -6,9 +6,9 @@
 // facing, session/token-authenticated and policy-authorized) and agent.v1.DeployService
 // (the agent gateway: the agent claims work and reports progress, authenticated by its
 // durable agent credential — the same credential as Heartbeat — NOT a user session).
-// See docs/architecture/deployment-engine.md and agent.md. This first slice deploys a
-// PRE-BUILT image reachable on a published host port; build-from-Git, Caddy routing,
-// SSL, and cryptographic job signing are later slices.
+// See docs/architecture/deployment-engine.md and agent.md. This slice deploys a
+// PRE-BUILT image or public Git Dockerfile build, then asks the agent to make it
+// reachable through Caddy. SSL and cryptographic job signing are later slices.
 package deployments
 
 import (
@@ -25,6 +25,7 @@ const (
 	StatusBuilding   = "building"   // the agent is building the image (git)
 	StatusPulling    = "pulling"    // the agent is pulling the image (image)
 	StatusStarting   = "starting"   // the agent is creating/starting the container
+	StatusRouting    = "routing"    // the agent is validating/reloading Caddy routing
 	StatusRunning    = "running"    // the container is up and passed its health check
 	StatusFailed     = "failed"     // the attempt failed (see message / logs)
 	StatusSuperseded = "superseded" // replaced by a newer running deployment
@@ -77,6 +78,10 @@ type Deployment struct {
 	GitRef        string
 	CommitSha     string
 	BuiltImageRef string
+
+	// RouteURL is the real deployment URL (e.g. http://{env-id}.localhost:8083) computed
+	// by the agent and stored so the dashboard can display a clickable link.
+	RouteURL string
 }
 
 // Event is one entry in a deployment's timeline: a status transition (KindStatus) or
@@ -152,6 +157,7 @@ type ReportInput struct {
 	Message       string
 	CommitSha     string // the exact commit built (git deployments)
 	BuiltImageRef string // the local image tag the agent built (git deployments)
+	RouteURL      string // the real deployment URL computed by the agent
 }
 
 // Service is the surface other code depends on. It backs both the dashboard-facing

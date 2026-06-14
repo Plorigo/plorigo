@@ -49,7 +49,7 @@ message ReportDeploymentRequest {
   string agent_id = 1;
   string credential = 2;
   string deployment_id = 3;
-  string status = 4;             // cloning|building|pulling|starting|running|failed
+  string status = 4;             // cloning|building|pulling|starting|routing|running|failed
   int32 host_port = 5;           // set once the container is bound (0 otherwise)
   string container_id = 6;       // set once the container is created
   repeated string log_lines = 7; // new clone/build/runtime log lines since the last report
@@ -60,6 +60,9 @@ message ReportDeploymentRequest {
   // start output) or "runtime" (the container's stdout/stderr). Empty when the report
   // carries no logs. The control plane stamps each stored log line with it.
   string log_stream = 11;
+  // The real deployment URL (e.g. http://{env-id}.localhost:8083), set once the agent
+  // has computed the route. The control plane stores it so the dashboard can display it.
+  string route_url = 12;
 }
 
 message ReportDeploymentResponse {}

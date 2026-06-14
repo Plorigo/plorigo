@@ -23,9 +23,9 @@ Install these once. Versions are pinned by the repo where it matters, so you don
   The Node version is in [`.nvmrc`](../.nvmrc); pnpm is pinned in `apps/web/package.json` and
   provisioned automatically by Corepack during setup.
 - **[Docker](https://docs.docker.com/get-docker/)** — runs the local Postgres, the integration
-  tests, and (once it lands) real deployments.
-- **[Caddy](https://caddyserver.com/)** — reverse proxy / SSL for the deployment path (not needed
-  for the basic build/test loop).
+  tests, and real deployments.
+- **[Caddy](https://caddyserver.com/)** — reverse proxy for deployed apps (not needed for the
+  basic build/test loop; needed for the deployment e2e).
 
 ## First-time setup
 
@@ -151,7 +151,9 @@ command** carrying a single-use registration token:
   it puts the agent binary in place and runs it as a systemd service.
 - In dev mode (`make dev`) the command instead runs the agent straight from your checkout —
   `go run ./cmd/agent --control-plane http://localhost:8080 --token <token>` — so you exercise
-  your working copy, not a published binary.
+  your working copy, not a published binary. It also points the agent at a Plorigo-managed
+  Caddyfile under `.context/` and uses non-privileged local Caddy ports derived from the
+  control-plane port.
 
 On first start the agent generates an ed25519 keypair, exchanges the one-time token for a durable
 credential via `agent.v1.AgentService/Register`, and writes both to its data dir (`--data-dir`,
@@ -163,9 +165,16 @@ one from the server card if you ever need it again. See
 [docs/architecture/agent.md](./architecture/agent.md) for the trust model.
 
 > [!NOTE]
-> Today the installer assumes a Linux host that already has Docker, run as root with systemd
-> (otherwise it runs the agent in the foreground). Preparing a *bare* server — installing
-> Docker/Caddy, OS checks, idempotent re-runs — is a later step; see [ROADMAP.md](../ROADMAP.md).
+> Today the installer assumes a Linux host that already has Docker and Caddy, run as root with
+> systemd (otherwise it runs the agent in the foreground). Preparing a *bare* server —
+> installing Docker/Caddy, OS checks, idempotent re-runs — is a later step; see
+> [ROADMAP.md](../ROADMAP.md).
+
+> [!TIP]
+> If a local deployment fails with `Caddy CLI was not found in PATH`, install Caddy first
+> (`brew install caddy` on macOS), then mint and run a fresh dev install command from the
+> dashboard. The agent validates the generated route config and can start Caddy automatically
+> if no local Caddy instance is already running.
 
 ### Verifying the install flow end-to-end
 
