@@ -40,7 +40,16 @@ const (
 // Deployment event kinds.
 const (
 	KindStatus = "status" // a status transition
-	KindLog    = "log"    // a runtime log line
+	KindLog    = "log"    // a log line (see the stream constants below)
+)
+
+// Log streams a KindLog event can belong to. StreamBuild is the agent's own
+// clone/build/pull/start output; StreamRuntime is the container's stdout/stderr. The
+// empty string is used for status events and for legacy log rows recorded before
+// streams were distinguished.
+const (
+	StreamBuild   = "build"
+	StreamRuntime = "runtime"
 )
 
 // Deployment is one attempt to run an image in an environment on a server. The
@@ -71,7 +80,9 @@ type Deployment struct {
 }
 
 // Event is one entry in a deployment's timeline: a status transition (KindStatus) or
-// a runtime log line (KindLog). Seq is monotonic per deployment for incremental fetch.
+// a log line (KindLog). Seq is monotonic per deployment for incremental fetch. For a
+// KindLog event, Stream is StreamBuild or StreamRuntime; it is empty for status events
+// and for legacy rows recorded before streams were distinguished.
 type Event struct {
 	ID           string
 	DeploymentID string
@@ -79,6 +90,7 @@ type Event struct {
 	Kind         string
 	Status       string
 	Message      string
+	Stream       string
 	CreatedAt    time.Time
 }
 

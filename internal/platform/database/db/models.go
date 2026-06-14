@@ -86,6 +86,7 @@ type DeploymentEvent struct {
 	Status       string
 	Message      string
 	CreatedAt    time.Time
+	Stream       string
 }
 
 type EnvVar struct {

@@ -217,6 +217,7 @@ func (s *postgresStore) AppendEvent(ctx context.Context, tx database.Tx, e NewEv
 		Kind:         e.Kind,
 		Status:       e.Status,
 		Message:      e.Message,
+		Stream:       e.Stream,
 	})
 	return err
 }
@@ -261,6 +262,7 @@ func eventFromRow(r db.DeploymentEvent) Event {
 		Kind:         r.Kind,
 		Status:       r.Status,
 		Message:      r.Message,
+		Stream:       r.Stream,
 		CreatedAt:    r.CreatedAt,
 	}
 }

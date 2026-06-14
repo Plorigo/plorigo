@@ -56,6 +56,10 @@ message ReportDeploymentRequest {
   string message = 8;            // human-readable status line
   string commit_sha = 9;         // the exact commit built (git deployments)
   string built_image_ref = 10;   // the local image tag the agent built (git deployments)
+  // Which stream this report's log_lines belong to: "build" (the agent's clone/build/pull/
+  // start output) or "runtime" (the container's stdout/stderr). Empty when the report
+  // carries no logs. The control plane stamps each stored log line with it.
+  string log_stream = 11;
 }
 
 message ReportDeploymentResponse {}
