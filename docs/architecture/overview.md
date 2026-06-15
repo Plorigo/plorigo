@@ -38,8 +38,11 @@ scratch, and put the polish into the dashboard and the safety workflows.
   updates over SSE (deploy/log streams) and WebSockets (terminal) — see
   [jobs-and-realtime.md](./jobs-and-realtime.md).
 - **Agent → control plane:** the agent opens an **outbound** secure connection and pulls
-  **signed, scoped** jobs. The control plane does not need inbound SSH to the server. See
+  **signed, scoped** jobs; the deployment path needs no inbound SSH. See
   [agent.md](./agent.md) for the trust model.
+- **Control plane → server (setup/repair only):** dashboard-managed setup uses a separate,
+  controlled **inbound SSH** channel to bootstrap and repair a server — never to deploy. See
+  [server-management.md](./server-management.md).
 
 ## Repository layout
 

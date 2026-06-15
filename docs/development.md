@@ -167,8 +167,9 @@ one from the server card if you ever need it again. See
 > [!NOTE]
 > Today the installer assumes a Linux host that already has Docker and Caddy, run as root with
 > systemd (otherwise it runs the agent in the foreground). Preparing a *bare* server —
-> installing Docker/Caddy, OS checks, idempotent re-runs — is a later step; see
-> [ROADMAP.md](../ROADMAP.md).
+> installing Docker/Caddy, OS checks, idempotent re-runs — and the dashboard-managed setup path
+> are a later step; see [server-management.md](./architecture/server-management.md) for the model
+> and [ROADMAP.md](../ROADMAP.md) for sequencing.
 
 > [!TIP]
 > If a local deployment fails with `Caddy CLI was not found in PATH`, install Caddy first

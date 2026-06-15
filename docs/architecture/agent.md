@@ -34,14 +34,18 @@ hard to misuse. The intended model:
 - Registration uses a **one-time token**, exchanged for durable, **rotatable** credentials.
 - The control plane sends **signed** jobs; the agent **validates the signature and the job's
   scope before executing**.
-- The connection is **outbound from the agent** — the control plane never needs to hold a
-  long-lived root SSH key to the server, and never needs inbound SSH after setup.
+- The connection is **outbound from the agent** — the control plane never holds a long-lived
+  root SSH key, and the **deployment path never needs inbound SSH**. (A separate, controlled SSH
+  channel is used only for dashboard-managed setup and repair — never for deploys; see
+  [server-management.md](./server-management.md).)
 - Every job the agent runs is **audited** (see [security.md](./security.md)).
 
 > [!NOTE]
-> Avoid designs that reintroduce long-lived root SSH keys stored in the control plane, or that
-> let the agent run unsigned/unscoped work. Those are exactly the trust problems this model
-> exists to remove.
+> Avoid designs that reintroduce long-lived **root** SSH keys stored in the control plane, that
+> route **deployments** over SSH, or that let the agent run unsigned/unscoped work — those are
+> exactly the trust problems this model exists to remove. Dashboard-managed setup does keep a
+> **non-root, scoped, rotatable** SSH credential for **bootstrap and repair only**; its bounds
+> are defined in [server-management.md](./server-management.md).
 
 ## Registration & liveness
 
