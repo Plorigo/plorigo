@@ -14,6 +14,7 @@ The design contract for the platform (intended architecture — see each doc's s
 - [Overview](./architecture/overview.md) — the four components and how they fit together.
 - [Control plane](./architecture/control-plane.md) — the modular monolith and its modules.
 - [Server agent](./architecture/agent.md) — the privileged agent and its trust model.
+- [Server management](./architecture/server-management.md) — connecting & repairing servers; the SSH bootstrap/management model.
 - [Deployment engine](./architecture/deployment-engine.md) — deploy, build, runtime, rollback, proxy.
 - [Data & API](./architecture/data-and-api.md) — PostgreSQL data model and ConnectRPC contracts.
 - [Jobs & realtime](./architecture/jobs-and-realtime.md) — the job queue and SSE/WebSockets.

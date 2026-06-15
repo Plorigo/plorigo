@@ -98,6 +98,25 @@ discriminator on the service's folded source (`oauth` | `public` | `app`; see
 > minted per job), which is the direction before private builds land — see
 > [ROADMAP.md](../../ROADMAP.md).
 
+### Server access & remote management (SSH)
+
+Deployment never uses SSH — the agent dials **out** and pulls signed jobs (see
+[agent.md](./agent.md)). But **dashboard-managed server setup** opens a controlled **inbound**
+SSH channel to bootstrap and repair a server: a deliberate, bounded exception to the
+no-inbound-SSH default that follows the same discipline as everything else here.
+
+- The **raw bootstrap credential** the user enters is held in memory for the active setup attempt
+  only — never stored, never logged, discarded on success **and** failure.
+- What persists is a generated **non-root `plorigo` user** with a **dedicated SSH key**, **sealed
+  at rest** with the same box / `APP_MASTER_KEY` as secrets, **scoped by an allowlisted sudoers
+  drop-in**, **host-key pinned**, and **rotatable / revocable** by the user.
+- Every connect, setup step, install, rotation, revocation, and failed auth is **audited**; keys,
+  passwords, and tokens are **redacted** everywhere.
+
+The full model — why this isn't the long-lived-root-SSH design the agent trust model bans, plus
+the credential lifecycle, least-privilege defaults, and security-review items — is in
+[server-management.md](./server-management.md).
+
 ### Audit, approvals, recovery
 
 - An **append-only audit log** records deploys, secret changes, terminal sessions,
