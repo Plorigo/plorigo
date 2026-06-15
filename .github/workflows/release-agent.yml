@@ -38,6 +38,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # internal/agentcore imports the generated ConnectRPC agent client (proto/gen), which is
+      # git-ignored and regenerated fresh from the .proto sources — so it must be generated before
+      # the build. The agent never touches the database, so the committed sqlc output already in
+      # the checkout is enough; only the protobuf code needs generating here (== `make proto`).
+      - name: Generate protobuf client (proto/gen)
+        run: cd proto && go tool buf generate
+
       # Resolve the tag from either trigger via env (never interpolate ${{ }} into the shell).
       - name: Resolve release tag
         id: rel
