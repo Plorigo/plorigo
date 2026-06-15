@@ -157,7 +157,9 @@ func installCommand(publicURL, token string, dev bool) string {
 		caddyHTTP, caddyAdmin := devCaddyPorts(publicURL)
 		return fmt.Sprintf("go run ./cmd/agent --control-plane %s --token %s --caddy-config .context/plorigo-agent.Caddyfile --caddy-http-port %d --caddy-admin 127.0.0.1:%d", publicURL, token, caddyHTTP, caddyAdmin)
 	}
-	return fmt.Sprintf("curl -fsSL %s | sh -s -- --control-plane %s --token %s", agentInstallScript, publicURL, token)
+	// `sudo sh`: the installer prepares the host (installs Docker/Caddy, writes the systemd
+	// unit) and so requires root; on a fresh VPS root login sudo is a harmless no-op.
+	return fmt.Sprintf("curl -fsSL %s | sudo sh -s -- --control-plane %s --token %s", agentInstallScript, publicURL, token)
 }
 
 func devCaddyPorts(publicURL string) (httpPort, adminPort int) {

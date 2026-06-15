@@ -7,9 +7,12 @@
 //
 // It is not part of `make test` or CI — run it with `make e2e-agent`, which builds a
 // linux agent binary and supplies Docker + a migrated Postgres. The harness provides the
-// binary (so the container needs no Go); making `curl | sh` self-sufficient on a bare VPS
-// (Docker/Caddy prep, idempotency, fresh-Ubuntu preparation) is a later step — see
-// ROADMAP.md and docs/architecture/agent.md.
+// binary (so the container needs no Go) and runs the installer with --skip-prep: the
+// container has no systemd or Docker daemon, so this exercises the register/resume identity
+// path (and the installer's connectivity check) without preparing the host. The full
+// bare-Ubuntu preparation (Docker/Caddy install, ports, systemd) is covered by the hermetic
+// shim test (internal/app/install_agent_shim_test.go) and the manual real-VPS run documented
+// in docs/development.md. See ROADMAP.md and docs/architecture/server-management.md.
 package app
 
 import (
@@ -121,7 +124,7 @@ func TestE2EAgentInstall(t *testing.T) {
 	t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", c1).Run() })
 	install := fmt.Sprintf(
 		"apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null && "+
-			"exec sh /mnt/scripts/install-agent.sh --control-plane %s --token %s --binary-url file:///mnt/plorigo-agent --data-dir /data",
+			"exec sh /mnt/scripts/install-agent.sh --control-plane %s --token %s --binary-url file:///mnt/plorigo-agent --data-dir /data --skip-prep",
 		cpURL, tok.Raw,
 	)
 	mustDocker(t, "run", "-d", "--name", c1,

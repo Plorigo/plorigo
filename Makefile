@@ -112,8 +112,11 @@ migrate: ## Apply database migrations (uses $$DATABASE_URL)
 
 # Agent install end-to-end: builds a linux agent binary, then runs the real installer +
 # agent in a clean ubuntu container against an in-process control plane, proving register
-# AND resume. Needs Docker and a running, migrated Postgres. Local-only (not in CI); the
-# fuller fresh-Ubuntu preparation lands later (see ROADMAP.md). See docs/development.md.
+# AND resume. The container has no systemd/Docker, so it runs with --skip-prep; the bare-
+# Ubuntu preparation (Docker/Caddy install, ports, systemd) is covered by the hermetic shim
+# test (in `make test`, see internal/app/install_agent_shim_test.go) and the manual real-VPS
+# run in docs/development.md. Needs Docker and a running, migrated Postgres. Local-only (not
+# in CI). See docs/development.md.
 e2e-agent: check-generated migrate ## Run the agent install e2e on a real container (Docker + Postgres; not in CI)
 	GOOS=linux GOARCH=$$(go env GOARCH) CGO_ENABLED=0 go build -o $(E2E_AGENT_BIN) ./cmd/agent
 	APP_MASTER_KEY="$(APP_MASTER_KEY)" DATABASE_URL="$(DATABASE_URL)" \

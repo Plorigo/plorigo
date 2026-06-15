@@ -1,0 +1,90 @@
+name: Release agent
+
+# Publishes prebuilt server-agent binaries as assets on a GitHub Release, so the one-line
+# installer (scripts/install-agent.sh) can download the agent on a fresh server without a Go
+# toolchain. Triggered by publishing a Release (the manual step you take to cut a version);
+# workflow_dispatch lets you (re)build assets for an existing tag.
+#
+# Supply chain: actions are pinned by commit SHA, the job runs with least privilege, each
+# binary gets a SLSA build-provenance attestation (verify with `gh attestation verify`), and
+# a sha256 checksums.txt is published so the installer can verify what it downloads.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build and upload agent binaries for (e.g. v0.1.0)"
+        required: true
+        type: string
+
+# Default to read-only; the job below elevates only what it needs.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload release assets
+      id-token: write # keyless signing for build provenance
+      attestations: write # record the provenance attestation
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Resolve the tag from either trigger via env (never interpolate ${{ }} into the shell).
+      - name: Resolve release tag
+        id: rel
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${EVENT_TAG:-$INPUT_TAG}"
+          if [ -z "$tag" ]; then echo "::error::could not determine the release tag"; exit 1; fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # Static linux binaries for the two common VPS architectures. The version is embedded so
+      # the agent reports it on register/heartbeat (internal/agentcore.Version).
+      - name: Build agent binaries (linux amd64 + arm64)
+        env:
+          VERSION: ${{ steps.rel.outputs.tag }}
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
+              go build -trimpath \
+                -ldflags "-s -w -X github.com/plorigo/plorigo/internal/agentcore.Version=${VERSION}" \
+                -o "dist/plorigo-agent-linux-${arch}" ./cmd/agent
+          done
+          ( cd dist && sha256sum plorigo-agent-linux-* > checksums.txt )
+          ls -l dist
+
+      # SLSA build provenance for each binary: cryptographic proof they were built by this
+      # workflow from this commit. Anyone can later run
+      #   gh attestation verify plorigo-agent-linux-amd64 --repo <owner>/<repo>
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            dist/plorigo-agent-linux-amd64
+            dist/plorigo-agent-linux-arm64
+
+      # gh is preinstalled on the runner and authenticates with the job's GITHUB_TOKEN.
+      # --clobber makes re-runs (workflow_dispatch) overwrite existing assets idempotently.
+      - name: Upload binaries to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.rel.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release upload "$TAG" \
+            dist/plorigo-agent-linux-amd64 \
+            dist/plorigo-agent-linux-arm64 \
+            dist/checksums.txt \
+            --clobber --repo "$REPO"
