@@ -146,9 +146,11 @@ Plorigo deploys to servers you connect by running a small **agent** on them. The
 **Servers → Connect server** flow creates a server record and shows a **one-line install
 command** carrying a single-use registration token:
 
-- In a normal deployment the command is `curl -fsSL <installer> | sh -s -- --control-plane <url>
-  --token <token>`, where the installer is [`scripts/install-agent.sh`](../scripts/install-agent.sh):
-  it puts the agent binary in place and runs it as a systemd service.
+- In a normal deployment the command is `curl -fsSL <installer> | sudo sh -s -- --control-plane
+  <url> --token <token>`, where the installer is [`scripts/install-agent.sh`](../scripts/install-agent.sh):
+  on a fresh Ubuntu 22.04/24.04 LTS box it installs and verifies the prerequisites the agent needs
+  (Docker Engine with BuildKit, the Caddy binary), creates the data directory, downloads the agent
+  binary from GitHub Releases and **checksum-verifies** it, and runs it as a systemd service.
 - In dev mode (`make dev`) the command instead runs the agent straight from your checkout —
   `go run ./cmd/agent --control-plane http://localhost:8080 --token <token>` — so you exercise
   your working copy, not a published binary. It also points the agent at a Plorigo-managed
@@ -164,12 +166,30 @@ hour. Re-running the install command mints a fresh token and rotates the credent
 one from the server card if you ever need it again. See
 [docs/architecture/agent.md](./architecture/agent.md) for the trust model.
 
+The installer prepares a fresh **Ubuntu 22.04 / 24.04 LTS** server end-to-end: it rejects other
+OSes with a clear reason, installs Docker Engine (from Docker's official apt repo) and the Caddy
+binary (the agent runs Caddy itself, so the packaged `caddy.service` is disabled), and verifies
+Docker daemon access, that ports 80/443 are free, and outbound control-plane connectivity before
+reporting success. It is **idempotent** — re-run it to reconnect, repair, or rotate the token (a
+re-run rewrites the unit so the fresh token takes effect). It must run as **root** (hence `sudo`),
+never prints the token, and emits a plain-English error with a recovery hint for the known failure
+modes (held apt lock, missing root, unsupported OS, Docker install failure, occupied ports,
+unreachable control plane, agent startup failure).
+
+The agent binary itself is downloaded over HTTPS from the project's GitHub Releases (the latest
+release, or `PLORIGO_AGENT_VERSION=<tag>`) and its **sha256 is verified against the release's
+`checksums.txt` before it is run as root** — a mismatch or missing checksum aborts the install
+(`PLORIGO_INSTALL_SKIP_VERIFY=1` bypasses it, only for local/offline testing). Release binaries
+also carry SLSA build-provenance attestations, so anyone can independently confirm where a binary
+came from: `gh attestation verify plorigo-agent-linux-amd64 --repo Plorigo/plorigo`.
+
 > [!NOTE]
-> Today the installer assumes a Linux host that already has Docker and Caddy, run as root with
-> systemd (otherwise it runs the agent in the foreground). Preparing a *bare* server —
-> installing Docker/Caddy, OS checks, idempotent re-runs — and the dashboard-managed setup path
-> are a later step; see [server-management.md](./architecture/server-management.md) for the model
-> and [ROADMAP.md](../ROADMAP.md) for sequencing.
+> Pass `--skip-prep` to install only the agent + service and skip host preparation — for technical
+> users whose box already has Docker and Caddy, or environments without systemd (it then runs the
+> agent in the foreground). The **dashboard-managed** SSH setup path — which drives this same
+> installer over SSH and creates a non-root management user — is a later step; see
+> [server-management.md](./architecture/server-management.md) for the model and
+> [ROADMAP.md](../ROADMAP.md) for sequencing.
 
 > [!TIP]
 > If a local deployment fails with `Caddy CLI was not found in PATH`, install Caddy first
@@ -179,12 +199,43 @@ one from the server card if you ever need it again. See
 
 ### Verifying the install flow end-to-end
 
-`make e2e-agent` exercises the whole loop against a **real server-like environment**. With Docker
-running and a migrated Postgres up (see [Database setup](#database-setup)), it builds a Linux agent
-binary, boots an in-process control plane, then runs the real installer and agent in a clean
-`ubuntu:24.04` container — asserting the server comes **online**, and that after a restart the agent
-**resumes** the same identity instead of re-registering. It needs Docker and is **not** part of
-`make test` or CI, so run it locally before changing the agent or installer.
+The installer is covered at three levels:
+
+- **Installer logic (in CI).** `internal/app/install_agent_shim_test.go` runs the real
+  `scripts/install-agent.sh` with fake `apt-get`/`docker`/`caddy`/`systemctl`/`curl`/`ss` on `PATH`
+  and a fake `/etc/os-release`, so every branch — OS gating, idempotent re-runs, the named failure
+  modes, port handling, connectivity, and token redaction — is exercised on both Ubuntu 22.04 and
+  24.04 without Docker or root. It runs as part of `make test`.
+- **Register + resume on a real container.** `make e2e-agent` builds a Linux agent binary, boots an
+  in-process control plane, and runs the real installer + agent in a clean `ubuntu:24.04` container
+  (with `--skip-prep`, since the container has no systemd/Docker) — asserting the server comes
+  **online** and that after a restart the agent **resumes** the same identity instead of
+  re-registering. It needs Docker and a migrated Postgres and is **not** part of `make test` or CI;
+  run it locally before changing the agent or installer.
+- **Bare-server preparation (manual).** To verify the full host preparation, run the actual one-line
+  command on a fresh **Ubuntu 22.04** and **24.04** server (a real VPS, or `multipass launch 22.04`/
+  `24.04`, or a privileged systemd container) against a reachable control plane. Confirm Docker and
+  the `caddy` binary are installed, the packaged `caddy.service` is disabled, `systemctl is-active
+  plorigo-agent` is `active`, the server flips **online** in the dashboard, and a **re-run is
+  idempotent** (rotates the token, stays online). Record the exact images/commands in the PR.
+
+### Releasing the agent
+
+Prebuilt agent binaries are published as **GitHub Release assets** so the one-line installer can
+fetch them on a server with no Go toolchain. Cutting a release is a manual, deliberate step:
+
+1. Create (and publish) a GitHub Release with a version tag, e.g. `v0.1.0`.
+2. Publishing it triggers [`.github/workflows/release-agent.yml`](../.github/workflows/release-agent.yml),
+   which builds `plorigo-agent-linux-amd64` and `plorigo-agent-linux-arm64` (version embedded via
+   `-ldflags`), writes `checksums.txt`, attaches all three to the release, and records a SLSA
+   build-provenance attestation for each binary.
+3. To (re)build assets for an existing tag without re-publishing, run the workflow via
+   **Actions → Release agent → Run workflow** and pass the tag (`--clobber` overwrites cleanly).
+
+The workflow runs with least privilege (read-only by default; the job adds only
+`contents:write` + `id-token:write` + `attestations:write`), pins every action by commit SHA, and
+checks out with `persist-credentials: false`. The installer verifies the checksum of what it
+downloads; consumers can additionally verify provenance with `gh attestation verify`.
 
 ## Integration tests
 

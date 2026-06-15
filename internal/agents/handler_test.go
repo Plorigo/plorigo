@@ -16,6 +16,9 @@ func TestInstallCommand(t *testing.T) {
 	if !strings.Contains(prod, "--control-plane https://cp.example.com") || !strings.Contains(prod, "--token plrt_tok") {
 		t.Errorf("prod command = %q, want control plane + token flags", prod)
 	}
+	if !strings.Contains(prod, "| sudo sh -s --") {
+		t.Errorf("prod command = %q, want it piped to `sudo sh` (the installer requires root)", prod)
+	}
 
 	dev := installCommand("http://localhost:8080", "plrt_tok", true)
 	if !strings.HasPrefix(dev, "go run ./cmd/agent") {

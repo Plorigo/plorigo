@@ -59,9 +59,10 @@ The SSH channel is used for exactly two things:
 1. **Bootstrap** a fresh server: connect with user-supplied credentials, verify the OS, install
    prerequisites / Docker / Caddy, create the `plorigo` management user, install the agent and
    its systemd unit, and start it. This reuses the same installer the one-line path runs
-   (`scripts/install-agent.sh`); the dashboard path just drives it over SSH. (Making the
-   installer prepare a bare box, and the managed-setup flow itself, are later steps — see
-   [ROADMAP.md](../../ROADMAP.md).)
+   (`scripts/install-agent.sh`), which already prepares a bare Ubuntu LTS box (Docker, Caddy,
+   directories, the systemd unit, and verification); the dashboard path drives it over SSH and
+   adds the non-root `plorigo` management user. (The managed-setup flow itself is a later step —
+   see [ROADMAP.md](../../ROADMAP.md).)
 2. **Manage / repair** an existing server: re-run prerequisites, restart or recover a stuck
    agent, or rotate the management key.
 
@@ -242,11 +243,14 @@ status to the dashboard, plus management RPCs to **rotate**, **revoke**, and **i
 
 ### Security review — residual risk
 
-The implementation work that follows this model — preparing a bare server, storing the
-management credential, and running setup over SSH (see [ROADMAP.md](../../ROADMAP.md)) — carries
-the risk that remains. Each of the following must get **explicit security review** before it
-ships:
+Bare-server preparation has shipped in the one-line installer (`scripts/install-agent.sh`); the
+implementation work that still follows this model — storing the management credential and running
+setup over SSH (see [ROADMAP.md](../../ROADMAP.md)) — carries the risk that remains. Each of the
+following must get **explicit security review** before it ships:
 
+- **The installer's package sources** — Docker and Caddy are installed from their official apt
+  repositories with pinned, `signed-by=` keyrings under `/etc/apt/keyrings`; the repo and key URLs
+  are documented in the installer header and must stay canonical and current.
 - **The sudoers allowlist** — must be minimal and free of wildcards / shell-spawning commands,
   since a loose allowlist is root-equivalent.
 - **The host-key-mismatch default** — must *refuse and require confirmation*, never silently
