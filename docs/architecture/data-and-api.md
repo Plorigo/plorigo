@@ -40,6 +40,7 @@ invitations          log_streams          readiness_checks
 approval_requests    ai_agent_sessions
 sessions             api_tokens           user_tokens
 agent_registration_tokens                 ssh_management_keys
+server_setup_runs    server_setup_events
 ```
 
 Token tables (`sessions`, `api_tokens`, `user_tokens`, `agent_registration_tokens`) and the

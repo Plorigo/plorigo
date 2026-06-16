@@ -60,3 +60,52 @@ WHERE server_id = $1;
 SELECT sealed_private_key
 FROM ssh_management_keys
 WHERE server_id = $1 AND revoked_at IS NULL;
+
+-- name: GetServerHostKeyFingerprint :one
+-- The pinned TOFU host-key fingerprint for a server ('' if not yet pinned).
+SELECT host_key_fingerprint FROM servers WHERE id = $1;
+
+-- name: SetServerHostKeyFingerprint :exec
+-- Pin (or re-pin, after explicit user re-confirmation) a server's host-key fingerprint.
+UPDATE servers SET host_key_fingerprint = $2 WHERE id = $1;
+
+-- name: InsertServerSetupRun :one
+-- Start a setup run for a server. The raw bootstrap credential is never stored — only the
+-- run's lifecycle is persisted here.
+INSERT INTO server_setup_runs (server_id, workspace_id, status, started_by)
+VALUES ($1, $2, 'queued', $3)
+RETURNING id, server_id, workspace_id, status, failure_reason, started_by, created_at, updated_at, finished_at;
+
+-- name: GetServerSetupRun :one
+SELECT id, server_id, workspace_id, status, failure_reason, started_by, created_at, updated_at, finished_at
+FROM server_setup_runs
+WHERE id = $1;
+
+-- name: SetServerSetupRunStatus :one
+-- Advance a run's status; stamps finished_at on a terminal status. failure_reason is
+-- plain-English and never a secret.
+UPDATE server_setup_runs
+SET status = $2,
+    failure_reason = $3,
+    updated_at = now(),
+    finished_at = CASE WHEN $2 IN ('succeeded', 'failed') THEN now() ELSE finished_at END
+WHERE id = $1
+RETURNING id, server_id, workspace_id, status, failure_reason, started_by, created_at, updated_at, finished_at;
+
+-- name: AppendServerSetupEvent :one
+-- Append an ordered, redacted status/log line for a run.
+INSERT INTO server_setup_events (setup_run_id, step, kind, status, message)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, setup_run_id, seq, step, kind, status, message, created_at;
+
+-- name: ListServerSetupEvents :many
+-- Events with seq greater than the cursor, oldest first (dashboard polling).
+SELECT id, setup_run_id, seq, step, kind, status, message, created_at
+FROM server_setup_events
+WHERE setup_run_id = $1 AND seq > $2
+ORDER BY seq;
+
+-- name: CountServerSetupRunsForServer :one
+-- How many setup runs a server already has — used to distinguish a first setup from a retry
+-- when auditing.
+SELECT count(*) FROM server_setup_runs WHERE server_id = $1;

@@ -42,6 +42,37 @@ type Store interface {
 	// a workspace), so this server-scoped module authorizes and audits against it. ok is
 	// false when the server does not exist.
 	WorkspaceIDForServer(ctx context.Context, serverID string) (workspaceID string, ok bool, err error)
+
+	// --- Dashboard-managed setup runs ---
+
+	// InsertSetupRun creates a queued run; it takes a tx so it commits with the start audit.
+	InsertSetupRun(ctx context.Context, tx database.Tx, serverID, workspaceID string, startedBy *string) (SetupRun, error)
+	// CountSetupRuns returns how many runs a server already has (to audit start vs retry).
+	CountSetupRuns(ctx context.Context, serverID string) (int64, error)
+	// SetSetupRunStatus advances a run's status (plain write; terminal-state audits commit
+	// separately). ok is false when no run matched.
+	SetSetupRunStatus(ctx context.Context, setupRunID, status, failureReason string) (run SetupRun, ok bool, err error)
+	GetSetupRun(ctx context.Context, setupRunID string) (run SetupRun, ok bool, err error)
+	// AppendSetupEvent appends one ordered, redacted status/log line (plain write).
+	AppendSetupEvent(ctx context.Context, e NewSetupEvent) (SetupEvent, error)
+	ListSetupEvents(ctx context.Context, setupRunID string, afterSeq int64) ([]SetupEvent, error)
+
+	// --- Host-key TOFU pin (on the servers row) ---
+
+	// HostKeyFingerprint returns the server's pinned fingerprint ("" if unpinned). ok is
+	// false when the server does not exist.
+	HostKeyFingerprint(ctx context.Context, serverID string) (fingerprint string, ok bool, err error)
+	SetHostKeyFingerprint(ctx context.Context, serverID, fingerprint string) error
+}
+
+// NewSetupEvent is an append-only status/log line. Message is plain-English and redacted —
+// never a raw credential, private key, or registration token.
+type NewSetupEvent struct {
+	SetupRunID string
+	Step       string
+	Kind       string // status | log
+	Status     string // started | ok | failed | skipped
+	Message    string
 }
 
 // TxRunner runs fn inside one transaction. Implemented by *database.DB; a port so the

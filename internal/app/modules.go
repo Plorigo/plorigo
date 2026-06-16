@@ -90,19 +90,6 @@ func (a *App) buildModules() error {
 		Log:    a.log,
 	})
 
-	// serversetup owns the persistent SSH management credential for a server (the
-	// dashboard-managed setup/repair channel). The private key is sealed at rest by the
-	// same crypto box as secrets (reused here) and is write-only; the module governs its
-	// lifecycle (provision/rotate/revoke), authorized/audited against the server's
-	// workspace. The actual SSH bootstrap runner is built on top of this later.
-	a.serversetup = serversetup.New(serversetup.Deps{
-		DB:     a.db,
-		Audit:  auditSvc,
-		Policy: policySvc,
-		Crypto: box,
-		Log:    a.log,
-	})
-
 	// agents are the control-plane side of the server agent: registration tokens,
 	// keys, and liveness. Server-scoped — the owning workspace is resolved from the
 	// server, then authorized/audited like servers. PublicURL + Dev shape the install
@@ -114,6 +101,22 @@ func (a *App) buildModules() error {
 		PublicURL: a.cfg.PublicURL,
 		Dev:       a.cfg.Dev,
 		Log:       a.log,
+	})
+
+	// serversetup owns the dashboard-managed SSH setup run AND the persistent management
+	// credential it provisions. The private key is sealed by the same crypto box as secrets;
+	// the run drives the shared installer over SSH (via its own dialer) and waits on the agent
+	// through an adapter over the agents module (so serversetup never imports it). Built after
+	// agents because it depends on them.
+	a.serversetup = serversetup.New(serversetup.Deps{
+		DB:        a.db,
+		Audit:     auditSvc,
+		Policy:    policySvc,
+		Crypto:    box,
+		Log:       a.log,
+		Dialer:    serversetup.NewSSHDialer(),
+		Agents:    agentSetupAdapter{agents: a.agents.Service(), now: time.Now},
+		PublicURL: a.cfg.PublicURL,
 	})
 
 	// deployments record an attempt to run an image in an environment on a server and
