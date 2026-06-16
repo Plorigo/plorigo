@@ -68,6 +68,18 @@ const (
 	ActionDomainRead   Action = "domain.read"
 	ActionDomainVerify Action = "domain.verify"
 	ActionDomainDelete Action = "domain.delete"
+	// Server-setup actions govern the persistent SSH management credential created during
+	// dashboard-managed server setup. Opening an inbound SSH channel is an admin-tier
+	// capability, so running the channel (ActionServerSetupRun: provision + record use /
+	// failed auth) and the destructive lifecycle ops (rotate, revoke) are owner/admin only;
+	// the self-serve one-line install stores no credential and needs none of these. Reading
+	// exposes only non-secret metadata (fingerprint, timestamps, rotation/revocation state) —
+	// the private key is never an action target, since it is write-only and never returned.
+	// See docs/architecture/server-management.md.
+	ActionServerSetupRun       Action = "server_setup.run"
+	ActionServerSetupKeyRotate Action = "server_setup.key.rotate"
+	ActionServerSetupKeyRevoke Action = "server_setup.key.revoke"
+	ActionServerSetupKeyRead   Action = "server_setup.key.read"
 )
 
 // Workspace roles, most privileged first. Stored in workspace_members.role and

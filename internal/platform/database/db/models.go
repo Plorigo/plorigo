@@ -211,6 +211,21 @@ type SourceConnection struct {
 	UpdatedAt             time.Time
 }
 
+type SshManagementKey struct {
+	ID               string
+	ServerID         string
+	Fingerprint      string
+	PublicKey        string
+	SealedPrivateKey []byte
+	RotationState    string
+	LastUsedAt       *time.Time
+	RotatedAt        *time.Time
+	RevokedAt        *time.Time
+	CreatedBy        *string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
 type User struct {
 	ID            string
 	Email         string

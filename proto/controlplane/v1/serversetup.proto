@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// An SSHManagementKey is the non-secret metadata for a server's persistent SSH
+// management credential (the dashboard-managed setup/repair channel). The private key is
+// sealed at rest with APP_MASTER_KEY and is WRITE-ONLY: it is never returned by any RPC,
+// so this message carries only the public key, fingerprint, and lifecycle timestamps.
+// See docs/architecture/server-management.md and security.md.
+message SSHManagementKey {
+  string server_id = 1;
+  // SHA256 fingerprint of the management public key (e.g. "SHA256:…"), so a user can
+  // verify out of band which key is installed.
+  string fingerprint = 2;
+  // The public OpenSSH authorized_keys line ("ssh-ed25519 AAAA…"). Non-secret.
+  string public_key = 3;
+  // active | rotating | superseded.
+  string rotation_state = 4;
+  string last_used_at = 5; // RFC 3339; empty if never used
+  string rotated_at = 6;   // RFC 3339; empty if never rotated
+  string revoked_at = 7;   // RFC 3339; empty while active
+  string created_by = 8;   // user id that provisioned it; empty if unknown
+  string created_at = 9;   // RFC 3339
+  string updated_at = 10;  // RFC 3339
+}
+
+message GetManagementKeyRequest {
+  string server_id = 1;
+}
+
+message GetManagementKeyResponse {
+  SSHManagementKey key = 1;
+}
+
+message RotateManagementKeyRequest {
+  string server_id = 1;
+}
+
+message RotateManagementKeyResponse {
+  // Metadata only — the new public key + fingerprint. The private key never leaves the
+  // control plane.
+  SSHManagementKey key = 1;
+}
+
+message RevokeManagementKeyRequest {
+  string server_id = 1;
+}
+
+message RevokeManagementKeyResponse {}
+
+// ServerSetupService governs the persistent SSH management credential for a server.
+// Provisioning happens inside the (separate) dashboard-managed setup run; these RPCs are
+// the user-driven lifecycle controls — inspect non-secret metadata, rotate the key, and
+// revoke access. No RPC accepts or returns private key material. See
+// docs/architecture/server-management.md.
+service ServerSetupService {
+  rpc GetManagementKey(GetManagementKeyRequest) returns (GetManagementKeyResponse);
+  rpc RotateManagementKey(RotateManagementKeyRequest) returns (RotateManagementKeyResponse);
+  rpc RevokeManagementKey(RevokeManagementKeyRequest) returns (RevokeManagementKeyResponse);
+}
