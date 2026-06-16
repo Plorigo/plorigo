@@ -93,6 +93,14 @@ export function useEnvironments(projectId: string) {
   });
 }
 
+export function useEnvironment(environmentId: string) {
+  return useQuery({
+    queryKey: ["environment", environmentId],
+    queryFn: async () => (await environmentClient.getEnvironment({ id: environmentId })).environment ?? null,
+    enabled: environmentId.length > 0 && !isPrototypeId(environmentId),
+  });
+}
+
 // Env vars are now per-SERVICE: list/set/delete are keyed by serviceId.
 export function useEnvVars(serviceId: string) {
   return useQuery({

@@ -8,6 +8,7 @@ import { DeploymentDetailPage } from "./features/deployments/DeploymentDetailPag
 import { DeploymentsPage } from "./features/deployments/DeploymentsPage";
 import { NewDeploymentPage } from "./features/deployments/new/NewDeploymentPage";
 import { DomainsPage } from "./features/domains/DomainsPage";
+import { EnvironmentDetailPage } from "./features/environments/EnvironmentDetailPage";
 import { OverviewPage } from "./features/overview/OverviewPage";
 import { ProjectDetailPage } from "./features/projects/ProjectDetailPage";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
@@ -55,6 +56,11 @@ const serviceDetailRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
   path: "/projects/$projectId/services/$serviceId",
   component: ServiceDetailPage,
+});
+const environmentDetailRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/projects/$projectId/environments/$environmentId",
+  component: EnvironmentDetailPage,
 });
 const domainsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/domains", component: DomainsPage });
 const projectDomainsRoute = createRoute({
@@ -118,6 +124,7 @@ export const routeTree = rootRoute.addChildren([
     projectsNewRoute,
     projectDetailRoute,
     serviceDetailRoute,
+    environmentDetailRoute,
     domainsRoute,
     projectDomainsRoute,
     serversRoute,
