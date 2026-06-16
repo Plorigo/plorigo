@@ -109,6 +109,28 @@ func (h *handler) DeleteService(ctx context.Context, req *connect.Request[contro
 	return connect.NewResponse(&controlplanev1.DeleteServiceResponse{}), nil
 }
 
+func (h *handler) DetectFramework(ctx context.Context, req *connect.Request[controlplanev1.DetectFrameworkRequest]) (*connect.Response[controlplanev1.DetectFrameworkResponse], error) {
+	d, err := h.svc.DetectFramework(ctx, DetectInput{
+		RepoURL: req.Msg.GetRepoUrl(),
+		Branch:  req.Msg.GetBranch(),
+	})
+	if err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&controlplanev1.DetectFrameworkResponse{
+		Status:         d.Status,
+		Runtime:        d.Runtime,
+		RuntimeLabel:   d.RuntimeLabel,
+		PackageManager: d.PackageManager,
+		NodeVersion:    d.NodeVersion,
+		BuildCommand:   d.BuildCommand,
+		StartCommand:   d.StartCommand,
+		ContainerPort:  d.ContainerPort,
+		Dockerfile:     d.Dockerfile,
+		NextSteps:      d.NextSteps,
+	}), nil
+}
+
 func toProtos(svcs []Service) []*controlplanev1.Service {
 	out := make([]*controlplanev1.Service, 0, len(svcs))
 	for _, s := range svcs {

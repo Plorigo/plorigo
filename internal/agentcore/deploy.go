@@ -205,7 +205,14 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 		networkAlias:  job.GetNetworkAlias(),
 	})
 	if err != nil {
-		reportBuild(statusFailed, hostPort, containerID, "could not start container: "+err.Error(), nil)
+		// Capture the container's own output BEFORE cleanup removes it: the usual cause here is
+		// the app crashing on startup (so no port is ever published), and its stderr is the only
+		// thing that explains why. Report it on the runtime stream — it's the container talking.
+		var crashLogs []string
+		if containerID != "" {
+			crashLogs = runtime.recentLogs(ctx, containerID, maxReportLogLines)
+		}
+		reportRuntime(statusFailed, hostPort, containerID, "could not start container: "+err.Error(), crashLogs)
 		cleanupFailedContainer(ctx, out, runtime, containerID)
 		return
 	}

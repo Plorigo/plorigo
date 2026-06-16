@@ -125,6 +125,9 @@ type SecretBox interface {
 type GitHubClient interface {
 	GetRepository(ctx context.Context, token, owner, repo string) (github.RepoInfo, error)
 	GetBranch(ctx context.Context, token, owner, repo, branch string) error
+	// GetFileContent reads a single repo file at ref for framework detection; ok is false when
+	// the file is absent. token is empty for a public repo.
+	GetFileContent(ctx context.Context, token, owner, repo, ref, path string) (data []byte, ok bool, err error)
 }
 
 // Enqueuer is the CONSUMER-DEFINED port for queuing a new service's first deployment inside

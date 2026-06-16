@@ -117,6 +117,29 @@ type Result struct {
 	DeploymentID string
 }
 
+// DetectInput previews how a PUBLIC repo would build. Branch is optional (empty = default).
+type DetectInput struct {
+	RepoURL string
+	Branch  string
+}
+
+// Detection is the build-plan preview DetectFramework returns — a projection of the plan from
+// internal/builder (the same logic the agent runs at build time). Status is "detected"
+// (runtime + dockerfile populated), "dockerfile" (the repo ships its own Dockerfile), or
+// "unsupported" (NextSteps says what to do).
+type Detection struct {
+	Status         string
+	Runtime        string
+	RuntimeLabel   string
+	PackageManager string
+	NodeVersion    string
+	BuildCommand   string
+	StartCommand   string
+	ContainerPort  int32
+	Dockerfile     string
+	NextSteps      string
+}
+
 // Servicer is the surface other code (the handler, internal/app, tests) depends on. (Named
 // Servicer, not Service, because the domain entity is Service.)
 type Servicer interface {
@@ -128,4 +151,5 @@ type Servicer interface {
 	UpdateSource(ctx context.Context, in UpdateSourceInput) (Service, error)
 	UpdateVisibility(ctx context.Context, id, visibility string) (Service, error)
 	DeleteService(ctx context.Context, id string) error
+	DetectFramework(ctx context.Context, in DetectInput) (Detection, error)
 }

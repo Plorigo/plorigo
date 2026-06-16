@@ -36,6 +36,7 @@ import {
   useAgents,
   useBranches,
   useEnvironments,
+  useFrameworkDetection,
   useGitHubConnection,
   useProjects,
   useRepositories,
@@ -109,8 +110,8 @@ export function NewDeploymentPage() {
   // Quick deploy (a public image, or a public Git URL).
   const [quickValue, setQuickValue] = useState("");
   const [quickPort, setQuickPort] = useState("80");
-  // Feedback for the Git-URL port auto-detection (checking / detected / not found).
-  const [portHint, setPortHint] = useState("");
+  // The debounced repo URL fed to framework detection (empty disables the preview).
+  const [detectRepo, setDetectRepo] = useState("");
   // Import-a-repo (the connected account).
   const [repoFilter, setRepoFilter] = useState("");
   const [selectedRepoFullName, setSelectedRepoFullName] = useState("");
@@ -139,6 +140,9 @@ export function NewDeploymentPage() {
     [repos.data, selectedRepoFullName],
   );
   const branches = useBranches(workspaceId, selectedRepo?.owner ?? "", selectedRepo?.name ?? "");
+  // Preview how the quick-deploy Git URL would build (server-side framework detection — the
+  // same internal/builder logic the agent runs, so the preview matches what gets built).
+  const detection = useFrameworkDetection(detectRepo, "");
 
   // Surface the GitHub OAuth outcome (?github=connected|error) on return, refresh the
   // connection so the repo list appears, then strip the params so it doesn't repeat.
@@ -206,41 +210,29 @@ export function NewDeploymentPage() {
   const [prevQuickValue, setPrevQuickValue] = useState(quickValue);
   if (quickValue !== prevQuickValue) {
     setPrevQuickValue(quickValue);
-    if (quickIsRepo) {
-      setQuickPort("");
-      setPortHint(
-        parseGitHubRepo(quickValue)
-          ? "Checking the repo's Dockerfile…"
-          : "Public Git repo — the port is auto-detected from the Dockerfile when it builds.",
-      );
-    }
+    // Clearing on a repo URL change lets detection prefill the port; a later manual edit then
+    // sticks (the prefill effect below only fills an empty field).
+    if (quickIsRepo) setQuickPort("");
   }
 
-  // For a Git URL, read the repo's Dockerfile up front and PREFILL the port (from its EXPOSE)
-  // so the user sees it instead of a mysterious blank. Best-effort + debounced; if it can't be
-  // found the field stays blank and the agent still auto-detects from the built image. Public,
-  // unauthenticated GitHub read — re-runs when the URL changes, so changing repos re-detects;
-  // a manual edit on the SAME URL sticks (this effect won't re-fire).
+  // Debounce the repo URL, then preview how it builds. Only GitHub repos can be previewed; a
+  // repo on another host still deploys (the agent detects on the clone) — we just don't preview.
+  // The state update lives in the timer callback (an async context) so it doesn't trigger a
+  // cascading render from the effect body.
   useEffect(() => {
-    if (!quickIsRepo) return;
-    const gh = parseGitHubRepo(quickValue);
-    if (!gh) return;
-    const ctrl = new AbortController();
-    const timer = setTimeout(async () => {
-      const port = await detectDockerfilePort(gh.owner, gh.repo, ctrl.signal);
-      if (ctrl.signal.aborted) return;
-      if (port) {
-        setQuickPort(String(port));
-        setPortHint(`Detected port ${port} from the repo's Dockerfile (edit if needed).`);
-      } else {
-        setPortHint("No EXPOSE found — the port is auto-detected from the built image, or set one.");
-      }
-    }, 600);
-    return () => {
-      ctrl.abort();
-      clearTimeout(timer);
-    };
+    const repo = quickIsRepo && parseGitHubRepo(quickValue) ? quickValue.trim() : "";
+    const timer = setTimeout(() => setDetectRepo(repo), repo ? 600 : 0);
+    return () => clearTimeout(timer);
   }, [quickValue, quickIsRepo]);
+
+  // Prefill the port when detection resolves (adjusted during render, not in an effect). It
+  // only fills an empty field — the URL-change handler clears it — so a manual edit sticks.
+  const detectedPort = detection.data?.containerPort ?? 0;
+  const [prevDetectedPort, setPrevDetectedPort] = useState(detectedPort);
+  if (detectedPort !== prevDetectedPort) {
+    setPrevDetectedPort(detectedPort);
+    if (detectedPort > 0 && quickPort === "") setQuickPort(String(detectedPort));
+  }
 
   const filteredRepos = useMemo(() => {
     const q = repoFilter.trim().toLowerCase();
@@ -637,15 +629,13 @@ export function NewDeploymentPage() {
                 {busyKey === "quick" ? "Working…" : "Add service"}
               </Button>
             </div>
-            {quickValue.trim() && (
+            {quickValue.trim() && !quickIsRepo && (
               <p className="mt-2 text-xs text-muted-foreground">
-                {quickIsRepo
-                  ? `Looks like a public Git repository — builds its Dockerfile and deploys a service to ${projectName}.`
-                  : `Adds an image service to ${projectName} on port ${quickPort || "…"}.`}
+                {`Adds an image service to ${projectName} on port ${quickPort || "…"}.`}
               </p>
             )}
-            {quickIsRepo && quickValue.trim() && portHint && (
-              <p className="mt-1 text-xs text-muted-foreground">{portHint}</p>
+            {quickIsRepo && quickValue.trim() && (
+              <DetectionHint detection={detection} isGitHub={!!parseGitHubRepo(quickValue)} projectName={projectName} />
             )}
           </Panel>
 
@@ -862,23 +852,69 @@ function parseGitHubRepo(input: string): { owner: string; repo: string } | null 
   return { owner: m[1], repo: m[2].replace(/\.git$/i, "") };
 }
 
-// detectDockerfilePort reads a PUBLIC repo's root Dockerfile (default branch, unauthenticated)
-// and returns its first EXPOSE port. Returns null when there's no Dockerfile/EXPOSE or the
-// lookup fails — purely a UX preview; the agent still detects from the built image at deploy.
-async function detectDockerfilePort(owner: string, repo: string, signal: AbortSignal): Promise<number | null> {
-  try {
-    const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/Dockerfile`, {
-      headers: { Accept: "application/vnd.github.raw" },
-      signal,
-    });
-    if (!res.ok) return null;
-    const m = /^\s*EXPOSE\s+(\d{1,5})/im.exec(await res.text());
-    if (!m) return null;
-    const port = Number(m[1]);
-    return port >= 1 && port <= 65535 ? port : null;
-  } catch {
-    return null; // network/abort/CORS — silently fall back to build-time detection
+// DetectionHint previews how a quick-deploy Git URL would build. It shows the detected runtime,
+// suggested commands, port, and the exact generated Dockerfile — or, for an unsupported repo,
+// the plain-English next steps. It degrades gracefully: a failed/absent preview just notes that
+// the agent detects at build time, so the user can still deploy. Detection is GitHub-only for
+// now; a repo on another host still builds (the agent detects on the clone).
+function DetectionHint({
+  detection,
+  isGitHub,
+  projectName,
+}: {
+  detection: ReturnType<typeof useFrameworkDetection>;
+  isGitHub: boolean;
+  projectName: string;
+}) {
+  if (!isGitHub) {
+    return (
+      <p className="mt-2 text-xs text-muted-foreground">
+        Public Git repo — Plorigo detects the framework and builds it when you deploy to {projectName}.
+      </p>
+    );
   }
+  if (detection.isFetching) {
+    return <p className="mt-2 text-xs text-muted-foreground">Inspecting the repository…</p>;
+  }
+  const d = detection.data;
+  if (!d || detection.isError) {
+    return (
+      <p className="mt-2 text-xs text-muted-foreground">
+        Plorigo detects the framework and builds it when you deploy.
+      </p>
+    );
+  }
+  if (d.status === "unsupported") {
+    return (
+      <div className="mt-2 rounded-md border border-border bg-muted/40 p-2.5 text-xs text-muted-foreground">
+        <p className="font-medium text-foreground">Couldn&apos;t detect a supported app</p>
+        <p className="mt-0.5">{d.nextSteps}</p>
+      </div>
+    );
+  }
+  if (d.status === "dockerfile") {
+    return <p className="mt-2 text-xs text-muted-foreground">Found a Dockerfile — Plorigo builds it as-is.</p>;
+  }
+  return (
+    <div className="mt-2 space-y-1.5 text-xs text-muted-foreground">
+      <p>
+        Detected <span className="font-medium text-foreground">{d.runtimeLabel}</span> · {d.packageManager} · node{" "}
+        {d.nodeVersion} · port {d.containerPort}
+      </p>
+      <div className="font-mono text-[11px] leading-relaxed">
+        {d.buildCommand && <div>build: {d.buildCommand}</div>}
+        <div>start: {d.startCommand}</div>
+      </div>
+      <details className="group">
+        <summary className="cursor-pointer select-none text-foreground/80 hover:text-foreground">
+          Generated Dockerfile
+        </summary>
+        <pre className="mt-1 max-h-60 overflow-auto rounded-md border border-border bg-muted/40 p-2 text-[11px] leading-relaxed">
+          {d.dockerfile}
+        </pre>
+      </details>
+    </div>
+  );
 }
 
 // shortRepo strips protocol/host noise from a repo URL for a compact "owner/repo" label.

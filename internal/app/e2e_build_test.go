@@ -1,10 +1,14 @@
 //go:build e2e
 
-// End-to-end test for build-and-deploy from a Git source (PLO-12). It runs the REAL agent
-// binary as a host subprocess (with real Docker) against an in-process control plane, and
-// proves the full path: the agent claims a git deployment, CLONES a public repo, BUILDS its
-// Dockerfile with BuildKit, RUNS the image, routes it through Caddy, and reports it running.
-// A second deployment of a repo with no Dockerfile must surface as a clear build failure.
+// End-to-end test for build-and-deploy from a Git source (PLO-12, PLO-18). It runs the REAL
+// agent binary as a host subprocess (with real Docker) against an in-process control plane, and
+// proves the full path: the agent claims a git deployment, CLONES a public repo, BUILDS it with
+// BuildKit, RUNS the image, routes it through Caddy, and reports it running. Three cases:
+//   - a repo WITH a Dockerfile builds it as-is (port auto-detected from EXPOSE);
+//   - an opt-in repo WITHOUT a Dockerfile is detected (Node/Vite/Next.js), a Dockerfile is
+//     GENERATED and built (set PLORIGO_E2E_DETECT_OWNER/REPO[/BRANCH] to a Dockerfile-less repo;
+//     skipped by default since it depends on an external repo's contents);
+//   - a repo that is neither Dockerfile-based nor a recognized framework fails with clear steps.
 //
 // Not part of `make test` or CI — run it with `make e2e-build`, which builds a native agent
 // binary and supplies Docker, Caddy, and a migrated Postgres. The agent runs on the host (not
@@ -190,7 +194,39 @@ func TestE2EBuildDeploy(t *testing.T) {
 	// then assert a runtime log lands beyond that snapshot.
 	assertRuntimeLogsAccumulate(t, ownerCtx, a.deployments.Service(), dep.ID, got.HostPort)
 
-	// --- Failure: a repo with no Dockerfile fails with a clear message. ---
+	// --- Generated Dockerfile (PLO-18): an opt-in public repo WITHOUT a Dockerfile that we
+	// detect (Node/Vite/Next.js), GENERATE a Dockerfile for, build, run, and route. Pinned via
+	// PLORIGO_E2E_DETECT_*; skipped by default since it depends on an external repo's contents. ---
+	if dOwner := os.Getenv("PLORIGO_E2E_DETECT_OWNER"); dOwner != "" {
+		dRepo := os.Getenv("PLORIGO_E2E_DETECT_REPO")
+		dBranch := envOr("PLORIGO_E2E_DETECT_BRANCH", "main")
+		detectProj, _ := a.projects.Service().Create(ownerCtx, projects.CreateInput{WorkspaceID: ws.ID, Name: "Detect App"})
+		detectEnv, _ := a.environments.Service().Create(ownerCtx, environments.CreateInput{ProjectID: detectProj.ID, Name: "Prod"})
+		detectSvcID := insertGitService(t, ctx, a, detectEnv.ID, detectProj.ID, ws.ID, dOwner, dRepo, dBranch)
+		detectDep, err := a.deployments.Service().CreateForService(ownerCtx, deployments.CreateForServiceInput{
+			ServiceID: detectSvcID, ServerID: srvRec.ID,
+		})
+		if err != nil {
+			t.Fatalf("CreateForService (detect): %v", err)
+		}
+		t.Logf("queued Dockerfile-less git deployment %s for %s/%s@%s (generate from detection)", detectDep.ID, dOwner, dRepo, dBranch)
+		detected := waitForTerminal(t, ownerCtx, a.deployments.Service(), detectDep.ID, 5*time.Minute, &agentOut)
+		if detected.Status != deployments.StatusRunning {
+			t.Fatalf("detected deployment status = %q, want running; message=%q\nagent output:\n%s", detected.Status, detected.Message, agentOut.String())
+		}
+		// The agent logs that it generated a Dockerfile from detection, and the build phases ran.
+		if !strings.Contains(agentOut.String(), "generated one for") {
+			t.Fatalf("expected the agent to generate a Dockerfile from detection; agent output:\n%s", agentOut.String())
+		}
+		t.Cleanup(func() { _ = exec.Command("docker", "rm", "-f", "plorigo-"+detected.ID[:12]).Run() })
+		assertReachedStatuses(t, ownerCtx, a.deployments.Service(), detectDep.ID, deployments.StatusCloning, deployments.StatusBuilding, deployments.StatusRouting, deployments.StatusRunning)
+		assertServesThroughCaddy(t, caddyHTTPPort, detectSvcID)
+	} else {
+		t.Log("e2e: set PLORIGO_E2E_DETECT_OWNER/REPO[/BRANCH] to a public Dockerfile-less Node/Vite/Next.js repo to exercise the generated-Dockerfile build-and-run")
+	}
+
+	// --- Failure: a repo that is neither Dockerfile-based nor a recognized framework fails with
+	// a clear message. octocat/Hello-World has no Dockerfile and no package.json. ---
 	noDockerProj, _ := a.projects.Service().Create(ownerCtx, projects.CreateInput{WorkspaceID: ws.ID, Name: "No Dockerfile"})
 	noDockerEnv, _ := a.environments.Service().Create(ownerCtx, environments.CreateInput{ProjectID: noDockerProj.ID, Name: "Prod"})
 	noDockerSvcID := insertGitService(t, ctx, a, noDockerEnv.ID, noDockerProj.ID, ws.ID,

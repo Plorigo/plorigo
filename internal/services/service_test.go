@@ -114,8 +114,9 @@ type fakeBox struct{}
 func (fakeBox) Open(sealed []byte) ([]byte, error) { return sealed, nil }
 
 type fakeGH struct {
-	info github.RepoInfo
-	err  error
+	info  github.RepoInfo
+	err   error
+	files map[string]string // repo files for DetectFramework (path -> contents)
 }
 
 func (f fakeGH) GetRepository(_ context.Context, _, owner, repo string) (github.RepoInfo, error) {
@@ -131,6 +132,13 @@ func (f fakeGH) GetRepository(_ context.Context, _, owner, repo string) (github.
 	return info, nil
 }
 func (f fakeGH) GetBranch(_ context.Context, _, _, _, _ string) error { return nil }
+func (f fakeGH) GetFileContent(_ context.Context, _, _, _, _, path string) ([]byte, bool, error) {
+	v, ok := f.files[path]
+	if !ok {
+		return nil, false, nil
+	}
+	return []byte(v), true, nil
+}
 
 type fakeRecorder struct {
 	called bool
@@ -327,4 +335,50 @@ func TestDeleteService_NotFound(t *testing.T) {
 	svc := newSvc(store, fakeGH{}, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
 	err := svc.DeleteService(authedCtx(), testServiceID)
 	wantKind(t, err, problem.KindNotFound)
+}
+
+func TestDetectFramework_Detected(t *testing.T) {
+	gh := fakeGH{
+		info: github.RepoInfo{DefaultBranch: "main"},
+		files: map[string]string{
+			"package.json":   `{"scripts":{"build":"next build","start":"next start"},"dependencies":{"next":"14"}}`,
+			"pnpm-lock.yaml": "lockfileVersion: '9.0'",
+		},
+	}
+	svc := newSvc(envResolved(), gh, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
+	got, err := svc.DetectFramework(authedCtx(), DetectInput{RepoURL: "https://github.com/o/r"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Status != "detected" || got.Runtime != "nextjs" || got.RuntimeLabel != "Next.js" {
+		t.Errorf("got %+v, want a detected Next.js plan", got)
+	}
+	if got.PackageManager != "pnpm" || got.ContainerPort != 3000 || got.Dockerfile == "" {
+		t.Errorf("got %+v, want pnpm + port 3000 + a rendered Dockerfile", got)
+	}
+}
+
+func TestDetectFramework_Unsupported(t *testing.T) {
+	gh := fakeGH{info: github.RepoInfo{DefaultBranch: "main"}, files: map[string]string{"README.md": "hi"}}
+	svc := newSvc(envResolved(), gh, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
+	got, err := svc.DetectFramework(authedCtx(), DetectInput{RepoURL: "o/r"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Status != "unsupported" || got.NextSteps == "" {
+		t.Errorf("got %+v, want unsupported with next steps", got)
+	}
+}
+
+func TestDetectFramework_PrivateRejected(t *testing.T) {
+	gh := fakeGH{info: github.RepoInfo{Owner: "o", Name: "r", FullName: "o/r", Private: true}}
+	svc := newSvc(envResolved(), gh, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.DetectFramework(authedCtx(), DetectInput{RepoURL: "https://github.com/o/r"})
+	wantKind(t, err, problem.KindInvalidInput)
+}
+
+func TestDetectFramework_BadURL(t *testing.T) {
+	svc := newSvc(envResolved(), fakeGH{}, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.DetectFramework(authedCtx(), DetectInput{RepoURL: ""})
+	wantKind(t, err, problem.KindInvalidInput)
 }

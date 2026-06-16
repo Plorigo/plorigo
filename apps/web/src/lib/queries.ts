@@ -35,6 +35,20 @@ export function useProjects(workspaceId: string) {
   });
 }
 
+// useFrameworkDetection previews how a PUBLIC repo would build (the same internal/builder logic
+// the agent runs), so the add-project flow can show the detected runtime, suggested port, and
+// generated Dockerfile before deploying. A detection failure is non-fatal — the agent still
+// detects at build time — so it doesn't retry and callers fall back gracefully.
+export function useFrameworkDetection(repoUrl: string, branch: string) {
+  return useQuery({
+    queryKey: ["frameworkDetection", repoUrl, branch],
+    queryFn: async () => await serviceClient.detectFramework({ repoUrl, branch }),
+    enabled: repoUrl.length > 0,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+}
+
 export function useServers(workspaceId: string) {
   return useQuery({
     queryKey: ["servers", workspaceId],

@@ -129,6 +129,31 @@ message DeleteServiceRequest {
 
 message DeleteServiceResponse {}
 
+// DetectFrameworkRequest probes a PUBLIC repo's contents to suggest how to build it. It creates
+// nothing — the dashboard calls it to preview the detected runtime and generated Dockerfile
+// before a deploy. branch is optional (empty = the repo's default branch).
+message DetectFrameworkRequest {
+  string repo_url = 1; // a public repo URL or "owner/repo"
+  string branch = 2;   // optional
+}
+
+// DetectFrameworkResponse mirrors the build plan from internal/builder, the same logic the
+// agent runs at build time (so this preview is exactly what will be built). status is
+// "detected" (runtime + dockerfile populated), "dockerfile" (the repo ships its own
+// Dockerfile), or "unsupported" (next_steps explains what to do).
+message DetectFrameworkResponse {
+  string status = 1;
+  string runtime = 2;          // "nextjs" | "vite" | "nodejs" (empty unless detected)
+  string runtime_label = 3;    // friendly name, e.g. "Next.js"
+  string package_manager = 4;  // "npm" | "pnpm" | "yarn" | "bun"
+  string node_version = 5;     // major, e.g. "22"
+  string build_command = 6;
+  string start_command = 7;
+  int32 container_port = 8;
+  string dockerfile = 9;       // the generated Dockerfile (preview); empty unless detected
+  string next_steps = 10;      // plain-English guidance when unsupported
+}
+
 // ServiceService is the dashboard-facing API for services: create a service (and optionally
 // deploy it), read and list services, change a service's source or visibility, and delete a
 // service. Every RPC is session/token-authenticated and policy-authorized.
@@ -141,4 +166,6 @@ service ServiceService {
   rpc UpdateServiceSource(UpdateServiceSourceRequest) returns (UpdateServiceSourceResponse);
   rpc UpdateServiceVisibility(UpdateServiceVisibilityRequest) returns (UpdateServiceVisibilityResponse);
   rpc DeleteService(DeleteServiceRequest) returns (DeleteServiceResponse);
+  // DetectFramework inspects a public repo and previews how Plorigo would build it.
+  rpc DetectFramework(DetectFrameworkRequest) returns (DetectFrameworkResponse);
 }

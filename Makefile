@@ -125,10 +125,13 @@ e2e-agent: check-generated migrate ## Run the agent install e2e on a real contai
 
 # Build-and-deploy from a public Git source, end to end. Builds a NATIVE agent binary and
 # runs it on the host against an in-process control plane; the agent clones a public repo,
-# builds its Dockerfile with BuildKit, runs it on a published port, and routes through Caddy.
+# builds it with BuildKit (the repo's Dockerfile, or one generated from framework detection),
+# runs it on a published port, and routes through Caddy.
 # Needs Docker (with the `docker` CLI), Caddy, a migrated Postgres, and network access to clone.
 # Local-only (not in CI).
-# Override the repos with PLORIGO_E2E_BUILD_OWNER/REPO/BRANCH/PORT. See docs/development.md.
+# Override the Dockerfile repo with PLORIGO_E2E_BUILD_OWNER/REPO/BRANCH/PORT. To also exercise the
+# generated-Dockerfile path, set PLORIGO_E2E_DETECT_OWNER/REPO[/BRANCH] to a Dockerfile-less
+# Node/Vite/Next.js repo. See docs/development.md.
 e2e-build: check-generated migrate ## Run the build-from-Git e2e on real Docker/Caddy (local-only; not in CI)
 	CGO_ENABLED=0 go build -o $(E2E_AGENT_NATIVE_BIN) ./cmd/agent
 	APP_MASTER_KEY="$(APP_MASTER_KEY)" DATABASE_URL="$(DATABASE_URL)" \
