@@ -10,6 +10,7 @@ import {
   projectClient,
   secretClient,
   serverClient,
+  setupClient,
   serviceClient,
   sourceClient,
   workspaceClient,
@@ -258,5 +259,47 @@ export function useDeploymentEvents(deploymentId: string, live: boolean) {
       (await deploymentClient.listDeploymentEvents({ deploymentId })).events,
     enabled: deploymentId.length > 0,
     refetchInterval: live ? 2000 : false,
+  });
+}
+
+// --- Dashboard-managed server setup (SSH bootstrap) ---
+
+// A setup run is terminal once it succeeds or fails; the progress view stops polling then.
+export function isTerminalSetupStatus(status: string): boolean {
+  return status === "succeeded" || status === "failed";
+}
+
+export function useSetupRun(setupRunId: string) {
+  return useQuery({
+    queryKey: ["setupRun", setupRunId],
+    queryFn: async () => (await setupClient.getSetupRun({ setupRunId })).run ?? null,
+    enabled: setupRunId.length > 0,
+    // Poll while the bootstrap is in flight; stop once it reaches a terminal status.
+    refetchInterval: (query) => {
+      const run = query.state.data;
+      return run && isTerminalSetupStatus(run.status) ? false : 2000;
+    },
+  });
+}
+
+// Ordered, redacted status/log lines for a run. We refetch the full list while live (runs
+// are short); the server guarantees seq order, so the UI renders them as-is.
+export function useSetupEvents(setupRunId: string, live: boolean) {
+  return useQuery({
+    queryKey: ["setupEvents", setupRunId],
+    queryFn: async () => (await setupClient.listSetupEvents({ setupRunId, afterSeq: 0n })).events,
+    enabled: setupRunId.length > 0,
+    refetchInterval: live ? 2000 : false,
+  });
+}
+
+// The persistent SSH management key's NON-SECRET metadata (fingerprint, rotation state).
+// Returns null when the server has no managed key (set up manually); never the private key.
+export function useManagementKey(serverId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["managementKey", serverId],
+    queryFn: async () => (await setupClient.getManagementKey({ serverId })).key ?? null,
+    enabled: enabled && serverId.length > 0,
+    retry: false,
   });
 }

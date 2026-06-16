@@ -16,6 +16,7 @@ const controlPlaneServices = [
   "EnvVarService",
   "SecretService",
   "ServerService",
+  "ServerSetupService",
   "SourceService",
   "AgentService",
 ];

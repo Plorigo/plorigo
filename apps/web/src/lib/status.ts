@@ -65,13 +65,13 @@ export function statusIntent(status: string): Intent {
   if (["ready", "healthy", "online", "passing", "active", "success", "running"].includes(status)) {
     return "success";
   }
-  if (["building", "queued", "protected", "pending", "info", "assigned", "pulling", "starting", "routing"].includes(status)) {
+  if (["building", "queued", "protected", "pending", "info", "assigned", "pulling", "starting", "routing", "connecting", "setting up", "provisioning"].includes(status)) {
     return "info";
   }
   if (["degraded", "needs restore test", "warning", "warn"].includes(status)) {
     return "warning";
   }
-  if (["failed", "offline", "unavailable", "attention", "error", "danger"].includes(status)) {
+  if (["failed", "offline", "unavailable", "attention", "error", "danger", "setup failed"].includes(status)) {
     return "danger";
   }
   return "neutral";

@@ -63,6 +63,21 @@ separate concern and can make its own choice.)
 > plain-English blocked/failed states.
 
 > [!NOTE]
+> **Connect Server — two paths.** The Connect Server dialog (`features/servers/connect/`)
+> offers either a one-line **install command** the user runs themselves, or **dashboard-managed
+> setup** where Plorigo prepares a fresh Ubuntu box over SSH (see
+> [server-management.md](./server-management.md)). The managed form collects host, port,
+> username, and a one-time bootstrap credential (password or private key) that is **held in
+> client state only until `StartSetup` is called, then cleared** — never re-displayed or logged.
+> Progress is a **step timeline** polled from `ServerSetupService.GetSetupRun` /
+> `ListSetupEvents` (the same poll-the-events-list pattern as deployments), with the raw,
+> server-redacted log one click away and plain-English failure summaries plus recovery actions
+> (retry, or fall back to the command). Server cards distinguish *no agent / setting up / ready
+> / degraded / failed setup*, and expose **Rotate key** and **Revoke SSH access** when a managed
+> credential exists. Component tests live beside the components and run under **vitest +
+> @testing-library/react** (`pnpm --dir apps/web test`).
+
+> [!NOTE]
 > Beyond the structure above, specific screens and navigation are product scope, not
 > architecture — see [ROADMAP.md](../../ROADMAP.md). This doc is about the stack and the
 > conventions every screen follows.
