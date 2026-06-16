@@ -21,16 +21,17 @@ import (
 // Deployment statuses, persisted on the deployments row and CHECK-constrained in the
 // migration as defense-in-depth.
 const (
-	StatusQueued     = "queued"     // recorded by the control plane, not yet claimed
-	StatusAssigned   = "assigned"   // claimed by the server's agent
-	StatusCloning    = "cloning"    // the agent is cloning the source repo (git)
-	StatusBuilding   = "building"   // the agent is building the image (git)
-	StatusPulling    = "pulling"    // the agent is pulling the image (image)
-	StatusStarting   = "starting"   // the agent is creating/starting the container
-	StatusRouting    = "routing"    // the agent is validating/reloading Caddy routing
-	StatusRunning    = "running"    // the container is up and passed its health check
-	StatusFailed     = "failed"     // the attempt failed (see message / logs)
-	StatusSuperseded = "superseded" // replaced by a newer running deployment
+	StatusQueued      = "queued"      // recorded by the control plane, not yet claimed
+	StatusAssigned    = "assigned"    // claimed by the server's agent
+	StatusCloning     = "cloning"     // the agent is cloning the source repo (git)
+	StatusBuilding    = "building"    // the agent is building the image (git)
+	StatusPulling     = "pulling"     // the agent is pulling the image (image)
+	StatusStarting    = "starting"    // the agent is creating/starting the container
+	StatusHealthcheck = "healthcheck" // the agent is probing the new container's health
+	StatusRouting     = "routing"     // the agent is validating/reloading Caddy routing
+	StatusRunning     = "running"     // the container is up and passed its health check
+	StatusFailed      = "failed"      // the attempt failed (see message / logs)
+	StatusSuperseded  = "superseded"  // replaced by a newer running deployment
 )
 
 // Source kinds: an image deployment runs a pre-built image; a git deployment clones a

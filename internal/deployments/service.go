@@ -570,7 +570,7 @@ func validateImageRef(raw string) (string, error) {
 
 func isAgentReportableStatus(status string) bool {
 	switch status {
-	case StatusCloning, StatusBuilding, StatusPulling, StatusStarting, StatusRouting, StatusRunning, StatusFailed:
+	case StatusCloning, StatusBuilding, StatusPulling, StatusStarting, StatusHealthcheck, StatusRouting, StatusRunning, StatusFailed:
 		return true
 	}
 	return false

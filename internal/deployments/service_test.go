@@ -636,6 +636,29 @@ func TestReportDeployment_BuildPhasesAndCommitAccepted(t *testing.T) {
 	}
 }
 
+func TestReportDeployment_HealthcheckAccepted(t *testing.T) {
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		getDep: Deployment{ID: testDeployID, ServiceID: testServiceID, ServerID: testServerID, EnvironmentID: testEnvID},
+		getOK:  true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	// healthcheck is the explicit phase the agent reports before probing the new container;
+	// it must be accepted and persisted, and (carrying no host port) must not supersede.
+	if err := svc.ReportDeployment(context.Background(), ReportInput{
+		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID,
+		Status: StatusHealthcheck, Message: "running health check",
+	}); err != nil {
+		t.Fatalf("healthcheck report rejected: %v", err)
+	}
+	if len(store.statusUpdates) != 1 || store.statusUpdates[0].Status != StatusHealthcheck {
+		t.Fatalf("status updates = %+v, want one healthcheck update", store.statusUpdates)
+	}
+	if store.superseded {
+		t.Fatalf("healthcheck superseded a deployment, want none (no host port)")
+	}
+}
+
 func TestSyncRoutes_ReturnsVerifiedDomainsForAgentOwnedRoutes(t *testing.T) {
 	store := &fakeStore{
 		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
