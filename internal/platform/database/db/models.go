@@ -9,18 +9,26 @@ import (
 )
 
 type Agent struct {
-	ID              string
-	ServerID        string
-	WorkspaceID     string
-	PublicKey       []byte
-	CredentialHash  []byte
-	AgentVersion    string
-	LastSeenAt      *time.Time
-	CreatedAt       time.Time
-	DockerAvailable *bool
-	DockerVersion   string
-	Os              string
-	Arch            string
+	ID                string
+	ServerID          string
+	WorkspaceID       string
+	PublicKey         []byte
+	CredentialHash    []byte
+	AgentVersion      string
+	LastSeenAt        *time.Time
+	CreatedAt         time.Time
+	DockerAvailable   *bool
+	DockerVersion     string
+	Os                string
+	Arch              string
+	CaddyAvailable    *bool
+	CaddyRunning      bool
+	CaddyVersion      string
+	DiskTotalBytes    int64
+	DiskFreeBytes     int64
+	MemTotalBytes     int64
+	MemAvailableBytes int64
+	CpuCount          int32
 }
 
 type AgentRegistrationToken struct {

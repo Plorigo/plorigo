@@ -310,27 +310,65 @@ func TestAgentReadiness(t *testing.T) {
 	recent := now.Add(-10 * time.Second)
 	stale := now.Add(-10 * time.Minute)
 	up, down := true, false
+	const gib = int64(1) << 30
+	const mib = int64(1) << 20
+
+	// base is a fully-ready server: online, modern Docker, Caddy serving, healthy resources,
+	// Linux, and extended facts present (CPUCount > 0). Each case mutates one thing.
+	base := func() Agent {
+		return Agent{
+			LastSeenAt:        &recent,
+			DockerAvailable:   &up,
+			DockerVersion:     "24.0.7",
+			OS:                "linux",
+			Arch:              "amd64",
+			CaddyAvailable:    &up,
+			CaddyRunning:      true,
+			CaddyVersion:      "2.7.6",
+			DiskTotalBytes:    50 * gib,
+			DiskFreeBytes:     40 * gib,
+			MemTotalBytes:     4 * gib,
+			MemAvailableBytes: 2 * gib,
+			CPUCount:          2,
+		}
+	}
 
 	cases := []struct {
 		name       string
-		last       *time.Time
-		docker     *bool
+		mutate     func(a *Agent)
 		wantState  string
 		wantReason bool // a non-empty, actionable reason is expected
 	}{
-		{"never connected", nil, nil, ReadinessUnavailable, true},
-		// Offline wins over stale facts: an offline agent is unavailable even if it last
-		// reported Docker up — liveness is single-sourced through Status.
-		{"offline despite stale docker-up", &stale, &up, ReadinessUnavailable, true},
-		{"online, docker not yet reported", &recent, nil, ReadinessDegraded, true},
-		{"online, docker down", &recent, &down, ReadinessDegraded, true},
-		{"online, docker up", &recent, &up, ReadinessReady, false},
+		{"ready", nil, ReadinessReady, false},
+		{"offline agent", func(a *Agent) { a.LastSeenAt = &stale }, ReadinessUnknown, true},
+		{"never connected", func(a *Agent) { a.LastSeenAt = nil }, ReadinessUnknown, true},
+		{"unsupported OS", func(a *Agent) { a.OS = "windows" }, ReadinessBlocked, true},
+		{"docker missing", func(a *Agent) { a.DockerAvailable = &down }, ReadinessBlocked, true},
+		{"docker too old", func(a *Agent) { a.DockerVersion = "19.03.5" }, ReadinessDegraded, true},
+		{"docker not yet reported", func(a *Agent) { a.DockerAvailable = nil; a.DockerVersion = "" }, ReadinessDegraded, true},
+		{"caddy missing", func(a *Agent) { a.CaddyAvailable = &down }, ReadinessBlocked, true},
+		{"occupied ports (caddy installed, not running)", func(a *Agent) { a.CaddyRunning = false }, ReadinessBlocked, true},
+		{"critically low disk", func(a *Agent) { a.DiskFreeBytes = 512 * mib }, ReadinessBlocked, true},
+		{"low disk", func(a *Agent) { a.DiskFreeBytes = 3 * gib }, ReadinessDegraded, true},
+		{"low memory", func(a *Agent) { a.MemAvailableBytes = 128 * mib }, ReadinessDegraded, true},
+		// An agent that predates the extended facts (CPUCount == 0) is judged on Docker
+		// alone — its zeroed Caddy/disk/memory fields must never falsely block it.
+		{"older agent without extended facts", func(a *Agent) {
+			a.CPUCount = 0
+			a.CaddyAvailable, a.CaddyRunning = nil, false
+			a.DiskTotalBytes, a.DiskFreeBytes = 0, 0
+			a.MemTotalBytes, a.MemAvailableBytes = 0, 0
+		}, ReadinessReady, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			state, reason := Agent{LastSeenAt: c.last, DockerAvailable: c.docker}.Readiness(now)
+			a := base()
+			if c.mutate != nil {
+				c.mutate(&a)
+			}
+			state, reason := a.Readiness(now)
 			if state != c.wantState {
-				t.Errorf("state = %q, want %q", state, c.wantState)
+				t.Errorf("state = %q, want %q (reason %q)", state, c.wantState, reason)
 			}
 			if (reason != "") != c.wantReason {
 				t.Errorf("reason = %q, want non-empty=%v", reason, c.wantReason)

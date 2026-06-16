@@ -12,6 +12,9 @@ package agents
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -36,11 +39,25 @@ const (
 
 // Server readiness states, derived (never stored) from liveness plus the agent's reported
 // compatibility facts. This is what the dashboard leads with on a server card: whether the
-// server can safely run a deployment.
+// server can safely run a deployment. The dashboard layers the managed-setup-run states
+// ("setting up" / "setup failed") on top of these from the setup flow (PLO-93/94).
 const (
-	ReadinessReady       = "ready"       // online and Docker is available
-	ReadinessDegraded    = "degraded"    // online but Docker is unavailable, or facts unknown
-	ReadinessUnavailable = "unavailable" // offline or never connected
+	ReadinessReady    = "ready"    // online; Docker (and Caddy, when reported) healthy
+	ReadinessDegraded = "degraded" // online and deployable, but with a warning to act on
+	ReadinessBlocked  = "blocked"  // online but a hard prerequisite is missing or unsafe
+	ReadinessUnknown  = "unknown"  // offline or never connected — readiness can't be assessed
+)
+
+// Coarse resource thresholds for the readiness signal — readiness is a traffic-light, not a
+// monitoring system.
+const (
+	diskCriticalFreeBytes = 1 << 30       // 1 GiB — below this a deploy can't pull/write an image
+	diskLowFreeBytes      = 5 * (1 << 30) // 5 GiB — deployable, but warn
+	memLowAvailableBytes  = 256 << 20     // 256 MiB available — builds/containers risk OOM kills
+
+	// minSupportedDockerMajor: Docker Engine below this predates BuildKit defaults the build
+	// path relies on — deployable, but warn.
+	minSupportedDockerMajor = 20
 )
 
 // Agent is the program registered to a server. The control plane stores its public key,
@@ -57,8 +74,19 @@ type Agent struct {
 	DockerVersion   string
 	OS              string
 	Arch            string
-	LastSeenAt      *time.Time
-	CreatedAt       time.Time
+	// Extended host-readiness facts (PLO-95). CaddyAvailable is a tri-state (nil = not
+	// reported); CPUCount == 0 marks an agent that does not report the extended facts, so
+	// Readiness skips the Caddy/disk/memory checks for it (backward compatibility).
+	CaddyAvailable    *bool
+	CaddyRunning      bool
+	CaddyVersion      string
+	DiskTotalBytes    int64
+	DiskFreeBytes     int64
+	MemTotalBytes     int64
+	MemAvailableBytes int64
+	CPUCount          int32
+	LastSeenAt        *time.Time
+	CreatedAt         time.Time
 }
 
 // Status derives the agent's liveness at time now from its last heartbeat.
@@ -74,22 +102,76 @@ func (a Agent) Status(now time.Time) string {
 
 // Readiness derives whether the server can safely run a deployment at time now, plus a
 // plain-English reason a user can act on without SSHing in. It composes liveness with the
-// reported Docker facts; like Status it is derived, never stored. Offline/awaiting are
+// reported compatibility facts; like Status it is derived, never stored. Offline/awaiting are
 // single-sourced through Status, so liveness and readiness can never disagree.
+//
+// It returns "ready" (all good), "degraded" (deployable, with a warning), "blocked" (a hard
+// prerequisite is missing or unsafe), or "unknown" (offline/never connected). The extended
+// Caddy/disk/memory checks run only for agents that report them (CPUCount > 0), so older
+// agents are never falsely blocked.
 func (a Agent) Readiness(now time.Time) (state, reason string) {
 	switch a.Status(now) {
 	case StatusAwaiting:
-		return ReadinessUnavailable, "Waiting for the agent to connect. Run the install command on the server."
+		return ReadinessUnknown, "Waiting for the agent to connect. Run the install command on the server."
 	case StatusOffline:
-		return ReadinessUnavailable, "Agent offline — no heartbeat in over 90 seconds. Check the machine is on and the plorigo-agent service is running."
+		return ReadinessUnknown, "Agent offline — no heartbeat in over 90 seconds. Check the machine is on and the plorigo-agent service is running."
 	}
-	switch {
-	case a.DockerAvailable == nil:
+
+	// Hard blockers first — a deployment cannot succeed or serve traffic in these states.
+	if a.OS != "" && a.OS != "linux" {
+		return ReadinessBlocked, fmt.Sprintf("Unsupported host OS %q — Plorigo deploys to Linux servers.", a.OS)
+	}
+	if a.DockerAvailable != nil && !*a.DockerAvailable {
+		return ReadinessBlocked, "Docker isn't reachable on this server. Install or start Docker; the agent recovers automatically once it's running."
+	}
+	if a.CPUCount > 0 {
+		switch {
+		case a.CaddyAvailable != nil && !*a.CaddyAvailable:
+			return ReadinessBlocked, "Caddy isn't installed, so the server can't route traffic to your apps. Re-run setup to install it."
+		case a.CaddyAvailable != nil && *a.CaddyAvailable && !a.CaddyRunning:
+			return ReadinessBlocked, "Caddy isn't running — it may be stopped or unable to bind ports 80/443 (often another process is using them). The agent recovers it automatically; free the ports and it returns."
+		case a.DiskTotalBytes > 0 && a.DiskFreeBytes < diskCriticalFreeBytes:
+			return ReadinessBlocked, fmt.Sprintf("Almost no disk space left (%s free). Free space before deploying.", humanBytes(a.DiskFreeBytes))
+		}
+	}
+
+	// Soft warnings — deployable, but worth surfacing so a deploy doesn't fail by surprise.
+	if a.DockerAvailable == nil {
 		return ReadinessDegraded, "Compatibility checks pending — update the agent to the latest version so it reports Docker and host readiness."
-	case !*a.DockerAvailable:
-		return ReadinessDegraded, "Docker isn't reachable on this server. Install or start Docker; the agent recovers automatically once it's running."
+	}
+	if m := dockerMajor(a.DockerVersion); m > 0 && m < minSupportedDockerMajor {
+		return ReadinessDegraded, fmt.Sprintf("Docker %s is old; update it for reliable BuildKit builds.", a.DockerVersion)
+	}
+	if a.CPUCount > 0 {
+		switch {
+		case a.DiskTotalBytes > 0 && a.DiskFreeBytes < diskLowFreeBytes:
+			return ReadinessDegraded, fmt.Sprintf("Low disk space (%s free). Deployments may fail once it runs out.", humanBytes(a.DiskFreeBytes))
+		case a.MemTotalBytes > 0 && a.MemAvailableBytes < memLowAvailableBytes:
+			return ReadinessDegraded, fmt.Sprintf("Low free memory (%s available). Builds or containers may be killed under load.", humanBytes(a.MemAvailableBytes))
+		}
+	}
+	return ReadinessReady, ""
+}
+
+// dockerMajor parses the leading major version from a "24.0.7"-style string (0 if unparseable).
+func dockerMajor(v string) int {
+	major, _, _ := strings.Cut(strings.TrimSpace(v), ".")
+	n, err := strconv.Atoi(major)
+	if err != nil {
+		return 0
+	}
+	return n
+}
+
+// humanBytes renders a coarse, human-friendly size for readiness reasons.
+func humanBytes(b int64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1f GiB", float64(b)/(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%d MiB", b/(1<<20))
 	default:
-		return ReadinessReady, ""
+		return fmt.Sprintf("%d bytes", b)
 	}
 }
 
@@ -126,6 +208,15 @@ type HeartbeatInput struct {
 	DockerVersion   string
 	OS              string
 	Arch            string
+	// Extended host-readiness facts (PLO-95); see Agent for the tri-state / sentinel rules.
+	CaddyAvailable    *bool
+	CaddyRunning      bool
+	CaddyVersion      string
+	DiskTotalBytes    int64
+	DiskFreeBytes     int64
+	MemTotalBytes     int64
+	MemAvailableBytes int64
+	CPUCount          int32
 }
 
 // HeartbeatResult tells the agent when to send its next heartbeat.

@@ -76,13 +76,21 @@ func (h *gatewayHandler) Register(ctx context.Context, req *connect.Request[agen
 
 func (h *gatewayHandler) Heartbeat(ctx context.Context, req *connect.Request[agentv1.HeartbeatRequest]) (*connect.Response[agentv1.HeartbeatResponse], error) {
 	res, err := h.svc.Heartbeat(ctx, HeartbeatInput{
-		AgentID:         req.Msg.GetAgentId(),
-		Credential:      req.Msg.GetCredential(),
-		AgentVersion:    req.Msg.GetAgentVersion(),
-		DockerAvailable: reportedDockerAvailable(req.Msg),
-		DockerVersion:   clampFact(req.Msg.GetDockerVersion()),
-		OS:              clampFact(req.Msg.GetOs()),
-		Arch:            clampFact(req.Msg.GetArch()),
+		AgentID:           req.Msg.GetAgentId(),
+		Credential:        req.Msg.GetCredential(),
+		AgentVersion:      req.Msg.GetAgentVersion(),
+		DockerAvailable:   reportedDockerAvailable(req.Msg),
+		DockerVersion:     clampFact(req.Msg.GetDockerVersion()),
+		OS:                clampFact(req.Msg.GetOs()),
+		Arch:              clampFact(req.Msg.GetArch()),
+		CaddyAvailable:    reportedCaddyAvailable(req.Msg),
+		CaddyRunning:      req.Msg.GetCaddyRunning(),
+		CaddyVersion:      clampFact(req.Msg.GetCaddyVersion()),
+		DiskTotalBytes:    clampBytes(req.Msg.GetDiskTotalBytes()),
+		DiskFreeBytes:     clampBytes(req.Msg.GetDiskFreeBytes()),
+		MemTotalBytes:     clampBytes(req.Msg.GetMemTotalBytes()),
+		MemAvailableBytes: clampBytes(req.Msg.GetMemAvailableBytes()),
+		CPUCount:          clampCPUCount(req.Msg.GetCpuCount()),
 	})
 	if err != nil {
 		return nil, problem.ToConnect(err)
@@ -119,6 +127,36 @@ func reportedDockerAvailable(m *agentv1.HeartbeatRequest) *bool {
 	return &v
 }
 
+// reportedCaddyAvailable applies the same tri-state logic to the extended (PLO-95) facts.
+// An agent that reports them always sets cpu_count (runtime.NumCPU, never zero), so a zero
+// cpu_count means the extended facts are absent — Caddy availability is unknown (nil), and
+// readiness skips the Caddy/disk/memory checks rather than falsely blocking an older agent.
+func reportedCaddyAvailable(m *agentv1.HeartbeatRequest) *bool {
+	if m.GetCpuCount() == 0 {
+		return nil
+	}
+	v := m.GetCaddyAvailable()
+	return &v
+}
+
+// clampCPUCount bounds an untrusted, agent-reported CPU count before it is stored.
+func clampCPUCount(n uint32) int32 {
+	const maxCPU = 4096
+	if n > maxCPU {
+		return maxCPU
+	}
+	return int32(n)
+}
+
+// clampBytes drops a nonsensical negative byte count from an untrusted agent to zero
+// ("not reported"), so it can never poison the readiness thresholds.
+func clampBytes(n int64) int64 {
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
 func toProto(a Agent, now time.Time) *controlplanev1.Agent {
 	lastSeen := ""
 	if a.LastSeenAt != nil {
@@ -126,19 +164,27 @@ func toProto(a Agent, now time.Time) *controlplanev1.Agent {
 	}
 	readiness, reason := a.Readiness(now)
 	return &controlplanev1.Agent{
-		Id:              a.ID,
-		ServerId:        a.ServerID,
-		WorkspaceId:     a.WorkspaceID,
-		AgentVersion:    a.AgentVersion,
-		Status:          a.Status(now),
-		Readiness:       readiness,
-		ReadinessReason: reason,
-		DockerAvailable: a.DockerAvailable != nil && *a.DockerAvailable,
-		DockerVersion:   a.DockerVersion,
-		Os:              a.OS,
-		Arch:            a.Arch,
-		LastSeenAt:      lastSeen,
-		CreatedAt:       a.CreatedAt.UTC().Format(time.RFC3339),
+		Id:                a.ID,
+		ServerId:          a.ServerID,
+		WorkspaceId:       a.WorkspaceID,
+		AgentVersion:      a.AgentVersion,
+		Status:            a.Status(now),
+		Readiness:         readiness,
+		ReadinessReason:   reason,
+		DockerAvailable:   a.DockerAvailable != nil && *a.DockerAvailable,
+		DockerVersion:     a.DockerVersion,
+		Os:                a.OS,
+		Arch:              a.Arch,
+		CaddyAvailable:    a.CaddyAvailable != nil && *a.CaddyAvailable,
+		CaddyRunning:      a.CaddyRunning,
+		CaddyVersion:      a.CaddyVersion,
+		DiskTotalBytes:    a.DiskTotalBytes,
+		DiskFreeBytes:     a.DiskFreeBytes,
+		MemTotalBytes:     a.MemTotalBytes,
+		MemAvailableBytes: a.MemAvailableBytes,
+		CpuCount:          uint32(a.CPUCount),
+		LastSeenAt:        lastSeen,
+		CreatedAt:         a.CreatedAt.UTC().Format(time.RFC3339),
 	}
 }
 
