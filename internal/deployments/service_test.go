@@ -382,6 +382,100 @@ func TestCreateForService_RejectsPrivateGit(t *testing.T) {
 	}
 }
 
+func TestRollbackToDeployment_ImageReproducesArtifactAndLinks(t *testing.T) {
+	store := &fakeStore{
+		getOK: true,
+		getDep: Deployment{
+			ID: testDeployID, ServiceID: testServiceID, EnvironmentID: testEnvID,
+			ProjectID: testProjectID, WorkspaceID: testWorkspace, ServerID: testServerID,
+			ImageRef: "traefik/whoami:latest", ContainerPort: 80,
+			Status: StatusSuperseded, SourceKind: SourceImage,
+		},
+	}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, fakeAuthz{}, rec)
+
+	if _, err := svc.RollbackToDeployment(authedCtx(), testDeployID); err != nil {
+		t.Fatalf("rollback failed: %v", err)
+	}
+	if store.inserted.RolledBackFrom != testDeployID {
+		t.Errorf("rolled_back_from = %q, want target id %q", store.inserted.RolledBackFrom, testDeployID)
+	}
+	if store.inserted.ImageRef != "traefik/whoami:latest" || store.inserted.ContainerPort != 80 {
+		t.Errorf("inserted = %+v, want the target's image + port reproduced", store.inserted)
+	}
+	if store.inserted.ServiceID != testServiceID || store.inserted.ServerID != testServerID {
+		t.Errorf("inserted scope = %+v, want the same service + server", store.inserted)
+	}
+	if rec.action != "deployment.rollback" {
+		t.Errorf("audit action = %q, want deployment.rollback", rec.action)
+	}
+}
+
+func TestRollbackToDeployment_GitPinsToBuiltCommit(t *testing.T) {
+	store := &fakeStore{
+		getOK: true,
+		getDep: Deployment{
+			ID: testDeployID, ServiceID: testServiceID, EnvironmentID: testEnvID,
+			ProjectID: testProjectID, WorkspaceID: testWorkspace, ServerID: testServerID,
+			ContainerPort: 3000, Status: StatusRunning,
+			SourceKind: SourceGit, SourceAccess: "public",
+			CloneURL: "https://github.com/o/r.git", GitRef: "main", CommitSha: "deadbeefcafe",
+		},
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+
+	if _, err := svc.RollbackToDeployment(authedCtx(), testDeployID); err != nil {
+		t.Fatalf("rollback failed: %v", err)
+	}
+	g := store.insertedGit
+	if g.RolledBackFrom != testDeployID {
+		t.Errorf("rolled_back_from = %q, want %q", g.RolledBackFrom, testDeployID)
+	}
+	// Pin to the exact commit the target built, not its branch, so the rebuild is reproducible.
+	if g.GitRef != "deadbeefcafe" {
+		t.Errorf("git ref = %q, want the built commit", g.GitRef)
+	}
+	if g.CloneURL != "https://github.com/o/r.git" || g.SourceAccess != "public" || g.ContainerPort != 3000 {
+		t.Errorf("inserted git = %+v, want the target's repo/access/port reproduced", g)
+	}
+}
+
+func TestRollbackToDeployment_RejectsUnhealthyTarget(t *testing.T) {
+	store := &fakeStore{
+		getOK:  true,
+		getDep: Deployment{ID: testDeployID, WorkspaceID: testWorkspace, Status: StatusFailed, SourceKind: SourceImage, ImageRef: "x:latest"},
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+
+	_, err := svc.RollbackToDeployment(authedCtx(), testDeployID)
+	wantKind(t, err, problem.KindInvalidInput)
+	if store.inserted.ServiceID != "" || store.insertedGit.ServiceID != "" {
+		t.Error("rollback inserted a deployment for a non-healthy target")
+	}
+}
+
+func TestRollbackToDeployment_DeniedWritesNothing(t *testing.T) {
+	store := &fakeStore{
+		getOK:  true,
+		getDep: Deployment{ID: testDeployID, WorkspaceID: testWorkspace, Status: StatusRunning, SourceKind: SourceImage, ImageRef: "x:latest", ContainerPort: 80},
+	}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
+
+	_, err := svc.RollbackToDeployment(authedCtx(), testDeployID)
+	wantKind(t, err, problem.KindPermissionDenied)
+	if store.inserted.ServiceID != "" || rec.called {
+		t.Error("denied rollback wrote a deployment or an audit row")
+	}
+}
+
+func TestRollbackToDeployment_NotFound(t *testing.T) {
+	svc := newSvc(&fakeStore{getOK: false}, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.RollbackToDeployment(authedCtx(), testDeployID)
+	wantKind(t, err, problem.KindNotFound)
+}
+
 func TestEnqueueFirstDeployment_InsertsWithinTx(t *testing.T) {
 	store := &fakeStore{svc: imageService(), svcOK: true}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})

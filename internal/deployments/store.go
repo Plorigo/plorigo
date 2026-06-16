@@ -66,28 +66,32 @@ type Store interface {
 	MarkDomainsRouteSync(ctx context.Context, tx database.Tx, serviceID string, hostnames []string, status, message string) error
 }
 
-// NewDeployment is the data to insert a queued image deployment.
+// NewDeployment is the data to insert a queued image deployment. RolledBackFrom is empty for
+// a normal deploy and set to the restored deployment's id when this is a rollback.
 type NewDeployment struct {
-	ServiceID     string
-	EnvironmentID string
-	ProjectID     string
-	WorkspaceID   string
-	ServerID      string
-	ImageRef      string
-	ContainerPort int32
+	ServiceID      string
+	EnvironmentID  string
+	ProjectID      string
+	WorkspaceID    string
+	ServerID       string
+	ImageRef       string
+	ContainerPort  int32
+	RolledBackFrom string
 }
 
 // NewDeploymentFromGit is the data to insert a queued git (build-from-source) deployment.
+// RolledBackFrom is empty for a normal deploy and set when this is a rollback.
 type NewDeploymentFromGit struct {
-	ServiceID     string
-	EnvironmentID string
-	ProjectID     string
-	WorkspaceID   string
-	ServerID      string
-	ContainerPort int32
-	SourceAccess  string
-	CloneURL      string
-	GitRef        string
+	ServiceID      string
+	EnvironmentID  string
+	ProjectID      string
+	WorkspaceID    string
+	ServerID       string
+	ContainerPort  int32
+	SourceAccess   string
+	CloneURL       string
+	GitRef         string
+	RolledBackFrom string
 }
 
 // StatusUpdate is an agent's reported transition for a deployment. A zero host port /

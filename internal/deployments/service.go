@@ -105,6 +105,91 @@ func (s *service) CreateForService(ctx context.Context, in CreateForServiceInput
 	return created, nil
 }
 
+// RollbackToDeployment redeploys a previous healthy version: it enqueues a NEW deployment
+// that reproduces the target deployment's artifact — the same pre-built image, or the same
+// repo pinned to the exact built commit — on the same service and server, linked back via
+// rolled_back_from so the action shows in deployment history. The new deployment runs the
+// normal flow (health check, then traffic switch), so a failed rollback keeps the current
+// running release and leaves its own logs to diagnose. The target must be a previously
+// healthy deployment (running or superseded).
+func (s *service) RollbackToDeployment(ctx context.Context, targetDeploymentID string) (Deployment, error) {
+	if _, err := id.Parse(targetDeploymentID); err != nil {
+		return Deployment{}, problem.InvalidInput("a valid deployment id is required")
+	}
+	target, ok, err := s.store.GetDeployment(ctx, targetDeploymentID)
+	if err != nil {
+		return Deployment{}, problem.Internalf(err, "rollback deployment")
+	}
+	if !ok {
+		return Deployment{}, problem.NotFound("deployment %s not found", targetDeploymentID)
+	}
+
+	caller := principal.FromContext(ctx)
+	// A rollback creates a deployment, so it takes the same privilege as a deploy.
+	if err := s.authorizer.Authorize(ctx, caller, authz.ActionDeploymentCreate, authz.Resource{Type: "deployment", WorkspaceID: target.WorkspaceID}); err != nil {
+		return Deployment{}, err
+	}
+
+	// Only a previously healthy version is a valid target: it ran successfully at least once.
+	// A queued/in-flight/failed deployment is not a known-good state to restore.
+	if target.Status != StatusRunning && target.Status != StatusSuperseded {
+		return Deployment{}, problem.InvalidInput("can only roll back to a previously healthy deployment; %s is %q", target.ID, target.Status)
+	}
+
+	var created Deployment
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		var txErr error
+		if created, txErr = s.insertRollback(ctx, tx, target); txErr != nil {
+			return txErr
+		}
+		return s.audit.Record(ctx, tx, "deployment.rollback", "deployment", created.ID, target.WorkspaceID, caller.UserID)
+	})
+	if err != nil {
+		return Deployment{}, mapErr(err, "rollback deployment")
+	}
+	s.log.Info("deployment rolled back", "id", created.ID, "rolled_back_from", target.ID, "service_id", target.ServiceID, "server_id", target.ServerID, "workspace_id", target.WorkspaceID, "actor", caller.UserID)
+	return created, nil
+}
+
+// insertRollback enqueues a deployment reproducing target's artifact inside tx, linked back
+// via rolled_back_from. A git target rebuilds the exact commit it ran (so the rollback does
+// not depend on a built image still being on the server); an image target reruns its image.
+func (s *service) insertRollback(ctx context.Context, tx database.Tx, target Deployment) (Deployment, error) {
+	if target.SourceKind == SourceGit {
+		// Pin to the exact commit the target built; fall back to its ref if unknown.
+		ref := target.CommitSha
+		if ref == "" {
+			ref = target.GitRef
+		}
+		return s.store.InsertDeploymentFromGit(ctx, tx, NewDeploymentFromGit{
+			ServiceID:      target.ServiceID,
+			EnvironmentID:  target.EnvironmentID,
+			ProjectID:      target.ProjectID,
+			WorkspaceID:    target.WorkspaceID,
+			ServerID:       target.ServerID,
+			ContainerPort:  target.ContainerPort,
+			SourceAccess:   target.SourceAccess,
+			CloneURL:       target.CloneURL,
+			GitRef:         ref,
+			RolledBackFrom: target.ID,
+		})
+	}
+	imageRef, err := validateImageRef(target.ImageRef)
+	if err != nil {
+		return Deployment{}, err
+	}
+	return s.store.InsertDeployment(ctx, tx, NewDeployment{
+		ServiceID:      target.ServiceID,
+		EnvironmentID:  target.EnvironmentID,
+		ProjectID:      target.ProjectID,
+		WorkspaceID:    target.WorkspaceID,
+		ServerID:       target.ServerID,
+		ImageRef:       imageRef,
+		ContainerPort:  target.ContainerPort,
+		RolledBackFrom: target.ID,
+	})
+}
+
 // EnqueueFirstDeployment queues a brand new service's first deployment inside the CALLER's
 // transaction (the services module, which has already authorized the create and validated
 // the server). It resolves the service through the tx — so it sees the service inserted

@@ -57,27 +57,28 @@ type AuditEvent struct {
 }
 
 type Deployment struct {
-	ID            string
-	EnvironmentID string
-	ProjectID     string
-	WorkspaceID   string
-	ServerID      string
-	ImageRef      string
-	ContainerPort int32
-	HostPort      int32
-	ContainerID   string
-	Status        string
-	Message       string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	SourceKind    string
-	SourceAccess  string
-	CloneUrl      string
-	GitRef        string
-	CommitSha     string
-	BuiltImageRef string
-	RouteUrl      string
-	ServiceID     string
+	ID             string
+	EnvironmentID  string
+	ProjectID      string
+	WorkspaceID    string
+	ServerID       string
+	ImageRef       string
+	ContainerPort  int32
+	HostPort       int32
+	ContainerID    string
+	Status         string
+	Message        string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	SourceKind     string
+	SourceAccess   string
+	CloneUrl       string
+	GitRef         string
+	CommitSha      string
+	BuiltImageRef  string
+	RouteUrl       string
+	ServiceID      string
+	RolledBackFrom *string
 }
 
 type DeploymentEvent struct {
