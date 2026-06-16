@@ -11,10 +11,11 @@ import (
 	"github.com/plorigo/plorigo/proto/gen/controlplane/v1/controlplanev1connect"
 )
 
-// Deps are what the services module needs. Audit, Policy, Crypto, GitHub, and Enqueuer are
-// CONSUMER-DEFINED ports (authz.Authorizer is satisfied by *policy.Service, Recorder by
-// *audit.Service, SecretBox by *crypto.Box, GitHubClient by *github.Client, Enqueuer by
-// *deployments.Service), wired in internal/app — services imports none of those modules.
+// Deps are what the services module needs. Audit, Policy, Crypto, GitHub, Enqueuer, and
+// EnvVars are CONSUMER-DEFINED ports (authz.Authorizer is satisfied by *policy.Service,
+// Recorder by *audit.Service, SecretBox by *crypto.Box, GitHubClient by *github.Client,
+// Enqueuer by *deployments.Service, EnvVarSetter by *envvars.Service), wired in internal/app
+// — services imports none of those modules.
 type Deps struct {
 	DB       *database.DB
 	Audit    Recorder
@@ -22,6 +23,7 @@ type Deps struct {
 	Crypto   SecretBox
 	GitHub   GitHubClient
 	Enqueuer Enqueuer
+	EnvVars  EnvVarSetter
 	Log      *slog.Logger
 }
 
@@ -34,7 +36,7 @@ type Module struct {
 func New(d Deps) *Module {
 	store := newPostgresStore(d.DB)
 	return &Module{
-		service: newService(d.DB, store, d.Crypto, d.GitHub, d.Enqueuer, d.Policy, d.Audit, d.Log),
+		service: newService(d.DB, store, d.Crypto, d.GitHub, d.Enqueuer, d.EnvVars, d.Policy, d.Audit, d.Log),
 	}
 }
 

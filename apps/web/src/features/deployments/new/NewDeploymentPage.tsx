@@ -7,6 +7,7 @@ import {
   Boxes,
   ChevronDown,
   Container,
+  Database,
   FlaskConical,
   FolderGit2,
   GitBranch,
@@ -118,6 +119,8 @@ export function NewDeploymentPage() {
   const [repoBranch, setRepoBranch] = useState("");
   // Templates.
   const [templateFilter, setTemplateFilter] = useState("");
+  // Managed database (Postgres) — its own name, independent of the source-driven name above.
+  const [dbName, setDbName] = useState("");
   // Shared action state — busyKey names the item being acted on so only its button spins.
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -419,6 +422,42 @@ export function NewDeploymentPage() {
     }
   }
 
+  // Provision a managed Postgres database. Unlike the other lanes, CreateDatabaseService
+  // takes a single environment (the control plane picks the image/port and generates the
+  // credentials), so it provisions into the FIRST selected environment. The connection URI
+  // is returned ONCE here (it embeds the generated password), so we surface it in the toast
+  // and then land on the new service's detail page where the Connection panel rebuilds it.
+  async function createDatabase() {
+    if (!guardTarget()) return;
+    const environmentId = environmentIds[0];
+    const serviceName = dbName.trim() || "postgres";
+    setBusyKey("database");
+    setError("");
+    try {
+      const { service, connectionUri } = await serviceClient.createDatabaseService({
+        environmentId,
+        name: serviceName,
+        templateId: "postgres",
+        serverId,
+        deployNow: true,
+      });
+      if (!service) throw new Error("the database service was not created");
+      setBusyKey(null);
+      void queryClient.invalidateQueries({ queryKey: ["services"] });
+      void queryClient.invalidateQueries({ queryKey: ["deployments"] });
+      toast.success("Database provisioned", {
+        description: connectionUri || "Connection details are on the service page.",
+      });
+      void navigate({
+        to: "/projects/$projectId/services/$serviceId",
+        params: { projectId, serviceId: service.id },
+      });
+    } catch (err) {
+      setBusyKey(null);
+      setError(formatErr(err, envName(environmentId), serviceName, "Could not provision the database"));
+    }
+  }
+
   return (
     <div className="mx-auto w-full max-w-6xl space-y-6">
       {search.project ? (
@@ -441,7 +480,8 @@ export function NewDeploymentPage() {
           <h1 className="text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">Add a service</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
             A service is a deployable component — a public image, a public Git repo (its Dockerfile builds on your
-            server), or a connected repository. Name it, choose where it lands, then pick what to deploy.
+            server), a connected repository, or a managed Postgres database. Name it, choose where it lands, then pick
+            what to deploy.
           </p>
         </div>
       </div>
@@ -637,6 +677,41 @@ export function NewDeploymentPage() {
             {quickIsRepo && quickValue.trim() && (
               <DetectionHint detection={detection} isGitHub={!!parseGitHubRepo(quickValue)} projectName={projectName} />
             )}
+          </Panel>
+
+          {/* Database — provision a managed Postgres service (private, reachable by siblings). */}
+          <Panel className="p-4 sm:p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <div className="min-w-0 flex-1">
+                <span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-foreground">
+                  <Database className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                  PostgreSQL database
+                </span>
+                <div className="relative">
+                  <Database className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                  <Input
+                    value={dbName}
+                    onChange={(e) => {
+                      setError("");
+                      setDbName(e.target.value);
+                    }}
+                    placeholder="postgres"
+                    className="pl-9"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                  />
+                </div>
+              </div>
+              <Button onClick={createDatabase} disabled={busy || !canDeploy}>
+                <Database className="h-4 w-4" aria-hidden="true" />
+                {busyKey === "database" ? "Provisioning…" : "Add database"}
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              {environmentIds.length > 1
+                ? `Provisions a private Postgres database in ${envName(environmentIds[0])} (databases are created in one environment). Credentials are generated for you; data is not yet persisted across redeploys.`
+                : "Provisions a private Postgres database with generated credentials. Data is not yet persisted across redeploys."}
+            </p>
           </Panel>
 
           <div className="grid gap-6 lg:grid-cols-2">

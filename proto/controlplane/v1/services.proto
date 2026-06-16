@@ -64,6 +64,28 @@ message CreateServiceResponse {
   string deployment_id = 2;
 }
 
+// CreateDatabaseService provisions a managed database (e.g. Postgres) as a PRIVATE service
+// from a built-in template: the control plane picks the image and port, generates the
+// credentials, and stores them as the service's env vars so the container starts with them
+// and siblings can connect over the per-environment network. Connection info is returned once
+// so the dashboard can show it. Data is NOT persisted across redeploys yet (volumes are a
+// later slice) — treat it as ephemeral.
+message CreateDatabaseServiceRequest {
+  string environment_id = 1;
+  string name = 2;          // the service name (its slug becomes the in-network hostname)
+  string template_id = 3;   // which managed database to provision: "postgres"
+  string server_id = 4;     // required when deploy_now
+  bool deploy_now = 5;      // create the service AND enqueue its first deployment
+}
+
+message CreateDatabaseServiceResponse {
+  Service service = 1;
+  string deployment_id = 2; // the first deployment's id when deploy_now enqueued one
+  // The connection URI for the provisioned database (e.g. postgresql://user:pass@host:5432/db),
+  // assembled from the generated credentials. Returned here so the dashboard can surface it.
+  string connection_uri = 3;
+}
+
 message GetServiceRequest {
   string id = 1;
 }
@@ -159,6 +181,8 @@ message DetectFrameworkResponse {
 // service. Every RPC is session/token-authenticated and policy-authorized.
 service ServiceService {
   rpc CreateService(CreateServiceRequest) returns (CreateServiceResponse);
+  // CreateDatabaseService provisions a managed database service from a built-in template.
+  rpc CreateDatabaseService(CreateDatabaseServiceRequest) returns (CreateDatabaseServiceResponse);
   rpc GetService(GetServiceRequest) returns (GetServiceResponse);
   rpc ListServicesByEnvironment(ListServicesByEnvironmentRequest) returns (ListServicesByEnvironmentResponse);
   rpc ListServicesByProject(ListServicesByProjectRequest) returns (ListServicesByProjectResponse);

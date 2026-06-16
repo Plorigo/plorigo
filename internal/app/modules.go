@@ -155,6 +155,7 @@ func (a *App) buildModules() error {
 		Crypto:   box,
 		GitHub:   github.NewClient(github.Config{}),
 		Enqueuer: a.deployments.Service(),
+		EnvVars:  a.envvars.Service(),
 		Log:      a.log,
 	})
 

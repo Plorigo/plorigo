@@ -14,6 +14,8 @@ package envvars
 import (
 	"context"
 	"time"
+
+	"github.com/plorigo/plorigo/internal/platform/database"
 )
 
 // EnvVar is the domain model (independent of DB and transport types). WorkspaceID is
@@ -48,4 +50,9 @@ type Service interface {
 	Set(ctx context.Context, in SetInput) (EnvVar, error)
 	List(ctx context.Context, serviceID string) ([]EnvVar, error)
 	Delete(ctx context.Context, in DeleteInput) error
+	// SetWithinTx writes service env vars inside the CALLER's transaction, for another module
+	// provisioning a managed service's generated config (e.g. a database's credentials) so the
+	// config and the service row commit together. It performs NO authorization — the caller has
+	// already authorized the service create. Keys are validated and values bounded.
+	SetWithinTx(ctx context.Context, tx database.Tx, serviceID string, vars map[string]string) error
 }

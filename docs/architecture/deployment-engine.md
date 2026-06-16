@@ -157,3 +157,22 @@ A service's **visibility** decides what is exposed to the outside:
 - **`private`** — publishes **nothing** to the host and has **no Caddy route** (so no
   `route_url`). It is reachable only by its siblings over the per-environment network — the
   shape for a database, cache, or internal worker.
+
+## Managed database services
+
+A **managed database** (Postgres today) is provisioned as a `template` service from a small,
+**control-plane-owned catalogue** (`internal/services` — there is no template registry table):
+the control plane fixes the image and port, forces **`private`** visibility (a database must
+never get a public route), generates the credentials, and stores them as the service's **env
+vars** so the agent injects them when it starts the container. Credentials + the service +
+the first deployment commit in one transaction (the credentials are written through a
+consumer-defined env-var port, the same shape as the deploy `Enqueuer`). Siblings connect over
+the per-environment network at `{slug}:{port}`; the connection URI is returned once at create
+time and the dashboard also rebuilds it from the stored env vars.
+
+> [!NOTE]
+> This is the **basic** path. Data is **not yet persisted across redeploys** — the agent does
+> not mount volumes, so a redeploy starts a fresh database (persistent volumes are a later
+> slice; see [ROADMAP.md](../../ROADMAP.md)). The generated password lives in the service's
+> (plaintext, readable) env vars rather than the sealed-secret path, because secret *injection*
+> at deploy time isn't wired yet — moving managed credentials onto that path is a follow-up.

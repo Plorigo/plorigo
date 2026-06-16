@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/plorigo/plorigo/internal/platform/database"
 	"github.com/plorigo/plorigo/internal/platform/problem"
 	controlplanev1 "github.com/plorigo/plorigo/proto/gen/controlplane/v1"
 )
@@ -26,6 +27,9 @@ func (f *fakeService) List(_ context.Context, _ string) ([]EnvVar, error) {
 	return f.list, f.err
 }
 func (f *fakeService) Delete(_ context.Context, _ DeleteInput) error {
+	return f.err
+}
+func (f *fakeService) SetWithinTx(_ context.Context, _ database.Tx, _ string, _ map[string]string) error {
 	return f.err
 }
 
