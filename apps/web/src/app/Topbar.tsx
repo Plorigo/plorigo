@@ -1,12 +1,10 @@
 import { useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
-import { Box, Boxes, Menu, Search } from "lucide-react";
+import { Menu, Search } from "lucide-react";
 
 import { DemoBadge } from "@/components/DemoBadge";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
-import { useEffectiveProjectId } from "@/lib/projectScope";
 import { AddNewMenu } from "./AddNewMenu";
 import { useCommandMenu } from "./commandMenuStore";
 import { Sidebar } from "./Sidebar";
@@ -15,8 +13,6 @@ import { Sidebar } from "./Sidebar";
 // lean: mobile menu, the ⌘K search trigger, theme, demo indicator, primary action.
 export function Topbar() {
   const toggleCommand = useCommandMenu((s) => s.toggle);
-  const navigate = useNavigate();
-  const projectId = useEffectiveProjectId();
   const [sheetOpen, setSheetOpen] = useState(false);
 
   return (
@@ -48,20 +44,6 @@ export function Topbar() {
       <div className="ml-auto flex items-center gap-2">
         <DemoBadge />
         <ThemeToggle />
-        {/* Quick adds for the two things you create most; the full menu carries the rest. */}
-        <Button variant="ghost" size="sm" className="hidden md:inline-flex" onClick={() => navigate({ to: "/projects/new" })}>
-          <Box className="h-4 w-4" aria-hidden="true" />
-          Project
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          className="hidden md:inline-flex"
-          onClick={() => navigate({ to: "/deployments/new", search: projectId ? { project: projectId } : {} })}
-        >
-          <Boxes className="h-4 w-4" aria-hidden="true" />
-          Service
-        </Button>
         <AddNewMenu />
       </div>
     </header>
