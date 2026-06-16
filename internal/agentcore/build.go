@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,12 +16,16 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+
+	"github.com/plorigo/plorigo/internal/builder"
 )
 
-// build.go is the agent's build-from-Git path: clone a PUBLIC repo and build its Dockerfile
-// into a local image the deploy loop then runs. No credential is ever used — private repos
-// are gated upstream (the control plane only dispatches public sources this slice). See
-// docs/architecture/agent.md and deployment-engine.md.
+// build.go is the agent's build-from-Git path: clone a PUBLIC repo and build it into a local
+// image the deploy loop then runs. When the repo ships its own Dockerfile we build that; when
+// it doesn't, we detect a supported framework (Node/Vite/Next.js) with internal/builder and
+// build a generated Dockerfile. No credential is ever used — private repos are gated upstream
+// (the control plane only dispatches public sources this slice). See docs/architecture/agent.md
+// and deployment-engine.md.
 
 // clone does a shallow, anonymous checkout of cloneURL at gitRef into dir and returns the
 // exact commit SHA it landed on. gitRef is treated as a branch (the value sources store);
@@ -51,17 +56,38 @@ func (d *dockerClient) clone(ctx context.Context, cloneURL, gitRef, dir string, 
 	return sha, nil
 }
 
-// build builds the Dockerfile at the root of dir into the local image tag using BuildKit
-// (DOCKER_BUILDKIT=1), streaming the build output through emit. A missing Dockerfile is
-// reported as a clear, plain-English failure rather than a raw builder error.
+// build builds dir into the local image tag using BuildKit (DOCKER_BUILDKIT=1), streaming the
+// build output through emit. It prefers the repo's own Dockerfile; when there is none it
+// detects a supported framework (Node/Vite/Next.js) and writes a generated Dockerfile to build
+// instead. An unsupported repo is reported as clear, plain-English next steps rather than a raw
+// builder error.
 func (d *dockerClient) build(ctx context.Context, dir, tag string, emit func(string)) error {
+	dockerfile := "Dockerfile"
 	if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
-		return fmt.Errorf("no Dockerfile at the repository root — Dockerfile builds are supported now; Nixpacks, Compose, and static-site builds are coming")
+		// No Dockerfile in the repo — detect a framework and generate one. The rules and
+		// templates live in internal/builder, shared with the control plane so the dashboard
+		// preview matches exactly what we build here.
+		plan, derr := builder.Detect(builder.OSFiles(dir))
+		if derr != nil {
+			return fmt.Errorf("inspect repository: %w", derr)
+		}
+		if plan.Status != builder.StatusDetected {
+			return errors.New(plan.NextSteps)
+		}
+		const generated = "Dockerfile.plorigo"
+		if err := os.WriteFile(filepath.Join(dir, generated), []byte(plan.Dockerfile), 0o600); err != nil {
+			return fmt.Errorf("write generated Dockerfile: %w", err)
+		}
+		dockerfile = generated
+		emit(fmt.Sprintf("no Dockerfile found — generated one for %s (%s, node %s)", plan.RuntimeLabel(), plan.PackageManager, plan.NodeVersion))
+		for _, line := range strings.Split(strings.TrimRight(plan.Dockerfile, "\n"), "\n") {
+			emit("│ " + line)
+		}
 	}
 	// Build with the same daemon the agent already targets (the CLI honors DOCKER_HOST);
 	// DOCKER_BUILDKIT=1 forces BuildKit regardless of the host default. The context is the
 	// cloned tree, so no files outside dir are sent.
-	cmd := exec.CommandContext(ctx, "docker", "build", "--tag", tag, "--file", "Dockerfile", ".")
+	cmd := exec.CommandContext(ctx, "docker", "build", "--tag", tag, "--file", dockerfile, ".")
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=1")
 	w := &lineEmitter{emit: emit}

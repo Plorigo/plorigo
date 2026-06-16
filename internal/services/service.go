@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/plorigo/plorigo/internal/builder"
 	"github.com/plorigo/plorigo/internal/platform/authz"
 	"github.com/plorigo/plorigo/internal/platform/database"
 	"github.com/plorigo/plorigo/internal/platform/github"
@@ -328,6 +329,62 @@ func (s *service) DeleteService(ctx context.Context, serviceID string) error {
 	}
 	s.log.Info("service deleted", "id", serviceID, "workspace_id", workspaceID, "actor", caller.UserID)
 	return nil
+}
+
+// DetectFramework previews how a PUBLIC repo would build: it reads the repo's files (no
+// credential) and runs the shared internal/builder detection — the same rules the agent runs
+// at build time, so the dashboard preview is exactly what will be built. It creates nothing and
+// touches no tenant data, so it relies on the session auth interceptor rather than per-resource
+// authorization.
+func (s *service) DetectFramework(ctx context.Context, in DetectInput) (Detection, error) {
+	owner, repo, err := parsePublicRepo(in.RepoURL)
+	if err != nil {
+		return Detection{}, err
+	}
+	// Read with no token: a private/missing repo is simply invisible, and only public repos
+	// are buildable in this slice.
+	info, err := s.gh.GetRepository(ctx, "", owner, repo)
+	if err != nil {
+		return Detection{}, mapGitHubErr(err)
+	}
+	if info.Private {
+		return Detection{}, problem.InvalidInput("%s is private; connect GitHub to deploy a private repository", info.FullName)
+	}
+	ref := strings.TrimSpace(in.Branch)
+	if ref == "" {
+		ref = info.DefaultBranch
+	}
+	plan, err := builder.Detect(githubFiles{ctx: ctx, gh: s.gh, owner: info.Owner, repo: info.Name, ref: ref})
+	if err != nil {
+		return Detection{}, problem.Internalf(err, "detect framework")
+	}
+	return Detection{
+		Status:         string(plan.Status),
+		Runtime:        plan.Runtime,
+		RuntimeLabel:   plan.RuntimeLabel(),
+		PackageManager: plan.PackageManager,
+		NodeVersion:    plan.NodeVersion,
+		BuildCommand:   plan.BuildCommand,
+		StartCommand:   plan.StartCommand,
+		ContainerPort:  plan.Port,
+		Dockerfile:     plan.Dockerfile,
+		NextSteps:      plan.NextSteps,
+	}, nil
+}
+
+// githubFiles adapts the GitHubClient port to builder.Files for a public repo at ref. The
+// request context is captured because builder.Files is context-free (so the agent's local-file
+// implementation needs none); this adapter is short-lived and scoped to one DetectFramework
+// call.
+type githubFiles struct {
+	ctx         context.Context
+	gh          GitHubClient
+	owner, repo string
+	ref         string
+}
+
+func (g githubFiles) ReadFile(path string) ([]byte, bool, error) {
+	return g.gh.GetFileContent(g.ctx, "", g.owner, g.repo, g.ref, path)
 }
 
 // resolveSource validates the chosen source and (for git) confirms the repo + branch with

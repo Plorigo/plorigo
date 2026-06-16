@@ -30,6 +30,10 @@ const (
 	defaultTimeout      = 10 * time.Second
 	apiVersion          = "2022-11-28"
 	acceptJSON          = "application/vnd.github+json"
+	acceptRaw           = "application/vnd.github.raw"
+	// maxFileBytes caps a single file read (framework detection only needs small text files
+	// like package.json or a lockfile); it bounds memory against a hostile or huge file.
+	maxFileBytes = 1 << 20
 )
 
 // Sentinel errors. The caller (sources service) maps these to plain-English domain
@@ -223,6 +227,34 @@ func (c *Client) GetBranch(ctx context.Context, token, owner, repo, branch strin
 	return c.getJSON(ctx, token, path, &ignore)
 }
 
+// GetFileContent returns the raw bytes of a single file at ref (a branch, tag, or commit SHA).
+// ok is false (nil error) when the file does not exist. token may be empty for a public repo.
+// It is used by framework detection to read a repo's package.json, lockfile, and configs.
+func (c *Client) GetFileContent(ctx context.Context, token, owner, repo, ref, path string) ([]byte, bool, error) {
+	u := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/contents/" + escapeContentsPath(path)
+	if ref != "" {
+		u += "?ref=" + url.QueryEscape(ref)
+	}
+	data, err := c.getRaw(ctx, token, u)
+	if errors.Is(err, ErrNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return data, true, nil
+}
+
+// escapeContentsPath escapes each segment of a repo file path while keeping the separators, so
+// a nested path is a valid contents-API path.
+func escapeContentsPath(p string) string {
+	parts := strings.Split(p, "/")
+	for i, s := range parts {
+		parts[i] = url.PathEscape(s)
+	}
+	return strings.Join(parts, "/")
+}
+
 // RevokeToken revokes a single OAuth access token for this app at GitHub (the app
 // authorization is otherwise left intact). It authenticates with the app's client
 // credentials, not the token. Best-effort by contract: callers log and continue on
@@ -305,6 +337,36 @@ func (c *Client) getJSON(ctx context.Context, token, path string, out any) error
 		return fmt.Errorf("github: decode %s: %w", path, err)
 	}
 	return nil
+}
+
+// getRaw performs an authenticated GET and returns the (capped) response body, mapping non-2xx
+// responses to sentinel errors. Unlike getJSON it asks for the raw media type, so the GitHub
+// contents API returns the file bytes directly instead of a base64-wrapped JSON envelope.
+func (c *Client) getRaw(ctx context.Context, token, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.apiBaseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("github: build request: %w", err)
+	}
+	req.Header.Set("Accept", acceptRaw)
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("github: request %s: %w", path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode/100 != 2 {
+		return nil, classify(resp)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFileBytes))
+	if err != nil {
+		return nil, fmt.Errorf("github: read %s: %w", path, err)
+	}
+	return data, nil
 }
 
 // classify maps a non-2xx response to a sentinel error. A 403 with the rate-limit

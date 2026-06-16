@@ -39,19 +39,24 @@ side of Caddy and container management is in [agent.md](./agent.md).
 >   validates/reloads a Caddy route to that host port, supersedes the **service's** previous
 >   container, and reports status + logs (steps 6–11).
 > - **`git`** — a **public** repository. The agent additionally **clones** the repo (step 3 —
->   an anonymous shallow clone, no credential) and **builds its Dockerfile with BuildKit**
->   (steps 4–5: `docker build` with `DOCKER_BUILDKIT=1`) into a local image, then runs that
->   image (steps 6–11). It reports two extra phases, `cloning` and `building`, streams the build
->   output as log lines, and records the exact `commit_sha` and `built_image_ref`. A missing
->   Dockerfile is a clear deployment failure. The **container port is optional**: when the
->   request omits it (`container_port = 0`), the agent reads the built image's `EXPOSE` (via
->   `docker image inspect`, so it also sees a base image's exposed port) and publishes the
->   lowest TCP port; if the image exposes none, the deployment fails asking for an explicit port.
+>   an anonymous shallow clone, no credential) and **builds it with BuildKit** (steps 4–5:
+>   `docker build` with `DOCKER_BUILDKIT=1`) into a local image, then runs that image (steps
+>   6–11). When the repo ships its own **Dockerfile** the agent builds that; when it doesn't,
+>   **build detection** (see below) identifies a supported framework (Node, Vite, Next.js) and
+>   **generates a Dockerfile** to build instead. It reports two extra phases, `cloning` and
+>   `building`, streams the build output (including any generated Dockerfile) as log lines, and
+>   records the exact `commit_sha` and `built_image_ref`. A repo that is neither Dockerfile-based
+>   nor a recognized framework is a clear deployment failure with next steps. The **container
+>   port is optional**: when the request omits it (`container_port = 0`), the agent reads the
+>   built image's `EXPOSE` (via `docker image inspect`, so it also sees a base image's exposed
+>   port — and a generated Dockerfile always sets one) and publishes the lowest TCP port; if the
+>   image exposes none, the deployment fails asking for an explicit port.
 >
-> Build detection is **Dockerfile-only** for now (a one-file check on the agent; the `builders`
-> module below is still deferred), and **private repos aren't built yet** — only `access =
-> 'public'` sources are dispatched, so no credential ever leaves the control plane (see
-> [security.md](./security.md)). Logs are delivered by **polling**, not SSE; Caddy routing is
+> Build detection covers a **repo Dockerfile** and, when there is none, a **generated Dockerfile
+> for a detected Node/Vite/Next.js app** (the shared `internal/builder` package — see below).
+> **Private repos aren't built yet** — only `access = 'public'` sources are dispatched, so no
+> credential ever leaves the control plane (see [security.md](./security.md)). Logs are
+> delivered by **polling**, not SSE; Caddy routing is
 > HTTP-only and derives a route from the **service id** (so two services in one environment
 > don't collide). SSL, custom domains, Compose/Nixpacks/static builds, and one-click rollback
 > are later slices. The claim is atomic per server (a queued deployment is the unit of work; a
@@ -63,29 +68,37 @@ Detect and build in this order:
 
 1. **Dockerfile**, if present.
 2. **Docker Compose**, if present.
-3. **Nixpacks** fallback for common apps.
+3. **Detected framework** (Node, Vite, Next.js, …) → a **generated Dockerfile**.
 4. **Static-site** fallback.
 5. **Manual** build/start command.
 
-Dockerfile builds use **BuildKit** underneath. We do **not** build a custom buildpack system.
+Every build path ends in a **Dockerfile built with BuildKit** — a detected framework gets a
+small generated Dockerfile rather than a separate buildpack runtime, so there is one build
+mechanism and the generated file is previewable. We do **not** run Nixpacks or a custom
+buildpack system.
 
 > [!NOTE]
-> **Implemented so far: Dockerfile only.** The agent builds a Dockerfile at the repo root with
-> BuildKit (`docker build`, `DOCKER_BUILDKIT=1` — so the prepared server needs the Docker CLI,
-> which the standard install provides). Detection is a one-file check on the agent for now, not
-> the `builders` module yet; Compose, Nixpacks, static-site, and manual builds are deferred. No
-> Dockerfile → the deployment fails with a plain-English message.
+> **Implemented so far: a repo Dockerfile, plus generated Dockerfiles for Node/Vite/Next.js.**
+> The agent builds with BuildKit (`docker build`, `DOCKER_BUILDKIT=1` — so the prepared server
+> needs the Docker CLI, which the standard install provides). When the repo has no Dockerfile,
+> the agent runs the shared `internal/builder` detection over the clone, writes a generated
+> `Dockerfile.plorigo`, and builds that. Compose, static-site, and manual builds are still
+> deferred. A repo that is neither Dockerfile-based nor a detected framework fails with a
+> plain-English message and next steps.
 
 ## Build & framework detection
 
-The engine inspects a repo to suggest a build command, start command, port, and the likely
-runtime — starting with the basics (Node, static sites, Dockerfile, Docker Compose) and
-growing from there.
+The engine inspects a repo to determine a build command, start command, port, and runtime, and
+renders a Dockerfile from them. Detection lives in the shared **`internal/builder`** package
+(stdlib-only, no DB or transport) so the **agent** runs it over the cloned tree at build time
+and the **control plane** runs the *same* rules over the GitHub contents API — what the
+dashboard previews via `ServiceService.DetectFramework` is exactly what the agent builds. It
+starts with the basics (Node, Vite, Next.js) and grows from there.
 
 > [!NOTE]
-> Keep detection lists out of this doc. The set of frameworks and integrations Plorigo
-> recognizes is product scope — see [ROADMAP.md](../../ROADMAP.md). Implement detection as
-> data/rules in the `builders` module, not as a catalogue duplicated into documentation.
+> Keep detection lists out of this doc. The set of frameworks Plorigo recognizes is product
+> scope — see [ROADMAP.md](../../ROADMAP.md). The rules and Dockerfile templates live as data in
+> `internal/builder`; **that package is the catalogue**, not this document.
 
 ## Runtime: Docker first
 

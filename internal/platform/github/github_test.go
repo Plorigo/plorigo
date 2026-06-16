@@ -175,6 +175,34 @@ func TestListBranches(t *testing.T) {
 	}
 }
 
+func TestGetFileContent(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") != acceptRaw {
+			t.Errorf("Accept = %q, want %q", r.Header.Get("Accept"), acceptRaw)
+		}
+		switch r.URL.Path {
+		case "/repos/o/r/contents/package.json":
+			if r.URL.Query().Get("ref") != "main" {
+				t.Errorf("ref = %q, want main", r.URL.Query().Get("ref"))
+			}
+			_, _ = w.Write([]byte(`{"name":"x"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer ts.Close()
+
+	c := newTestClient(ts)
+	data, ok, err := c.GetFileContent(context.Background(), "", "o", "r", "main", "package.json")
+	if err != nil || !ok || string(data) != `{"name":"x"}` {
+		t.Fatalf("present file: data=%q ok=%v err=%v", data, ok, err)
+	}
+	_, ok, err = c.GetFileContent(context.Background(), "", "o", "r", "main", "missing.txt")
+	if err != nil || ok {
+		t.Fatalf("absent file should be ok=false, nil err: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestListUserRepos_QueryAndMapping(t *testing.T) {
 	var gotSort, gotPerPage, gotPage string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
