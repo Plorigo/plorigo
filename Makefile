@@ -31,7 +31,7 @@ E2E_AGENT_NATIVE_BIN ?= dist/plorigo-agent-native
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup generate proto sqlc check-generated verify build build-embed web web-check dev seed test lint fmt tidy migrate e2e-agent e2e-build
+.PHONY: help setup generate proto sqlc check-generated verify build build-embed web web-check dev seed test lint fmt tidy migrate e2e-agent e2e-build e2e-fresh-vps
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -137,3 +137,12 @@ e2e-build: check-generated migrate ## Run the build-from-Git e2e on real Docker/
 	APP_MASTER_KEY="$(APP_MASTER_KEY)" DATABASE_URL="$(DATABASE_URL)" \
 		PLORIGO_E2E_AGENT_BIN="$(CURDIR)/$(E2E_AGENT_NATIVE_BIN)" \
 		go test -tags e2e -run TestE2EBuildDeploy -count=1 -v ./internal/app/...
+
+# Fresh-VPS → first-reachable-app release-gate verification (PLO-96). Drives REAL Ubuntu
+# 22.04/24.04 VPSes against a REAL, publicly-reachable control plane — connect (manual + the
+# dashboard-managed SSH path), reach "ready", verify idempotency, and curl the app. Manual,
+# not in CI; its logic is covered hermetically by TestFreshVPSDriver* in `make test`. Set the
+# PLORIGO_*/E2E_* env vars first; run with E2E_DRYRUN=1 to print the plan. See
+# docs/verification/fresh-vps-e2e.md.
+e2e-fresh-vps: ## Verify fresh-VPS→first-app against real VPSes (manual; not in CI). See docs/verification/fresh-vps-e2e.md
+	./scripts/e2e-fresh-vps.sh $(if $(filter 1,$(E2E_DRYRUN)),--dry-run,)
