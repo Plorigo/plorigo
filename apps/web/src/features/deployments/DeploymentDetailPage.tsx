@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 
@@ -10,6 +10,7 @@ import type { DeploymentEvent } from "@/gen/controlplane/v1/deployments_pb";
 import { useEffectiveProjectId } from "@/lib/projectScope";
 import { isTerminalDeploymentStatus, useDeployment, useDeploymentEvents } from "@/lib/queries";
 import { statusTone } from "@/lib/status";
+import { classifyFailure } from "./failure";
 import { deploymentRefLabel, deploymentTimeline, shortRepoUrl } from "./timeline";
 
 export function DeploymentDetailPage() {
@@ -19,6 +20,10 @@ export function DeploymentDetailPage() {
   const dep = useDeployment(id);
   const live = !dep.data || !isTerminalDeploymentStatus(dep.data.status);
   const events = useDeploymentEvents(id, live);
+  const logsRef = useRef<HTMLDivElement>(null);
+  // The log tab is controlled so the failure summary can switch the user straight to the
+  // stream that explains the failure; null = follow defaultLogTab.
+  const [logTab, setLogTab] = useState<string | null>(null);
 
   if (dep.isLoading && !dep.data) {
     return (
@@ -47,15 +52,23 @@ export function DeploymentDetailPage() {
   // distinction, so they fall back into the build view.
   const buildLogs = allLogs.filter((e) => e.stream === "build" || e.stream === "");
   const runtimeLogs = allLogs.filter((e) => e.stream === "runtime");
-  // A health-check failure is the most specific case (the container started but never
-  // accepted connections), so it takes priority over the generic Caddy/build messages.
-  const failedHealthCheck = /health check/i.test(d.message);
-  const failedBecauseCaddy = !failedHealthCheck && /caddy/i.test(d.message);
-  // On failure, show the tail of whichever stream is relevant: a container/health failure
-  // has runtime output; a build-phase failure has only build output.
-  const failureTail = (runtimeLogs.length > 0 ? runtimeLogs : buildLogs).slice(-6).map((l) => l.message);
+  // Classify a failure into a plain-English summary + the log stream that explains it (see
+  // ./failure). failedPhase names the timeline step that failed, so the summary ties back to it.
+  const failure = d.status === "failed" ? classifyFailure(d.message, d.sourceKind) : null;
+  const failedPhase = steps.find((s) => s.status === "failed")?.label;
+  // Show the tail of the stream the failure points to, falling back to whichever has output.
+  const failureStreamLogs = failure?.stream === "runtime" ? runtimeLogs : buildLogs;
+  const failureTail = (failureStreamLogs.length > 0 ? failureStreamLogs : runtimeLogs.length > 0 ? runtimeLogs : buildLogs)
+    .slice(-6)
+    .map((l) => l.message);
   // Default to runtime logs once the app is up; otherwise watch the build/deploy output.
   const defaultLogTab = d.status === "running" || d.status === "superseded" ? "runtime" : "build";
+
+  // viewFailureLogs jumps to the log stream that explains the failure and scrolls it into view.
+  function viewFailureLogs() {
+    if (failure) setLogTab(failure.stream);
+    logsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   return (
     <div className="space-y-6">
@@ -71,18 +84,15 @@ export function DeploymentDetailPage() {
         </div>
       </div>
 
-      {d.status === "failed" && (
+      {failure && (
         <FailureSummary
-          headline={d.message || "The deployment failed."}
-          suggestion={
-            failedHealthCheck
-              ? "The container started but never began accepting connections on its port within the health-check window. Make sure the app listens on the container port you configured and binds to 0.0.0.0 (not just localhost), then deploy again — any previous running release is kept."
-              : failedBecauseCaddy
-                ? "The app built and started, but the agent could not update Caddy. Install Caddy on the server or set the agent's Caddy binary path, then deploy again — any previous running release is kept."
-                : isGit
-                  ? "The build or container did not succeed. Check that the repo has a Dockerfile at its root and that the app listens on the container port you set, then deploy again — any previous running release is kept."
-                  : "The container did not reach a healthy state or Caddy could not route traffic. Check the image reference, app port, and Caddy service, then deploy again — any previous running release is kept."
-          }
+          headline={failure.headline}
+          explanation={failure.explanation}
+          fix={failure.fix}
+          failedPhase={failedPhase}
+          rawMessage={d.message && d.message !== failure.explanation ? d.message : undefined}
+          logStreamLabel={failure.stream}
+          onViewLogs={viewFailureLogs}
           logs={failureTail}
         />
       )}
@@ -158,8 +168,8 @@ export function DeploymentDetailPage() {
 
       <Panel>
         <PanelHeader title="Logs" description="Build and runtime output, streamed from the deploy agent." />
-        <div className="p-4">
-          <Tabs defaultValue={defaultLogTab}>
+        <div className="p-4" ref={logsRef}>
+          <Tabs value={logTab ?? defaultLogTab} onValueChange={setLogTab}>
             <TabsList>
               <TabsTrigger value="build">Build{buildLogs.length > 0 ? ` (${buildLogs.length})` : ""}</TabsTrigger>
               <TabsTrigger value="runtime">Runtime{runtimeLogs.length > 0 ? ` (${runtimeLogs.length})` : ""}</TabsTrigger>
