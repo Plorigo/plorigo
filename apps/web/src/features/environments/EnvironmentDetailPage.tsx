@@ -1,11 +1,7 @@
-import { useState, type FormEvent } from "react";
-import { ConnectError } from "@connectrpc/connect";
-import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
-import { ArrowLeft, Container, GitFork, Globe, KeyRound, Lock, Plus, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { ArrowLeft, Container, GitFork, Globe, Lock } from "lucide-react";
 
-import { Badge, Button, EmptyState, Input, Panel, PanelHeader, Skeleton } from "@/components/ui";
+import { Badge, EmptyState, Panel, PanelHeader, Skeleton } from "@/components/ui";
 import {
   Table,
   TableBody,
@@ -14,16 +10,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { secretClient } from "@/lib/clients";
 import { useEffectiveProjectId } from "@/lib/projectScope";
-import { useEnvironment, useSecrets, useServicesByEnvironment } from "@/lib/queries";
+import { useEnvironment, useServicesByEnvironment } from "@/lib/queries";
 import { type Tone } from "@/lib/status";
 import { isPublic, sourceLabel } from "@/features/services/serviceData";
 
-// EnvironmentDetailPage is a deployment target within a project: its identity, the encrypted
-// secrets shared by every service deployed into it, and the services running there. Secrets are
-// environment-scoped (a deliberate asymmetry with service-scoped env vars — see
-// docs/architecture/security.md) and write-only: a value is set here but never read back.
+// EnvironmentDetailPage is a deployment target within a project: its identity and the services
+// running there. Its variables and secrets are managed on the Environment Variables page (secrets
+// are environment-scoped and shared by every service in the environment — see
+// docs/architecture/security.md).
 export function EnvironmentDetailPage() {
   const { projectId, environmentId } = useParams({ strict: false }) as {
     projectId?: string;
@@ -64,136 +59,18 @@ export function EnvironmentDetailPage() {
           <Badge tone={environmentTone(e.type)}>{e.type}</Badge>
         </div>
         <p className="mt-1.5 text-sm text-muted-foreground">
-          A deployment target in this project. Secrets set here are shared by every service deployed into it.
+          A deployment target in this project. Manage its variables and secrets on the Environment
+          Variables page.
         </p>
       </div>
 
-      <SecretsPanel environmentId={id} />
       <ServicesPanel environmentId={id} projectId={pid} />
     </div>
   );
 }
 
-// SecretsPanel manages an environment's encrypted secrets. SetSecret upserts by key; the value is
-// sealed server-side and never returned, so the list shows metadata only (key + last update) and
-// the input is treated as a password. Setting an existing key replaces its value.
-function SecretsPanel({ environmentId }: { environmentId: string }) {
-  const queryClient = useQueryClient();
-  const secrets = useSecrets(environmentId);
-  const [key, setKey] = useState("");
-  const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const rows = secrets.data ?? [];
-
-  async function invalidate() {
-    await queryClient.invalidateQueries({ queryKey: ["secrets", environmentId] });
-  }
-
-  async function onSet(e: FormEvent) {
-    e.preventDefault();
-    const k = key.trim();
-    if (!k || busy) return;
-    setBusy(true);
-    try {
-      await secretClient.setSecret({ environmentId, key: k, value });
-      await invalidate();
-      setKey("");
-      setValue("");
-      toast.success(`Saved ${k}`);
-    } catch (err) {
-      toast.error(err instanceof ConnectError ? err.message : "Could not save the secret");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onDelete(k: string) {
-    try {
-      await secretClient.deleteSecret({ environmentId, key: k });
-      await invalidate();
-      toast.success(`Removed ${k}`);
-    } catch (err) {
-      toast.error(err instanceof ConnectError ? err.message : "Could not remove the secret");
-    }
-  }
-
-  return (
-    <Panel>
-      <PanelHeader
-        title="Secrets"
-        description="Encrypted, write-only values shared by every service in this environment. A value is set once and never shown again — set the key again to replace it. Applied on the next deploy."
-      />
-      <div className="space-y-4 p-4">
-        <form onSubmit={onSet} className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <div className="min-w-0 flex-1">
-            <span className="mb-1.5 block text-xs font-medium text-foreground">Key</span>
-            <Input value={key} onChange={(e) => setKey(e.target.value)} placeholder="DATABASE_URL" autoCapitalize="none" autoComplete="off" spellCheck={false} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <span className="mb-1.5 block text-xs font-medium text-foreground">Value</span>
-            <Input
-              type="password"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder="••••••••"
-              autoCapitalize="none"
-              autoComplete="new-password"
-              spellCheck={false}
-            />
-          </div>
-          <Button type="submit" size="sm" disabled={busy || !key.trim()}>
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            {busy ? "Saving…" : "Set secret"}
-          </Button>
-        </form>
-
-        {secrets.isLoading ? (
-          <Skeleton className="h-24 w-full" />
-        ) : rows.length === 0 ? (
-          <EmptyState
-            title="No secrets yet"
-            body="Add a key and value above. Secrets are encrypted at rest, never returned by the API, and injected into this environment's services at deploy time."
-          />
-        ) : (
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Key</TableHead>
-                  <TableHead>Value</TableHead>
-                  <TableHead>Updated</TableHead>
-                  <TableHead className="w-10" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((sec) => (
-                  <TableRow key={sec.id || sec.key}>
-                    <TableCell className="font-medium text-foreground">
-                      <span className="inline-flex items-center gap-1.5">
-                        <KeyRound className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-                        {sec.key}
-                      </span>
-                    </TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">••••••••</TableCell>
-                    <TableCell className="text-muted-foreground">{sec.updatedAt ? timeAgo(sec.updatedAt) : "—"}</TableCell>
-                    <TableCell>
-                      <Button size="sm" variant="ghost" aria-label={`Remove ${sec.key}`} onClick={() => onDelete(sec.key)}>
-                        <Trash2 className="h-4 w-4" aria-hidden="true" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </div>
-    </Panel>
-  );
-}
-
 // ServicesPanel lists the services deployed into this environment, giving the page context and a
-// jump-off point to each service (whose own page manages its non-secret env vars).
+// jump-off point to each service.
 function ServicesPanel({ environmentId, projectId }: { environmentId: string; projectId: string }) {
   const navigate = useNavigate();
   const services = useServicesByEnvironment(environmentId);
@@ -275,17 +152,6 @@ function environmentTone(type: string): Tone {
   if (type === "staging") return "amber";
   if (type === "preview") return "blue";
   return "purple";
-}
-
-// timeAgo renders a short relative time for an RFC 3339 timestamp.
-function timeAgo(iso: string): string {
-  const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return new Date(iso).toLocaleDateString();
 }
 
 function BackLink({ projectId }: { projectId: string }) {

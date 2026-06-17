@@ -53,7 +53,7 @@ function WorkspaceOverview() {
           <div className="grid gap-3 p-4 sm:grid-cols-2">
             <OpLink to="/projects" icon={Box} label="Projects" detail="Apps, environments, health" />
             <OpLink to="/servers" icon={Server} label="Servers" detail="Owned infrastructure" />
-            <OpLink to="/resources" icon={KeyRound} label="Resources" detail="Env vars & secrets" />
+            <OpLink to="/variables" icon={KeyRound} label="Environment Variables" detail="Variables & secrets" />
             <OpLink to="/backups" icon={HardDrive} label="Backups" detail="Recovery & restore" />
           </div>
         </Panel>
@@ -109,7 +109,7 @@ function OpLink({
   label,
   detail,
 }: {
-  to: "/projects" | "/servers" | "/resources" | "/backups";
+  to: "/projects" | "/servers" | "/variables" | "/backups";
   icon: typeof Box;
   label: string;
   detail: string;
