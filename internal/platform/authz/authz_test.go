@@ -14,9 +14,9 @@ func TestActionValues(t *testing.T) {
 		ActionProjectCreate:    "project.create",
 		ActionProjectRead:      "project.read",
 		ActionProjectDelete:    "project.delete",
-		ActionEnvVarSet:        "env_var.set",
-		ActionEnvVarRead:       "env_var.read",
-		ActionEnvVarDelete:     "env_var.delete",
+		ActionConfigSet:        "config.set",
+		ActionConfigRead:       "config.read",
+		ActionConfigDelete:     "config.delete",
 	}
 	for a, want := range cases {
 		if string(a) != want {
