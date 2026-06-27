@@ -1,12 +1,11 @@
-import { useState, type FormEvent } from "react";
+import { useState } from "react";
 import { ConnectError } from "@connectrpc/connect";
 import { useQueryClient } from "@tanstack/react-query";
-import { Container, Cpu, Server, TerminalSquare, Trash2 } from "lucide-react";
+import { Container, Cpu, Server } from "lucide-react";
 import { toast } from "sonner";
 
-import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PageHeader } from "@/components/PageHeader";
-import { Badge, Button, EmptyState, Input, Panel, Skeleton } from "@/components/ui";
+import { Badge, Button, EmptyState, Panel, Skeleton } from "@/components/ui";
 import {
   Dialog,
   DialogContent,
@@ -23,6 +22,11 @@ import { agentClient, serverClient } from "@/lib/clients";
 import { useAgents, useServers } from "@/lib/queries";
 import { intentDot, intentSoft, statusIntent, statusTone, type Intent } from "@/lib/status";
 import { useWorkspaceStore } from "@/store";
+
+import { ConnectServerDialog } from "./connect/ConnectServerDialog";
+import { InstallCommandBlock } from "./connect/InstallCommand";
+import { ServerCardActions } from "./ServerCardActions";
+import { SetupStatusBadge } from "./SetupStatusBadge";
 
 interface ServerRow {
   id?: string; // absent on demo fixtures; per-server actions render only when present
@@ -60,8 +64,14 @@ export function ServersPage() {
   const error = errorMessage(servers.error) || errorMessage(agents.error);
   const loading = servers.isLoading || agents.isLoading;
   const [connectOpen, setConnectOpen] = useState(false);
+  // The existing server whose SSH connection is being (re-)set up, or null when that dialog
+  // is closed. Drives a second ConnectServerDialog in existing-server mode.
+  const [setupServer, setSetupServer] = useState<{ id: string; name: string } | null>(null);
   const [installResult, setInstallResult] = useState<InstallCommandResult | null>(null);
   const [mintingFor, setMintingFor] = useState("");
+  // Managed setup runs started this session, by server id — drives the card's
+  // "Setting up…" / "Setup failed" badge until the agent itself reports the server's state.
+  const [managedRuns, setManagedRuns] = useState<Record<string, string>>({});
 
   const agentByServer = new Map((agents.data ?? []).map((a) => [a.serverId, a]));
   const liveRows: ServerRow[] = (servers.data ?? []).map((server) => {
@@ -123,7 +133,7 @@ export function ServersPage() {
     <div className="space-y-6">
       <PageHeader
         title="Servers"
-        description="The machines you own and connect. Connect a server to install the agent; each card shows whether it's ready to deploy, with Docker and host details. Runtime metrics are on the way."
+        description="The machines you own and connect. Connect a server to install the agent — run a one-line command yourself, or let Plorigo prepare a fresh Ubuntu box over SSH. Each card shows whether it's ready to deploy."
         actions={
           <Button size="sm" disabled={!workspaceId} onClick={() => setConnectOpen(true)}>
             <Server className="h-4 w-4" aria-hidden="true" />
@@ -132,7 +142,22 @@ export function ServersPage() {
         }
       />
 
-      <ConnectServerDialog workspaceId={workspaceId} open={connectOpen} onOpenChange={setConnectOpen} />
+      <ConnectServerDialog
+        workspaceId={workspaceId}
+        open={connectOpen}
+        onOpenChange={setConnectOpen}
+        onManagedRun={(serverId, runId) => setManagedRuns((prev) => ({ ...prev, [serverId]: runId }))}
+      />
+      {/* Re-run / start SSH setup on an existing server. Keyed by server id so it remounts with a
+          fresh form per server; shares the managed-run tracking so the card reflects progress. */}
+      <ConnectServerDialog
+        key={setupServer?.id ?? "none"}
+        workspaceId={workspaceId}
+        existingServer={setupServer ?? undefined}
+        open={setupServer !== null}
+        onOpenChange={(next) => !next && setSetupServer(null)}
+        onManagedRun={(serverId, runId) => setManagedRuns((prev) => ({ ...prev, [serverId]: runId }))}
+      />
       <InstallCommandDialog result={installResult} onClose={() => setInstallResult(null)} />
 
       {loading && (
@@ -148,101 +173,73 @@ export function ServersPage() {
       {!loading && !error && rows.length === 0 && (
         <EmptyState
           title="No servers connected yet"
-          body="Connect your first server to deploy apps. You'll get a one-line install command for the agent."
+          body="Connect your first server to deploy apps. Run a one-line install command, or let Plorigo prepare a fresh server over SSH."
         />
       )}
 
       {!loading && !error && rows.length > 0 && (
         <div className="grid gap-4 lg:grid-cols-3">
-          {rows.map((server) => (
-            <Panel key={server.id ?? server.name} className="p-4">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-foreground">{server.name}</p>
-                  <p className="mt-1 truncate text-xs text-muted-foreground">{server.region}</p>
+          {rows.map((server) => {
+            const agentBadge = (
+              <Badge tone={statusTone(server.readiness ?? server.status)} className="shrink-0 capitalize">
+                {server.readiness ?? server.status}
+              </Badge>
+            );
+            const trackedRun = server.id ? managedRuns[server.id] : undefined;
+            return (
+              <Panel key={server.id ?? server.name} className="p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-foreground">{server.name}</p>
+                    <p className="mt-1 truncate text-xs text-muted-foreground">{server.region}</p>
+                  </div>
+                  {trackedRun ? <SetupStatusBadge runId={trackedRun} fallback={agentBadge} /> : agentBadge}
                 </div>
-                <Badge tone={statusTone(server.readiness ?? server.status)} className="shrink-0 capitalize">
-                  {server.readiness ?? server.status}
-                </Badge>
-              </div>
-              {server.readinessReason && (
-                <p
-                  className={cn(
-                    "mt-3 rounded-md border px-3 py-2 text-xs leading-5",
-                    intentSoft[statusIntent(server.readiness ?? "")],
-                  )}
-                >
-                  {server.readinessReason}
-                </p>
-              )}
-              <div className="mt-4 space-y-3">
-                <ResourceMeter label="CPU" value={server.cpu} intent="info" />
-                <ResourceMeter label="Memory" value={server.memory} intent="violet" />
-                <ResourceMeter label="Disk" value={server.disk} intent="success" />
-              </div>
-              {(server.os || server.dockerVersion) && (
-                <div className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Container className="h-4 w-4" aria-hidden="true" />
-                  <span className="truncate">{dockerFactsLabel(server)}</span>
-                </div>
-              )}
-              <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
-                <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Cpu className="h-4 w-4" aria-hidden="true" />
-                  Agent {server.version ? server.version : "—"}
-                </span>
-                <span className="text-xs text-muted-foreground">{lastSeenLabel(server.lastSeen)}</span>
-              </div>
-              {server.id && (
-                <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-3">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={mintingFor === server.id}
-                    onClick={() => void showInstallCommand(server)}
+                {server.readinessReason && (
+                  <p
+                    className={cn(
+                      "mt-3 rounded-md border px-3 py-2 text-xs leading-5",
+                      intentSoft[statusIntent(server.readiness ?? "")],
+                    )}
                   >
-                    <TerminalSquare className="h-4 w-4" aria-hidden="true" />
-                    {mintingFor === server.id ? "Generating..." : "Install command"}
-                  </Button>
-                  <ConfirmDialog
-                    trigger={
-                      <Button size="icon" variant="ghost" aria-label={`Delete server ${server.name}`}>
-                        <Trash2 className="h-4 w-4" aria-hidden="true" />
-                      </Button>
-                    }
-                    title={`Delete server ${server.name}?`}
-                    description="This disconnects its agent and permanently removes the server, its agent registration, and its deployment history. Containers already running on the machine are not touched."
-                    recovery="You can connect the machine again at any time — create a new server and run a fresh install command on it."
-                    confirmLabel="Delete server"
-                    onConfirm={() => void deleteServer(server)}
-                  />
+                    {server.readinessReason}
+                  </p>
+                )}
+                <div className="mt-4 space-y-3">
+                  <ResourceMeter label="CPU" value={server.cpu} intent="info" />
+                  <ResourceMeter label="Memory" value={server.memory} intent="violet" />
+                  <ResourceMeter label="Disk" value={server.disk} intent="success" />
                 </div>
-              )}
-            </Panel>
-          ))}
+                {(server.os || server.dockerVersion) && (
+                  <div className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Container className="h-4 w-4" aria-hidden="true" />
+                    <span className="truncate">{dockerFactsLabel(server)}</span>
+                  </div>
+                )}
+                <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
+                  <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Cpu className="h-4 w-4" aria-hidden="true" />
+                    Agent {server.version ? server.version : "—"}
+                  </span>
+                  <span className="text-xs text-muted-foreground">{lastSeenLabel(server.lastSeen)}</span>
+                </div>
+                {server.id && (
+                  <div className="mt-3">
+                    <ServerCardActions
+                      serverId={server.id}
+                      serverName={server.name}
+                      minting={mintingFor === server.id}
+                      onSetup={() => setSetupServer({ id: server.id!, name: server.name })}
+                      onInstallCommand={() => void showInstallCommand(server)}
+                      onDelete={() => void deleteServer(server)}
+                    />
+                  </div>
+                )}
+              </Panel>
+            );
+          })}
         </div>
       )}
-    </div>
-  );
-}
-
-// InstallCommandBlock renders the one-time install command responsively: the command
-// WRAPS (break-all) instead of stretching the dialog past the viewport on small
-// screens, with the copy button as the primary affordance.
-function InstallCommandBlock({ installCommand, expiresAt }: { installCommand: string; expiresAt: string }) {
-  return (
-    <div className="min-w-0 space-y-4">
-      <pre className="min-w-0 max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-border bg-muted p-3 text-xs text-foreground">
-        {installCommand}
-      </pre>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <span className="text-xs text-muted-foreground">
-          One-time token; expires {new Date(expiresAt).toLocaleString()}.
-        </span>
-        <Button size="sm" variant="secondary" onClick={() => copy(installCommand)}>
-          Copy command
-        </Button>
-      </div>
     </div>
   );
 }
@@ -273,111 +270,6 @@ function InstallCommandDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function ConnectServerDialog({
-  workspaceId,
-  open,
-  onOpenChange,
-}: {
-  workspaceId: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const queryClient = useQueryClient();
-  const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [result, setResult] = useState<{ installCommand: string; expiresAt: string } | null>(null);
-
-  function reset() {
-    setName("");
-    setBusy(false);
-    setError("");
-    setResult(null);
-  }
-
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    setBusy(true);
-    setError("");
-    try {
-      // Create the server record, then mint a one-time registration token for it. The
-      // install command embeds that token; the agent redeems it on first run.
-      const { server } = await serverClient.createServer({ workspaceId, name: trimmed });
-      if (!server) throw new Error("the server was not created");
-      const token = await agentClient.createRegistrationToken({ serverId: server.id });
-      setResult({ installCommand: token.installCommand, expiresAt: token.expiresAt });
-      await queryClient.invalidateQueries({ queryKey: ["servers", workspaceId] });
-      await queryClient.invalidateQueries({ queryKey: ["agents", workspaceId] });
-    } catch (err) {
-      setError(err instanceof ConnectError ? err.message : "Could not connect the server");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        onOpenChange(next);
-        if (!next) reset();
-      }}
-    >
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Connect a server</DialogTitle>
-          <DialogDescription>
-            {result
-              ? "Run this command on the machine you're connecting. The server appears online here once the agent connects. If you lose the command, mint a new one from the server card."
-              : "Name the machine you want to deploy onto. We'll generate an install command for the agent."}
-          </DialogDescription>
-        </DialogHeader>
-
-        {result ? (
-          <div className="space-y-4">
-            <InstallCommandBlock installCommand={result.installCommand} expiresAt={result.expiresAt} />
-            <DialogFooter>
-              <Button onClick={() => onOpenChange(false)}>Done</Button>
-            </DialogFooter>
-          </div>
-        ) : (
-          <form onSubmit={onSubmit} className="space-y-4">
-            <label className="block">
-              <span className="mb-1.5 block text-sm font-medium text-foreground">Server name</span>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="prod-1"
-                autoFocus
-                required
-              />
-            </label>
-            {error && (
-              <p className="rounded-md border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            <DialogFooter>
-              <Button type="submit" disabled={busy || !name.trim()}>
-                {busy ? "Generating..." : "Generate install command"}
-              </Button>
-            </DialogFooter>
-          </form>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function copy(text: string) {
-  void navigator.clipboard.writeText(text).then(
-    () => toast.success("Install command copied"),
-    () => toast.error("Could not copy to clipboard"),
   );
 }
 
