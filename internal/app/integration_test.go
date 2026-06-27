@@ -852,7 +852,7 @@ func TestIntegration_AgentHeartbeatRecordsHealth(t *testing.T) {
 	if pre.DockerAvailable != nil {
 		t.Fatalf("pre-heartbeat DockerAvailable = %v, want nil (unknown)", *pre.DockerAvailable)
 	}
-	if state, _ := pre.Readiness(time.Now()); state != agents.ReadinessUnknown {
+	if state, _ := pre.Readiness(time.Now(), false); state != agents.ReadinessUnknown {
 		t.Fatalf("pre-heartbeat readiness = %q, want %q", state, agents.ReadinessUnknown)
 	}
 
@@ -873,7 +873,7 @@ func TestIntegration_AgentHeartbeatRecordsHealth(t *testing.T) {
 	if got.DockerVersion != "27.1.1" || got.OS != "linux" || got.Arch != "amd64" {
 		t.Fatalf("facts = (%q, %q, %q), want (27.1.1, linux, amd64)", got.DockerVersion, got.OS, got.Arch)
 	}
-	if state, reason := got.Readiness(time.Now()); state != agents.ReadinessReady || reason != "" {
+	if state, reason := got.Readiness(time.Now(), false); state != agents.ReadinessReady || reason != "" {
 		t.Fatalf("readiness = (%q, %q), want (%q, empty)", state, reason, agents.ReadinessReady)
 	}
 }
