@@ -19,6 +19,9 @@ type Deps struct {
 	DB     *database.DB
 	Audit  Recorder
 	Policy authz.Authorizer
+	// Crypto decrypts environment/service secrets at deploy time so their plaintext can be
+	// injected into the container. Satisfied by *crypto.Box (same box that seals them).
+	Crypto Opener
 	Log    *slog.Logger
 }
 
@@ -32,7 +35,7 @@ type Module struct {
 func New(d Deps) *Module {
 	store := newPostgresStore(d.DB)
 	return &Module{
-		service: newService(d.DB, store, d.Policy, d.Audit, d.Log),
+		service: newService(d.DB, store, d.Policy, d.Audit, d.Crypto, d.Log),
 	}
 }
 

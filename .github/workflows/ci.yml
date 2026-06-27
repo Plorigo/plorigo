@@ -59,6 +59,9 @@ jobs:
       - name: Web lint
         run: pnpm --dir apps/web lint
 
+      - name: Web test
+        run: pnpm --dir apps/web test
+
       - name: Web build
         run: pnpm --dir apps/web build
 

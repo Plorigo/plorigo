@@ -55,12 +55,32 @@ separate concern and can make its own choice.)
 > public/private visibility toggle and calls `ServiceService.CreateService(deploy_now)`. A
 > **service detail page** at `/projects/$projectId/services/$serviceId` shows the source, port,
 > visibility, env vars, and deployment history, with a **Redeploy** action
-> (`CreateDeploymentForService`). Env-var management is **service-scoped**. Domains appear in
+> (`CreateDeploymentForService`). Env-var management is **service-scoped**. An **environment
+> detail page** at `/projects/$projectId/environments/$environmentId` (reached from the project's
+> environment badges) is the home for that environment's **write-only secrets** and lists the
+> services deployed into it — so secret management is **environment-scoped** while env vars stay
+> service-scoped, the deliberate asymmetry from [security.md](./security.md). Secret values are
+> set but never read back: the UI shows keys and metadata only. Domains appear in
 > two places: the service detail page shows that service's generated domain and custom domains,
 > while `/domains` is the scoped domain-management surface. With a project selected it lists
 > domains for that project's services; without a project selected it lists all workspace custom
 > domains, including the service they route to, copyable DNS records, verification, and
 > plain-English blocked/failed states.
+
+> [!NOTE]
+> **Connect Server — two paths.** The Connect Server dialog (`features/servers/connect/`)
+> offers either a one-line **install command** the user runs themselves, or **dashboard-managed
+> setup** where Plorigo prepares a fresh Ubuntu box over SSH (see
+> [server-management.md](./server-management.md)). The managed form collects host, port,
+> username, and a one-time bootstrap credential (password or private key) that is **held in
+> client state only until `StartSetup` is called, then cleared** — never re-displayed or logged.
+> Progress is a **step timeline** polled from `ServerSetupService.GetSetupRun` /
+> `ListSetupEvents` (the same poll-the-events-list pattern as deployments), with the raw,
+> server-redacted log one click away and plain-English failure summaries plus recovery actions
+> (retry, or fall back to the command). Server cards distinguish *no agent / setting up / ready
+> / degraded / failed setup*, and expose **Rotate key** and **Revoke SSH access** when a managed
+> credential exists. Component tests live beside the components and run under **vitest +
+> @testing-library/react** (`pnpm --dir apps/web test`).
 
 > [!NOTE]
 > Beyond the structure above, specific screens and navigation are product scope, not

@@ -68,14 +68,25 @@ The first slice of this model is implemented: an agent can **register and report
   the request, validated by the `agents` service.
 - The agent then calls `agent.v1.AgentService/Heartbeat` on an interval. Liveness
   (online / offline / awaiting) is **derived from the last heartbeat**, not stored.
-- Each heartbeat also carries a few **compatibility facts** — whether the Docker daemon is
-  reachable, its version, and the host's OS/arch — recorded on the agent row. From these
-  plus liveness the control plane **derives a readiness** signal (`ready` / `degraded` /
-  `unavailable`, also never stored) with a plain-English reason, so a user can tell whether a
-  server can actually run a deployment without SSHing in. The facts expose nothing sensitive;
-  an agent that predates them reads as "checks pending" rather than as a false alarm. The
-  richer readiness model (disk / memory / CPU, Caddy, ports, outbound connectivity, and
-  setup/blocked states) is a later slice — see [ROADMAP.md](../../ROADMAP.md).
+- Each heartbeat also carries **compatibility facts** — whether the Docker daemon is reachable
+  and its version, the host's OS/arch, whether the **Caddy** reverse proxy is installed and
+  serving and its version, and coarse host resources (**disk**, **memory**, **CPU count**) —
+  recorded on the agent row. From these plus liveness the control plane **derives a readiness**
+  signal (also never stored) with a plain-English reason, so a user can tell whether a server
+  can actually run a deployment without SSHing in:
+  - **`ready`** — online; Docker (and, when reported, Caddy) healthy and resources fine.
+  - **`degraded`** — deployable, but with a warning to act on (old Docker, low disk/memory, or
+    compatibility checks still pending).
+  - **`blocked`** — online but a hard prerequisite is missing or unsafe (Docker unreachable,
+    Caddy not installed or not serving — which also covers ports 80/443 being occupied —
+    critically low disk, or a non-Linux host).
+  - **`unknown`** — offline or never connected; readiness can't be assessed.
+
+  The facts expose nothing sensitive, and a non-zero **`cpu_count`** marks an agent that reports
+  the extended (Caddy/disk/memory) facts — an agent that predates them reads as "checks pending"
+  or is judged on Docker alone, never falsely blocked. The dashboard layers the managed-setup
+  states (*setting up* / *setup failed*) on top of this from the SSH setup flow. See
+  `internal/agents` (`Agent.Readiness`) for the exact derivation.
 - The stored public key is what the **next** step verifies signed jobs against; this slice
   establishes it without dispatching jobs yet.
 
