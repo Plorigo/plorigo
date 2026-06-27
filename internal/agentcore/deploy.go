@@ -17,13 +17,14 @@ import (
 // the control plane's deployments.Status* vocabulary). Defined here so the agent binary
 // stays independent of the control-plane module.
 const (
-	statusCloning  = "cloning"
-	statusBuilding = "building"
-	statusPulling  = "pulling"
-	statusStarting = "starting"
-	statusRouting  = "routing"
-	statusRunning  = "running"
-	statusFailed   = "failed"
+	statusCloning     = "cloning"
+	statusBuilding    = "building"
+	statusPulling     = "pulling"
+	statusStarting    = "starting"
+	statusHealthcheck = "healthcheck"
+	statusRouting     = "routing"
+	statusRunning     = "running"
+	statusFailed      = "failed"
 )
 
 // sourceGit is the source_kind for a build-from-Git deployment (vs. a pre-built image).
@@ -112,8 +113,10 @@ func deployLoop(ctx context.Context, out io.Writer, deploy agentv1connect.Deploy
 
 // executeDeployment runs one claimed deployment end to end, reporting each transition
 // and the container's recent logs. An image deployment goes pulling -> starting ->
-// routing -> running; a git deployment clones and builds first (cloning -> building ->
-// starting -> routing -> running). Any step can fail.
+// healthcheck -> routing -> running; a git deployment clones and builds first (cloning ->
+// building -> starting -> healthcheck -> routing -> running). A private service has no
+// published port to probe and no Caddy route, so it skips healthcheck/routing. Any step
+// can fail.
 func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect.DeployServiceClient, ident *identity, runtime deploymentRuntime, router deploymentRouter, job *agentv1.PollDeploymentResponse) {
 	depID := job.GetDeploymentId()
 	// commitSHA/builtImageRef are set for git deployments and reported on every transition
@@ -221,6 +224,9 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 	// private service publishes no host port (nothing to probe from the host), so it reaches
 	// running once the container has started and joined the network with its alias.
 	if public {
+		// Health check is its own reported phase, so the timeline shows it distinctly and a
+		// failure here is attributed to the health check (not to "start container").
+		reportBuild(statusHealthcheck, hostPort, containerID, "running health check (waiting for the container to accept connections)", nil)
 		if err := runHealthCheck(ctx, hostPort); err != nil {
 			reportRuntime(statusFailed, hostPort, containerID, "health check failed: "+err.Error(), runtime.recentLogs(ctx, containerID, maxReportLogLines))
 			cleanupFailedContainer(ctx, out, runtime, containerID)

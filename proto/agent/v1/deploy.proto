@@ -66,7 +66,7 @@ message ReportDeploymentRequest {
   string agent_id = 1;
   string credential = 2;
   string deployment_id = 3;
-  string status = 4;             // cloning|building|pulling|starting|routing|running|failed
+  string status = 4;             // cloning|building|pulling|starting|healthcheck|routing|running|failed
   int32 host_port = 5;           // set once the container is bound (0 otherwise)
   string container_id = 6;       // set once the container is created
   repeated string log_lines = 7; // new clone/build/runtime log lines since the last report

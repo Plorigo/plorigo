@@ -5,17 +5,18 @@ import type { DeploymentEvent } from "@/gen/controlplane/v1/deployments_pb";
 // stage, so the furthest-reached status is the stage currently in flight (or, on failure,
 // the stage that failed). The stages differ by source: an image deployment pulls a
 // pre-built image; a git deployment clones the repo and builds its Dockerfile instead.
-const IMAGE_STEPS = ["Queued", "Pull image", "Start container", "Route traffic", "Running"] as const;
-const GIT_STEPS = ["Queued", "Clone", "Build", "Start container", "Route traffic", "Running"] as const;
+const IMAGE_STEPS = ["Queued", "Pull image", "Start container", "Health check", "Route traffic", "Running"] as const;
+const GIT_STEPS = ["Queued", "Clone", "Build", "Start container", "Health check", "Route traffic", "Running"] as const;
 
 const IMAGE_RANK: Record<string, number> = {
   queued: 0,
   assigned: 0,
   pulling: 1,
   starting: 2,
-  routing: 3,
-  running: 4,
-  superseded: 4,
+  healthcheck: 3,
+  routing: 4,
+  running: 5,
+  superseded: 5,
 };
 const GIT_RANK: Record<string, number> = {
   queued: 0,
@@ -23,9 +24,10 @@ const GIT_RANK: Record<string, number> = {
   cloning: 1,
   building: 2,
   starting: 3,
-  routing: 4,
-  running: 5,
-  superseded: 5,
+  healthcheck: 4,
+  routing: 5,
+  running: 6,
+  superseded: 6,
 };
 
 // deploymentRefLabel is the compact label for a deployment: the image ref for an image
