@@ -32,29 +32,16 @@ message GetManagementKeyResponse {
   SSHManagementKey key = 1;
 }
 
-message RotateManagementKeyRequest {
-  string server_id = 1;
-}
-
-message RotateManagementKeyResponse {
-  // Metadata only — the new public key + fingerprint. The private key never leaves the
-  // control plane.
-  SSHManagementKey key = 1;
-}
-
-message RevokeManagementKeyRequest {
-  string server_id = 1;
-}
-
-message RevokeManagementKeyResponse {}
-
-// ServerSetupService governs the persistent SSH management credential for a server.
-// Provisioning happens inside the (separate) dashboard-managed setup run; these RPCs are
-// the user-driven lifecycle controls — inspect non-secret metadata, rotate the key, and
-// revoke access. No RPC accepts or returns private key material. See
+// ServerSetupService exposes the read-only, non-secret view of a server's SSH management
+// credential. Provisioning, rotation, and revocation are deliberately NOT RPCs: each must
+// also install or remove the key on the server itself, which is the job of the SSH bootstrap
+// runner (a separate, not-yet-built component). Exposing them now would mutate the stored
+// credential without the matching authorized_keys change — a standalone rotate would break
+// the management channel (the control plane would hold a key the server no longer trusts),
+// and a standalone revoke would not actually cut off access (the public key would remain in
+// authorized_keys). Those lifecycle controls return once the runner can perform the on-server
+// half atomically. No RPC accepts or returns private key material. See
 // docs/architecture/server-management.md.
 service ServerSetupService {
   rpc GetManagementKey(GetManagementKeyRequest) returns (GetManagementKeyResponse);
-  rpc RotateManagementKey(RotateManagementKeyRequest) returns (RotateManagementKeyResponse);
-  rpc RevokeManagementKey(RevokeManagementKeyRequest) returns (RevokeManagementKeyResponse);
 }

@@ -81,9 +81,11 @@ func (s *service) Provision(ctx context.Context, in ProvisionInput) (Credential,
 }
 
 // Rotate replaces the active credential's key material with a fresh keypair. A missing or
-// revoked credential yields NotFound, so a rotation never silently strands a server. The
-// on-server install of the new public key is the bootstrap runner's job; this updates the
-// stored credential and returns the new public key for it to install.
+// revoked credential yields NotFound, so a rotation never silently strands a server. This is
+// in-process only (no RPC): the bootstrap runner must install the new public key on the
+// server and only then commit the rotation, so the stored credential never gets ahead of the
+// server's authorized_keys (a standalone rotate would leave the control plane holding a key
+// the server no longer trusts). It returns the new public key for the runner to install.
 func (s *service) Rotate(ctx context.Context, in RotateInput) (Credential, error) {
 	workspaceID, caller, err := s.authorizeServer(ctx, in.ServerID, authz.ActionServerSetupKeyRotate)
 	if err != nil {
@@ -124,10 +126,11 @@ func (s *service) Rotate(ctx context.Context, in RotateInput) (Credential, error
 	return saved, nil
 }
 
-// Revoke cuts off the management channel by marking the credential revoked. Removing the
-// public key from the server's authorized_keys is the bootstrap runner's job; this records
-// the intent so the runner refuses to use it. Revoking a missing/already-revoked credential
-// is NotFound and not audited.
+// Revoke cuts off the management channel by marking the credential revoked. This is in-process
+// only (no RPC): on its own it records intent so the runner refuses to use the key, but it
+// does NOT remove the public key from the server's authorized_keys — the bootstrap runner must
+// remove the on-server key as part of the same operation for revocation to actually deny
+// access. Revoking a missing/already-revoked credential is NotFound and not audited.
 func (s *service) Revoke(ctx context.Context, in RevokeInput) error {
 	workspaceID, caller, err := s.authorizeServer(ctx, in.ServerID, authz.ActionServerSetupKeyRevoke)
 	if err != nil {

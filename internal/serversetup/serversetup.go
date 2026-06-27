@@ -56,9 +56,12 @@ type FailedAuthInput struct {
 	Reason   string
 }
 
-// Service is the credential lifecycle. Get, Rotate, and Revoke are the user-driven RPC
-// surface. Provision, MarkUsed, RecordFailedAuth, and OpenPrivateKey are in-process only —
-// called by the SSH bootstrap runner, never exposed as RPCs. OpenPrivateKey returns opened
+// Service is the credential lifecycle. Get is the only user-driven RPC surface (read-only
+// metadata). Provision, Rotate, Revoke, MarkUsed, RecordFailedAuth, and OpenPrivateKey are
+// in-process only — called by the SSH bootstrap runner, never exposed as RPCs. Rotate and
+// Revoke are runner-only because each must also install/remove the key on the server in the
+// same operation; exposed standalone they would desync the stored credential from the
+// server's authorized_keys (see serversetup.proto). OpenPrivateKey returns opened
 // private-key bytes and so must never cross the API boundary.
 type Service interface {
 	Provision(ctx context.Context, in ProvisionInput) (Credential, error)
