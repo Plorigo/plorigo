@@ -1,6 +1,6 @@
 import { ConnectError } from "@connectrpc/connect";
 import { useQueryClient } from "@tanstack/react-query";
-import { TerminalSquare, Trash2 } from "lucide-react";
+import { ServerCog, TerminalSquare, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -8,19 +8,23 @@ import { Button } from "@/components/ui";
 import { setupClient } from "@/lib/clients";
 import { useManagementKey } from "@/lib/queries";
 
-// ServerCardActions groups a server's per-card actions: mint a fresh install command, manage
-// the SSH management credential (rotate / revoke), and delete the server. Rotate and revoke
-// appear only when the server actually has a managed SSH key (i.e. it was set up over SSH).
+// ServerCardActions groups a server's per-card actions: re-run SSH setup, mint a fresh install
+// command, manage the SSH management credential (rotate / revoke), and delete the server.
+// "Set up over SSH" / "Re-run setup" is always available so a server first connected with a
+// command can later be set up over SSH, and an SSH-managed server can be re-run (e.g. after its
+// password changed). Rotate and revoke appear only when the server has an active managed key.
 export function ServerCardActions({
   serverId,
   serverName,
   minting,
+  onSetup,
   onInstallCommand,
   onDelete,
 }: {
   serverId: string;
   serverName: string;
   minting: boolean;
+  onSetup: () => void;
   onInstallCommand: () => void;
   onDelete: () => void;
 }) {
@@ -52,10 +56,21 @@ export function ServerCardActions({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
-        <Button size="sm" variant="secondary" disabled={minting} onClick={onInstallCommand}>
-          <TerminalSquare className="h-4 w-4" aria-hidden="true" />
-          {minting ? "Generating..." : "Install command"}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={onSetup}
+            aria-label={`${hasKey ? "Re-run" : "Set up"} SSH setup for ${serverName}`}
+          >
+            <ServerCog className="h-4 w-4" aria-hidden="true" />
+            {hasKey ? "Re-run setup" : "Set up over SSH"}
+          </Button>
+          <Button size="sm" variant="secondary" disabled={minting} onClick={onInstallCommand}>
+            <TerminalSquare className="h-4 w-4" aria-hidden="true" />
+            {minting ? "Generating..." : "Install command"}
+          </Button>
+        </div>
         <ConfirmDialog
           trigger={
             <Button size="icon" variant="ghost" aria-label={`Delete server ${serverName}`}>

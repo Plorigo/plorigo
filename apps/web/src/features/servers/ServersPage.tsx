@@ -64,6 +64,9 @@ export function ServersPage() {
   const error = errorMessage(servers.error) || errorMessage(agents.error);
   const loading = servers.isLoading || agents.isLoading;
   const [connectOpen, setConnectOpen] = useState(false);
+  // The existing server whose SSH connection is being (re-)set up, or null when that dialog
+  // is closed. Drives a second ConnectServerDialog in existing-server mode.
+  const [setupServer, setSetupServer] = useState<{ id: string; name: string } | null>(null);
   const [installResult, setInstallResult] = useState<InstallCommandResult | null>(null);
   const [mintingFor, setMintingFor] = useState("");
   // Managed setup runs started this session, by server id — drives the card's
@@ -145,6 +148,16 @@ export function ServersPage() {
         onOpenChange={setConnectOpen}
         onManagedRun={(serverId, runId) => setManagedRuns((prev) => ({ ...prev, [serverId]: runId }))}
       />
+      {/* Re-run / start SSH setup on an existing server. Keyed by server id so it remounts with a
+          fresh form per server; shares the managed-run tracking so the card reflects progress. */}
+      <ConnectServerDialog
+        key={setupServer?.id ?? "none"}
+        workspaceId={workspaceId}
+        existingServer={setupServer ?? undefined}
+        open={setupServer !== null}
+        onOpenChange={(next) => !next && setSetupServer(null)}
+        onManagedRun={(serverId, runId) => setManagedRuns((prev) => ({ ...prev, [serverId]: runId }))}
+      />
       <InstallCommandDialog result={installResult} onClose={() => setInstallResult(null)} />
 
       {loading && (
@@ -216,6 +229,7 @@ export function ServersPage() {
                       serverId={server.id}
                       serverName={server.name}
                       minting={mintingFor === server.id}
+                      onSetup={() => setSetupServer({ id: server.id!, name: server.name })}
                       onInstallCommand={() => void showInstallCommand(server)}
                       onDelete={() => void deleteServer(server)}
                     />
