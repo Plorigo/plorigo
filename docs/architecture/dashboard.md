@@ -55,7 +55,12 @@ separate concern and can make its own choice.)
 > public/private visibility toggle and calls `ServiceService.CreateService(deploy_now)`. A
 > **service detail page** at `/projects/$projectId/services/$serviceId` shows the source, port,
 > visibility, env vars, and deployment history, with a **Redeploy** action
-> (`CreateDeploymentForService`). Env-var management is **service-scoped**. Domains appear in
+> (`CreateDeploymentForService`). Env-var management is **service-scoped**. An **environment
+> detail page** at `/projects/$projectId/environments/$environmentId` (reached from the project's
+> environment badges) is the home for that environment's **write-only secrets** and lists the
+> services deployed into it — so secret management is **environment-scoped** while env vars stay
+> service-scoped, the deliberate asymmetry from [security.md](./security.md). Secret values are
+> set but never read back: the UI shows keys and metadata only. Domains appear in
 > two places: the service detail page shows that service's generated domain and custom domains,
 > while `/domains` is the scoped domain-management surface. With a project selected it lists
 > domains for that project's services; without a project selected it lists all workspace custom

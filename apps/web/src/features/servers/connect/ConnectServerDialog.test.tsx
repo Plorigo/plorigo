@@ -122,6 +122,35 @@ describe("ConnectServerDialog — managed path", () => {
     expect(screen.getByRole("button", { name: /use a command instead/i })).toBeInTheDocument();
   });
 
+  it("re-runs setup on an existing server without creating a new one", async () => {
+    const user = userEvent.setup();
+    const onManagedRun = vi.fn();
+    renderWithClient(
+      <ConnectServerDialog
+        workspaceId="ws-1"
+        open
+        onOpenChange={vi.fn()}
+        onManagedRun={onManagedRun}
+        existingServer={{ id: "srv-1", name: "prod-1" }}
+      />,
+    );
+
+    // Opens straight on the SSH tab with the name locked to the existing server.
+    const nameField = screen.getByLabelText("Server name") as HTMLInputElement;
+    expect(nameField).toBeDisabled();
+    expect(nameField.value).toBe("prod-1");
+
+    await user.type(screen.getByLabelText("Host or IP"), "203.0.113.10");
+    await user.type(screen.getByLabelText("Password"), "newpass");
+    await user.click(screen.getByRole("button", { name: /prepare server/i }));
+
+    expect(await screen.findByText(/prod-1 is ready/i)).toBeInTheDocument();
+    // No new server record — the existing id is reused.
+    expect(m.createServer).not.toHaveBeenCalled();
+    expect(m.startSetup.mock.calls[0][0]).toMatchObject({ serverId: "srv-1", host: "203.0.113.10", password: "newpass" });
+    expect(onManagedRun).toHaveBeenCalledWith("srv-1", "run-1");
+  });
+
   it("returns to the form on retry and reuses the same server record", async () => {
     m.getSetupRun.mockResolvedValue({ run: run("failed", "the agent did not connect in time.") });
     const user = userEvent.setup();
