@@ -109,7 +109,11 @@ func (a Agent) Status(now time.Time) string {
 // prerequisite is missing or unsafe), or "unknown" (offline/never connected). The extended
 // Caddy/disk/memory checks run only for agents that report them (CPUCount > 0), so older
 // agents are never falsely blocked.
-func (a Agent) Readiness(now time.Time) (state, reason string) {
+//
+// allowNonLinuxHost relaxes the Linux-only host requirement; it is true only in dev so a
+// contributor can run the agent on their macOS/Windows workstation against a local control
+// plane. Production always passes false — Plorigo deploys to Linux servers.
+func (a Agent) Readiness(now time.Time, allowNonLinuxHost bool) (state, reason string) {
 	switch a.Status(now) {
 	case StatusAwaiting:
 		return ReadinessUnknown, "Waiting for the agent to connect. Run the install command on the server."
@@ -118,7 +122,7 @@ func (a Agent) Readiness(now time.Time) (state, reason string) {
 	}
 
 	// Hard blockers first — a deployment cannot succeed or serve traffic in these states.
-	if a.OS != "" && a.OS != "linux" {
+	if !allowNonLinuxHost && a.OS != "" && a.OS != "linux" {
 		return ReadinessBlocked, fmt.Sprintf("Unsupported host OS %q — Plorigo deploys to Linux servers.", a.OS)
 	}
 	if a.DockerAvailable != nil && !*a.DockerAvailable {

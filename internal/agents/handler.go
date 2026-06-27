@@ -48,7 +48,7 @@ func (h *adminHandler) ListAgentsByWorkspace(ctx context.Context, req *connect.R
 	now := h.now()
 	out := make([]*controlplanev1.Agent, 0, len(agents))
 	for _, a := range agents {
-		out = append(out, toProto(a, now))
+		out = append(out, toProto(a, now, h.dev))
 	}
 	return connect.NewResponse(&controlplanev1.ListAgentsByWorkspaceResponse{Agents: out}), nil
 }
@@ -157,12 +157,12 @@ func clampBytes(n int64) int64 {
 	return n
 }
 
-func toProto(a Agent, now time.Time) *controlplanev1.Agent {
+func toProto(a Agent, now time.Time, allowNonLinuxHost bool) *controlplanev1.Agent {
 	lastSeen := ""
 	if a.LastSeenAt != nil {
 		lastSeen = a.LastSeenAt.UTC().Format(time.RFC3339)
 	}
-	readiness, reason := a.Readiness(now)
+	readiness, reason := a.Readiness(now, allowNonLinuxHost)
 	return &controlplanev1.Agent{
 		Id:                a.ID,
 		ServerId:          a.ServerID,
