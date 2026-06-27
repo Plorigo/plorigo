@@ -9,18 +9,26 @@ import (
 )
 
 type Agent struct {
-	ID              string
-	ServerID        string
-	WorkspaceID     string
-	PublicKey       []byte
-	CredentialHash  []byte
-	AgentVersion    string
-	LastSeenAt      *time.Time
-	CreatedAt       time.Time
-	DockerAvailable *bool
-	DockerVersion   string
-	Os              string
-	Arch            string
+	ID                string
+	ServerID          string
+	WorkspaceID       string
+	PublicKey         []byte
+	CredentialHash    []byte
+	AgentVersion      string
+	LastSeenAt        *time.Time
+	CreatedAt         time.Time
+	DockerAvailable   *bool
+	DockerVersion     string
+	Os                string
+	Arch              string
+	CaddyAvailable    *bool
+	CaddyRunning      bool
+	CaddyVersion      string
+	DiskTotalBytes    int64
+	DiskFreeBytes     int64
+	MemTotalBytes     int64
+	MemAvailableBytes int64
+	CpuCount          int32
 }
 
 type AgentRegistrationToken struct {
@@ -56,28 +64,42 @@ type AuditEvent struct {
 	CreatedAt   time.Time
 }
 
-type Deployment struct {
+type ConfigEntry struct {
 	ID            string
-	EnvironmentID string
-	ProjectID     string
-	WorkspaceID   string
-	ServerID      string
-	ImageRef      string
-	ContainerPort int32
-	HostPort      int32
-	ContainerID   string
-	Status        string
-	Message       string
+	Type          string
+	Scope         string
+	ServiceID     *string
+	EnvironmentID *string
+	Key           string
+	Value         *string
+	Ciphertext    []byte
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
-	SourceKind    string
-	SourceAccess  string
-	CloneUrl      string
-	GitRef        string
-	CommitSha     string
-	BuiltImageRef string
-	RouteUrl      string
-	ServiceID     string
+}
+
+type Deployment struct {
+	ID             string
+	EnvironmentID  string
+	ProjectID      string
+	WorkspaceID    string
+	ServerID       string
+	ImageRef       string
+	ContainerPort  int32
+	HostPort       int32
+	ContainerID    string
+	Status         string
+	Message        string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	SourceKind     string
+	SourceAccess   string
+	CloneUrl       string
+	GitRef         string
+	CommitSha      string
+	BuiltImageRef  string
+	RouteUrl       string
+	ServiceID      string
+	RolledBackFrom *string
 }
 
 type DeploymentEvent struct {
@@ -103,15 +125,6 @@ type Domain struct {
 	LastCheckedAt *time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
-}
-
-type EnvVar struct {
-	ID        string
-	Key       string
-	Value     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	ServiceID string
 }
 
 type Environment struct {
@@ -143,21 +156,36 @@ type Project struct {
 	CreatedAt   time.Time
 }
 
-type Secret struct {
-	ID            string
-	EnvironmentID string
-	Key           string
-	Ciphertext    []byte
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+type Server struct {
+	ID                 string
+	WorkspaceID        string
+	Name               string
+	Slug               string
+	CreatedAt          time.Time
+	HostKeyFingerprint string
 }
 
-type Server struct {
-	ID          string
-	WorkspaceID string
-	Name        string
-	Slug        string
-	CreatedAt   time.Time
+type ServerSetupEvent struct {
+	ID         string
+	SetupRunID string
+	Seq        int64
+	Step       string
+	Kind       string
+	Status     string
+	Message    string
+	CreatedAt  time.Time
+}
+
+type ServerSetupRun struct {
+	ID            string
+	ServerID      string
+	WorkspaceID   string
+	Status        string
+	FailureReason string
+	StartedBy     *string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	FinishedAt    *time.Time
 }
 
 type Service struct {
@@ -209,6 +237,21 @@ type SourceConnection struct {
 	ConnectedBy           *string
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
+}
+
+type SshManagementKey struct {
+	ID               string
+	ServerID         string
+	Fingerprint      string
+	PublicKey        string
+	SealedPrivateKey []byte
+	RotationState    string
+	LastUsedAt       *time.Time
+	RotatedAt        *time.Time
+	RevokedAt        *time.Time
+	CreatedBy        *string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type User struct {

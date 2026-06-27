@@ -137,11 +137,11 @@ type Enqueuer interface {
 	EnqueueFirstDeployment(ctx context.Context, tx database.Tx, serviceID, serverID string) (string, error)
 }
 
-// EnvVarSetter is the CONSUMER-DEFINED port for writing a managed service's generated
-// configuration (e.g. a database's credentials) inside the create transaction. *envvars.Service
-// satisfies it structurally — services never imports envvars, and env_vars stays owned by that
-// module. The caller has already authorized the service create, so this performs no auth of its
-// own (it is part of the same provisioning action).
-type EnvVarSetter interface {
+// ConfigSetter is the CONSUMER-DEFINED port for writing a managed service's generated
+// configuration (e.g. a database's credentials) inside the create transaction. *config.Service
+// satisfies it structurally — services never imports config, and the config_entries table stays
+// owned by that module. The caller has already authorized the service create, so this performs
+// no auth of its own (it is part of the same provisioning action).
+type ConfigSetter interface {
 	SetWithinTx(ctx context.Context, tx database.Tx, serviceID string, vars map[string]string) error
 }

@@ -1,12 +1,16 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
-import { Link, useParams } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ConnectError } from "@connectrpc/connect";
+import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { ArrowLeft, RotateCcw } from "lucide-react";
+import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { FailureSummary } from "@/components/FailureSummary";
 import { Timeline } from "@/components/Timeline";
-import { Badge, EmptyState, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
+import { Badge, Button, EmptyState, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { DeploymentEvent } from "@/gen/controlplane/v1/deployments_pb";
+import { deploymentClient } from "@/lib/clients";
 import { useEffectiveProjectId } from "@/lib/projectScope";
 import { isTerminalDeploymentStatus, useDeployment, useDeploymentEvents } from "@/lib/queries";
 import { statusTone } from "@/lib/status";
@@ -16,9 +20,31 @@ export function DeploymentDetailPage() {
   const { deploymentId } = useParams({ strict: false }) as { deploymentId?: string };
   const id = deploymentId ?? "";
   const projectId = useEffectiveProjectId();
+  const navigate = useNavigate();
+  const [rollingBack, setRollingBack] = useState(false);
   const dep = useDeployment(id);
   const live = !dep.data || !isTerminalDeploymentStatus(dep.data.status);
   const events = useDeploymentEvents(id, live);
+
+  // Rolling back reproduces this deployment's artifact as a new deployment that goes through
+  // the normal health-check/route-switch flow, so the current running release stays up until
+  // the rollback is healthy. Navigate to the new deployment to watch it.
+  async function rollback() {
+    setRollingBack(true);
+    try {
+      const { deployment } = await deploymentClient.rollbackDeployment({ targetDeploymentId: id });
+      if (!deployment) throw new Error("the rollback deployment was not created");
+      toast.success("Rolling back to this version");
+      if (projectId) {
+        void navigate({ to: "/projects/$projectId/deployments/$deploymentId", params: { projectId, deploymentId: deployment.id } });
+      } else {
+        void navigate({ to: "/deployments/$deploymentId", params: { deploymentId: deployment.id } });
+      }
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not start the rollback");
+      setRollingBack(false);
+    }
+  }
 
   if (dep.isLoading && !dep.data) {
     return (
@@ -47,7 +73,10 @@ export function DeploymentDetailPage() {
   // distinction, so they fall back into the build view.
   const buildLogs = allLogs.filter((e) => e.stream === "build" || e.stream === "");
   const runtimeLogs = allLogs.filter((e) => e.stream === "runtime");
-  const failedBecauseCaddy = /caddy/i.test(d.message);
+  // A health-check failure is the most specific case (the container started but never
+  // accepted connections), so it takes priority over the generic Caddy/build messages.
+  const failedHealthCheck = /health check/i.test(d.message);
+  const failedBecauseCaddy = !failedHealthCheck && /caddy/i.test(d.message);
   // On failure, show the tail of whichever stream is relevant: a container/health failure
   // has runtime output; a build-phase failure has only build output.
   const failureTail = (runtimeLogs.length > 0 ? runtimeLogs : buildLogs).slice(-6).map((l) => l.message);
@@ -66,17 +95,35 @@ export function DeploymentDetailPage() {
           </div>
           <p className="mt-1.5 text-sm text-muted-foreground">Deployment {d.id.slice(0, 8)}</p>
         </div>
+        {/* A superseded deployment is a previous healthy version, so it can be rolled back to. */}
+        {d.status === "superseded" && (
+          <ConfirmDialog
+            trigger={
+              <Button size="sm" variant="secondary" disabled={rollingBack} className="shrink-0">
+                <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                {rollingBack ? "Rolling back…" : "Roll back to this version"}
+              </Button>
+            }
+            title="Roll back to this version?"
+            description="This redeploys this version's exact build as a new deployment. It goes live only after it passes its health check."
+            recovery="Your current running release stays up until the rollback is healthy, and every version remains in the deployment history."
+            confirmLabel="Roll back"
+            onConfirm={rollback}
+          />
+        )}
       </div>
 
       {d.status === "failed" && (
         <FailureSummary
           headline={d.message || "The deployment failed."}
           suggestion={
-            failedBecauseCaddy
-              ? "The app built and started, but the agent could not update Caddy. Install Caddy on the server or set the agent's Caddy binary path, then deploy again — any previous running release is kept."
-              : isGit
-                ? "The build or container did not succeed. Check that the repo has a Dockerfile at its root and that the app listens on the container port you set, then deploy again — any previous running release is kept."
-                : "The container did not reach a healthy state or Caddy could not route traffic. Check the image reference, app port, and Caddy service, then deploy again — any previous running release is kept."
+            failedHealthCheck
+              ? "The container started but never began accepting connections on its port within the health-check window. Make sure the app listens on the container port you configured and binds to 0.0.0.0 (not just localhost), then deploy again — any previous running release is kept."
+              : failedBecauseCaddy
+                ? "The app built and started, but the agent could not update Caddy. Install Caddy on the server or set the agent's Caddy binary path, then deploy again — any previous running release is kept."
+                : isGit
+                  ? "The build or container did not succeed. Check that the repo has a Dockerfile at its root and that the app listens on the container port you set, then deploy again — any previous running release is kept."
+                  : "The container did not reach a healthy state or Caddy could not route traffic. Check the image reference, app port, and Caddy service, then deploy again — any previous running release is kept."
           }
           logs={failureTail}
         />
@@ -86,7 +133,7 @@ export function DeploymentDetailPage() {
         <Panel>
           <PanelHeader
             title="Timeline"
-            description={isGit ? "Clone → build → start → route → running." : "Pull → start → health check → route → running."}
+            description={isGit ? "Clone → build → start → health check → route → running." : "Pull → start → health check → route → running."}
           />
           <div className="p-5">
             <Timeline steps={steps} />
@@ -97,6 +144,7 @@ export function DeploymentDetailPage() {
           <PanelHeader title="Details" />
           <div className="space-y-3 p-4 text-sm">
             <Row label="Status" value={<Badge tone={statusTone(d.status)}>{d.status}</Badge>} />
+            {d.rolledBackFrom && <Row label="Rolled back from" value={<DeploymentRef id={d.rolledBackFrom} projectId={projectId} />} />}
             <Row
               label="Host port"
               value={
@@ -259,6 +307,24 @@ function formatLogTime(iso: string): string {
   return [date.getHours(), date.getMinutes(), date.getSeconds()]
     .map((part) => String(part).padStart(2, "0"))
     .join(":");
+}
+
+// DeploymentRef links to another deployment's detail page, project-scoped when we are in a
+// project context. Used to point a rollback back at the version it restored.
+function DeploymentRef({ id, projectId }: { id: string; projectId: string }) {
+  const className = "font-mono text-blue-400 hover:text-blue-300 hover:underline";
+  if (projectId) {
+    return (
+      <Link to="/projects/$projectId/deployments/$deploymentId" params={{ projectId, deploymentId: id }} className={className}>
+        {id.slice(0, 8)}
+      </Link>
+    );
+  }
+  return (
+    <Link to="/deployments/$deploymentId" params={{ deploymentId: id }} className={className}>
+      {id.slice(0, 8)}
+    </Link>
+  );
 }
 
 function Row({ label, value }: { label: string; value: ReactNode }) {

@@ -12,9 +12,9 @@ import (
 )
 
 // Deps are what the services module needs. Audit, Policy, Crypto, GitHub, Enqueuer, and
-// EnvVars are CONSUMER-DEFINED ports (authz.Authorizer is satisfied by *policy.Service,
+// Config are CONSUMER-DEFINED ports (authz.Authorizer is satisfied by *policy.Service,
 // Recorder by *audit.Service, SecretBox by *crypto.Box, GitHubClient by *github.Client,
-// Enqueuer by *deployments.Service, EnvVarSetter by *envvars.Service), wired in internal/app
+// Enqueuer by *deployments.Service, ConfigSetter by *config.Service), wired in internal/app
 // — services imports none of those modules.
 type Deps struct {
 	DB       *database.DB
@@ -23,7 +23,7 @@ type Deps struct {
 	Crypto   SecretBox
 	GitHub   GitHubClient
 	Enqueuer Enqueuer
-	EnvVars  EnvVarSetter
+	Config   ConfigSetter
 	Log      *slog.Logger
 }
 
@@ -36,7 +36,7 @@ type Module struct {
 func New(d Deps) *Module {
 	store := newPostgresStore(d.DB)
 	return &Module{
-		service: newService(d.DB, store, d.Crypto, d.GitHub, d.Enqueuer, d.EnvVars, d.Policy, d.Audit, d.Log),
+		service: newService(d.DB, store, d.Crypto, d.GitHub, d.Enqueuer, d.Config, d.Policy, d.Audit, d.Log),
 	}
 }
 

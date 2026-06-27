@@ -33,14 +33,14 @@ type service struct {
 	box        SecretBox
 	gh         GitHubClient
 	enqueuer   Enqueuer
-	envvars    EnvVarSetter
+	cfg        ConfigSetter
 	authorizer authz.Authorizer
 	audit      Recorder
 	log        *slog.Logger
 }
 
-func newService(tx TxRunner, store Store, box SecretBox, gh GitHubClient, enqueuer Enqueuer, envvars EnvVarSetter, authorizer authz.Authorizer, audit Recorder, log *slog.Logger) *service {
-	return &service{tx: tx, store: store, box: box, gh: gh, enqueuer: enqueuer, envvars: envvars, authorizer: authorizer, audit: audit, log: log}
+func newService(tx TxRunner, store Store, box SecretBox, gh GitHubClient, enqueuer Enqueuer, cfg ConfigSetter, authorizer authz.Authorizer, audit Recorder, log *slog.Logger) *service {
+	return &service{tx: tx, store: store, box: box, gh: gh, enqueuer: enqueuer, cfg: cfg, authorizer: authorizer, audit: audit, log: log}
 }
 
 var _ Servicer = (*service)(nil)
@@ -160,8 +160,8 @@ func (s *service) CreateService(ctx context.Context, in CreateInput) (Result, er
 
 // CreateDatabase provisions a managed database (e.g. Postgres) as a PRIVATE service from a
 // built-in template: the control plane picks the image + port, generates the credentials, and
-// stores them as the service's env vars (through the EnvVarSetter port, the same way deploy_now
-// writes the deployments table through the Enqueuer port) so the container starts ready and
+// stores them as the service's config variables (through the ConfigSetter port, the same way
+// deploy_now writes the deployments table through the Enqueuer port) so the container starts ready and
 // siblings can connect over the per-environment network. The credentials and the first
 // deployment commit in one transaction. The connection URI is returned so the dashboard can
 // surface it. Data is NOT persisted across redeploys yet (volumes are a later slice).
@@ -228,9 +228,9 @@ func (s *service) CreateDatabase(ctx context.Context, in DatabaseInput) (Databas
 		if txErr != nil {
 			return txErr
 		}
-		// Store the generated credentials as the service's env vars so the agent injects them
-		// when it starts the container (envvars owns that table; we write through its port).
-		if txErr := s.envvars.SetWithinTx(ctx, tx, saved.ID, tmpl.env(password)); txErr != nil {
+		// Store the generated credentials as the service's config variables so the agent injects
+		// them when it starts the container (config owns that table; we write through its port).
+		if txErr := s.cfg.SetWithinTx(ctx, tx, saved.ID, tmpl.env(password)); txErr != nil {
 			return txErr
 		}
 		if txErr := s.audit.Record(ctx, tx, "service.create_database", "service", saved.ID, workspaceID, caller.UserID); txErr != nil {

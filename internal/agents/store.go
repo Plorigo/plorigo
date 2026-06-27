@@ -33,6 +33,16 @@ type HeartbeatFacts struct {
 	DockerVersion   string
 	OS              string
 	Arch            string
+	// Extended host-readiness facts (PLO-95). CaddyAvailable is a tri-state (nil = not
+	// reported); CPUCount == 0 marks an agent that does not report the extended facts.
+	CaddyAvailable    *bool
+	CaddyRunning      bool
+	CaddyVersion      string
+	DiskTotalBytes    int64
+	DiskFreeBytes     int64
+	MemTotalBytes     int64
+	MemAvailableBytes int64
+	CPUCount          int32
 }
 
 // RegistrationTokenRow is the persisted form of a minted registration token.

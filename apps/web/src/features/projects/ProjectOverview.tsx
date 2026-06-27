@@ -210,7 +210,7 @@ export function ProjectOverview({
       <Panel>
         <PanelHeader
           title="Environments"
-          description="The deployment targets within this project."
+          description="The deployment targets within this project. Open one to manage its secrets."
           action={
             <Button size="sm" variant="secondary" onClick={() => setAddEnvOpen(true)}>
               Add environment
@@ -221,9 +221,22 @@ export function ProjectOverview({
           {(environments.data ?? []).length > 0 ? (
             <div className="flex flex-wrap gap-2">
               {(environments.data ?? []).map((environment) => (
-                <Badge key={environment.id} tone={environmentTone(environment.type)}>
-                  {environment.name} · {environment.type}
-                </Badge>
+                <button
+                  key={environment.id}
+                  type="button"
+                  title={`Open ${environment.name} to manage its secrets`}
+                  onClick={() =>
+                    navigate({
+                      to: "/projects/$projectId/environments/$environmentId",
+                      params: { projectId: project.id, environmentId: environment.id },
+                    })
+                  }
+                  className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Badge tone={environmentTone(environment.type)} className="cursor-pointer hover:opacity-80">
+                    {environment.name} · {environment.type}
+                  </Badge>
+                </button>
               ))}
             </div>
           ) : (

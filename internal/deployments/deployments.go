@@ -21,16 +21,17 @@ import (
 // Deployment statuses, persisted on the deployments row and CHECK-constrained in the
 // migration as defense-in-depth.
 const (
-	StatusQueued     = "queued"     // recorded by the control plane, not yet claimed
-	StatusAssigned   = "assigned"   // claimed by the server's agent
-	StatusCloning    = "cloning"    // the agent is cloning the source repo (git)
-	StatusBuilding   = "building"   // the agent is building the image (git)
-	StatusPulling    = "pulling"    // the agent is pulling the image (image)
-	StatusStarting   = "starting"   // the agent is creating/starting the container
-	StatusRouting    = "routing"    // the agent is validating/reloading Caddy routing
-	StatusRunning    = "running"    // the container is up and passed its health check
-	StatusFailed     = "failed"     // the attempt failed (see message / logs)
-	StatusSuperseded = "superseded" // replaced by a newer running deployment
+	StatusQueued      = "queued"      // recorded by the control plane, not yet claimed
+	StatusAssigned    = "assigned"    // claimed by the server's agent
+	StatusCloning     = "cloning"     // the agent is cloning the source repo (git)
+	StatusBuilding    = "building"    // the agent is building the image (git)
+	StatusPulling     = "pulling"     // the agent is pulling the image (image)
+	StatusStarting    = "starting"    // the agent is creating/starting the container
+	StatusHealthcheck = "healthcheck" // the agent is probing the new container's health
+	StatusRouting     = "routing"     // the agent is validating/reloading Caddy routing
+	StatusRunning     = "running"     // the container is up and passed its health check
+	StatusFailed      = "failed"      // the attempt failed (see message / logs)
+	StatusSuperseded  = "superseded"  // replaced by a newer running deployment
 )
 
 // Source kinds: an image deployment runs a pre-built image; a git deployment clones a
@@ -87,6 +88,10 @@ type Deployment struct {
 	// by the agent for a PUBLIC service and stored so the dashboard can display a clickable
 	// link. Empty for a private service (no public route).
 	RouteURL string
+
+	// RolledBackFrom is the id of the previous healthy deployment this one reproduces, set
+	// when it was created by a rollback. Empty for a normal deploy.
+	RolledBackFrom string
 }
 
 // Event is one entry in a deployment's timeline: a status transition (KindStatus) or
@@ -226,6 +231,11 @@ type ReportRouteSyncInput struct {
 // controlplane.v1.DeploymentService and the agent-facing agent.v1.DeployService.
 type Service interface {
 	CreateForService(ctx context.Context, in CreateForServiceInput) (Deployment, error)
+	// RollbackToDeployment enqueues a new deployment that reproduces a previous healthy
+	// deployment's artifact (same image, or same repo pinned to the built commit) on the
+	// same service and server, linked back via rolled_back_from. The target must be running
+	// or superseded.
+	RollbackToDeployment(ctx context.Context, targetDeploymentID string) (Deployment, error)
 	Get(ctx context.Context, deploymentID string) (Deployment, error)
 	ListByService(ctx context.Context, serviceID string) ([]Deployment, error)
 	ListByEnvironment(ctx context.Context, environmentID string) ([]Deployment, error)

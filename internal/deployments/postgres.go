@@ -78,14 +78,20 @@ func (s *postgresStore) AgentServerByCredential(ctx context.Context, credentialH
 	return row.ID, row.ServerID, true, nil
 }
 
-func (s *postgresStore) EnvVarsForService(ctx context.Context, serviceID string) (map[string]string, error) {
-	rows, err := db.New(s.pool).ListEnvVarsByService(ctx, serviceID)
+func (s *postgresStore) ConfigForService(ctx context.Context, serviceID string) ([]ConfigForDeploy, error) {
+	rows, err := db.New(s.pool).ListConfigForService(ctx, &serviceID)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]string, len(rows))
+	out := make([]ConfigForDeploy, 0, len(rows))
 	for _, r := range rows {
-		out[r.Key] = r.Value
+		out = append(out, ConfigForDeploy{
+			Type:       r.Type,
+			Scope:      r.Scope,
+			Key:        r.Key,
+			Value:      r.Value,
+			Ciphertext: r.Ciphertext,
+		})
 	}
 	return out, nil
 }
@@ -127,13 +133,14 @@ func (s *postgresStore) serviceForDeploy(ctx context.Context, q db.DBTX, service
 
 func (s *postgresStore) InsertDeployment(ctx context.Context, tx database.Tx, d NewDeployment) (Deployment, error) {
 	row, err := db.New(tx).CreateDeployment(ctx, db.CreateDeploymentParams{
-		ServiceID:     d.ServiceID,
-		EnvironmentID: d.EnvironmentID,
-		ProjectID:     d.ProjectID,
-		WorkspaceID:   d.WorkspaceID,
-		ServerID:      d.ServerID,
-		ImageRef:      d.ImageRef,
-		ContainerPort: d.ContainerPort,
+		ServiceID:      d.ServiceID,
+		EnvironmentID:  d.EnvironmentID,
+		ProjectID:      d.ProjectID,
+		WorkspaceID:    d.WorkspaceID,
+		ServerID:       d.ServerID,
+		ImageRef:       d.ImageRef,
+		ContainerPort:  d.ContainerPort,
+		RolledBackFrom: nullableID(d.RolledBackFrom),
 	})
 	if err != nil {
 		return Deployment{}, err
@@ -143,15 +150,16 @@ func (s *postgresStore) InsertDeployment(ctx context.Context, tx database.Tx, d 
 
 func (s *postgresStore) InsertDeploymentFromGit(ctx context.Context, tx database.Tx, d NewDeploymentFromGit) (Deployment, error) {
 	row, err := db.New(tx).CreateDeploymentFromGit(ctx, db.CreateDeploymentFromGitParams{
-		ServiceID:     d.ServiceID,
-		EnvironmentID: d.EnvironmentID,
-		ProjectID:     d.ProjectID,
-		WorkspaceID:   d.WorkspaceID,
-		ServerID:      d.ServerID,
-		ContainerPort: d.ContainerPort,
-		SourceAccess:  d.SourceAccess,
-		CloneUrl:      d.CloneURL,
-		GitRef:        d.GitRef,
+		ServiceID:      d.ServiceID,
+		EnvironmentID:  d.EnvironmentID,
+		ProjectID:      d.ProjectID,
+		WorkspaceID:    d.WorkspaceID,
+		ServerID:       d.ServerID,
+		ContainerPort:  d.ContainerPort,
+		SourceAccess:   d.SourceAccess,
+		CloneUrl:       d.CloneURL,
+		GitRef:         d.GitRef,
+		RolledBackFrom: nullableID(d.RolledBackFrom),
 	})
 	if err != nil {
 		return Deployment{}, err
@@ -305,28 +313,45 @@ func deploymentsFromRows(rows []db.Deployment) []Deployment {
 
 func deploymentFromRow(r db.Deployment) Deployment {
 	return Deployment{
-		ID:            r.ID,
-		ServiceID:     r.ServiceID,
-		EnvironmentID: r.EnvironmentID,
-		ProjectID:     r.ProjectID,
-		WorkspaceID:   r.WorkspaceID,
-		ServerID:      r.ServerID,
-		ImageRef:      r.ImageRef,
-		ContainerPort: r.ContainerPort,
-		HostPort:      r.HostPort,
-		ContainerID:   r.ContainerID,
-		Status:        r.Status,
-		Message:       r.Message,
-		CreatedAt:     r.CreatedAt,
-		UpdatedAt:     r.UpdatedAt,
-		SourceKind:    r.SourceKind,
-		SourceAccess:  r.SourceAccess,
-		CloneURL:      r.CloneUrl,
-		GitRef:        r.GitRef,
-		CommitSha:     r.CommitSha,
-		BuiltImageRef: r.BuiltImageRef,
-		RouteURL:      r.RouteUrl,
+		ID:             r.ID,
+		ServiceID:      r.ServiceID,
+		EnvironmentID:  r.EnvironmentID,
+		ProjectID:      r.ProjectID,
+		WorkspaceID:    r.WorkspaceID,
+		ServerID:       r.ServerID,
+		ImageRef:       r.ImageRef,
+		ContainerPort:  r.ContainerPort,
+		HostPort:       r.HostPort,
+		ContainerID:    r.ContainerID,
+		Status:         r.Status,
+		Message:        r.Message,
+		CreatedAt:      r.CreatedAt,
+		UpdatedAt:      r.UpdatedAt,
+		SourceKind:     r.SourceKind,
+		SourceAccess:   r.SourceAccess,
+		CloneURL:       r.CloneUrl,
+		GitRef:         r.GitRef,
+		CommitSha:      r.CommitSha,
+		BuiltImageRef:  r.BuiltImageRef,
+		RouteURL:       r.RouteUrl,
+		RolledBackFrom: derefStr(r.RolledBackFrom),
 	}
+}
+
+// nullableID maps an optional id to a nullable uuid column: "" becomes NULL (nil pointer).
+func nullableID(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// derefStr reads a nullable column back: a NULL (nil pointer) becomes "".
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func eventFromRow(r db.DeploymentEvent) Event {

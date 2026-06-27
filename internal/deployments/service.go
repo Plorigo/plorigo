@@ -31,14 +31,66 @@ type service struct {
 	store      Store
 	authorizer authz.Authorizer
 	audit      Recorder
+	opener     Opener
 	log        *slog.Logger
 }
 
-func newService(tx TxRunner, store Store, authorizer authz.Authorizer, audit Recorder, log *slog.Logger) *service {
-	return &service{tx: tx, store: store, authorizer: authorizer, audit: audit, log: log}
+func newService(tx TxRunner, store Store, authorizer authz.Authorizer, audit Recorder, opener Opener, log *slog.Logger) *service {
+	return &service{tx: tx, store: store, authorizer: authorizer, audit: audit, opener: opener, log: log}
 }
 
 var _ Service = (*service)(nil)
+
+// Config scope/type values, matching the config_entries table (deployments must not import
+// the config module — these are the stored enum strings).
+const (
+	configScopeService     = "service"
+	configScopeEnvironment = "environment"
+	configTypeSecret       = "secret"
+)
+
+// configEnvForService builds the container env for a service: its environment-shared entries
+// merged with its own service-level entries, the latter overriding on a key collision
+// (environment = defaults, service = override). Secret values are decrypted here via the
+// Opener; variable values are plaintext. The merged map of plaintext KEY=VALUE travels to
+// the agent in the signed deploy job, exactly as env vars always have.
+func (s *service) configEnvForService(ctx context.Context, serviceID string) (map[string]string, error) {
+	entries, err := s.store.ConfigForService(ctx, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	env := make(map[string]string, len(entries))
+	// Apply environment-shared first, then service-level so service overrides on collision.
+	for _, scope := range []string{configScopeEnvironment, configScopeService} {
+		for _, e := range entries {
+			if e.Scope != scope {
+				continue
+			}
+			val, verr := s.configValue(e)
+			if verr != nil {
+				return nil, verr
+			}
+			env[e.Key] = val
+		}
+	}
+	return env, nil
+}
+
+// configValue returns an entry's plaintext: a variable's stored value, or a secret's
+// decrypted ciphertext (opened in-process, never logged).
+func (s *service) configValue(e ConfigForDeploy) (string, error) {
+	if e.Type == configTypeSecret {
+		plain, err := s.opener.Open(e.Ciphertext)
+		if err != nil {
+			return "", err
+		}
+		return string(plain), nil
+	}
+	if e.Value != nil {
+		return *e.Value, nil
+	}
+	return "", nil
+}
 
 // CreateForService records a queued deployment for an existing service on a server, so the
 // agent for that server claims it on its next poll. The service resolves the source
@@ -103,6 +155,91 @@ func (s *service) CreateForService(ctx context.Context, in CreateForServiceInput
 	}
 	s.log.Info("deployment created", "id", created.ID, "service_id", in.ServiceID, "server_id", created.ServerID, "source_kind", created.SourceKind, "workspace_id", workspaceID, "actor", caller.UserID)
 	return created, nil
+}
+
+// RollbackToDeployment redeploys a previous healthy version: it enqueues a NEW deployment
+// that reproduces the target deployment's artifact — the same pre-built image, or the same
+// repo pinned to the exact built commit — on the same service and server, linked back via
+// rolled_back_from so the action shows in deployment history. The new deployment runs the
+// normal flow (health check, then traffic switch), so a failed rollback keeps the current
+// running release and leaves its own logs to diagnose. The target must be a previously
+// healthy deployment (running or superseded).
+func (s *service) RollbackToDeployment(ctx context.Context, targetDeploymentID string) (Deployment, error) {
+	if _, err := id.Parse(targetDeploymentID); err != nil {
+		return Deployment{}, problem.InvalidInput("a valid deployment id is required")
+	}
+	target, ok, err := s.store.GetDeployment(ctx, targetDeploymentID)
+	if err != nil {
+		return Deployment{}, problem.Internalf(err, "rollback deployment")
+	}
+	if !ok {
+		return Deployment{}, problem.NotFound("deployment %s not found", targetDeploymentID)
+	}
+
+	caller := principal.FromContext(ctx)
+	// A rollback creates a deployment, so it takes the same privilege as a deploy.
+	if err := s.authorizer.Authorize(ctx, caller, authz.ActionDeploymentCreate, authz.Resource{Type: "deployment", WorkspaceID: target.WorkspaceID}); err != nil {
+		return Deployment{}, err
+	}
+
+	// Only a previously healthy version is a valid target: it ran successfully at least once.
+	// A queued/in-flight/failed deployment is not a known-good state to restore.
+	if target.Status != StatusRunning && target.Status != StatusSuperseded {
+		return Deployment{}, problem.InvalidInput("can only roll back to a previously healthy deployment; %s is %q", target.ID, target.Status)
+	}
+
+	var created Deployment
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		var txErr error
+		if created, txErr = s.insertRollback(ctx, tx, target); txErr != nil {
+			return txErr
+		}
+		return s.audit.Record(ctx, tx, "deployment.rollback", "deployment", created.ID, target.WorkspaceID, caller.UserID)
+	})
+	if err != nil {
+		return Deployment{}, mapErr(err, "rollback deployment")
+	}
+	s.log.Info("deployment rolled back", "id", created.ID, "rolled_back_from", target.ID, "service_id", target.ServiceID, "server_id", target.ServerID, "workspace_id", target.WorkspaceID, "actor", caller.UserID)
+	return created, nil
+}
+
+// insertRollback enqueues a deployment reproducing target's artifact inside tx, linked back
+// via rolled_back_from. A git target rebuilds the exact commit it ran (so the rollback does
+// not depend on a built image still being on the server); an image target reruns its image.
+func (s *service) insertRollback(ctx context.Context, tx database.Tx, target Deployment) (Deployment, error) {
+	if target.SourceKind == SourceGit {
+		// Pin to the exact commit the target built; fall back to its ref if unknown.
+		ref := target.CommitSha
+		if ref == "" {
+			ref = target.GitRef
+		}
+		return s.store.InsertDeploymentFromGit(ctx, tx, NewDeploymentFromGit{
+			ServiceID:      target.ServiceID,
+			EnvironmentID:  target.EnvironmentID,
+			ProjectID:      target.ProjectID,
+			WorkspaceID:    target.WorkspaceID,
+			ServerID:       target.ServerID,
+			ContainerPort:  target.ContainerPort,
+			SourceAccess:   target.SourceAccess,
+			CloneURL:       target.CloneURL,
+			GitRef:         ref,
+			RolledBackFrom: target.ID,
+		})
+	}
+	imageRef, err := validateImageRef(target.ImageRef)
+	if err != nil {
+		return Deployment{}, err
+	}
+	return s.store.InsertDeployment(ctx, tx, NewDeployment{
+		ServiceID:      target.ServiceID,
+		EnvironmentID:  target.EnvironmentID,
+		ProjectID:      target.ProjectID,
+		WorkspaceID:    target.WorkspaceID,
+		ServerID:       target.ServerID,
+		ImageRef:       imageRef,
+		ContainerPort:  target.ContainerPort,
+		RolledBackFrom: target.ID,
+	})
 }
 
 // EnqueueFirstDeployment queues a brand new service's first deployment inside the CALLER's
@@ -307,7 +444,7 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 		return Claimed{HasWork: false}, nil
 	}
 
-	env, err := s.store.EnvVarsForService(ctx, claimed.ServiceID)
+	env, err := s.configEnvForService(ctx, claimed.ServiceID)
 	if err != nil {
 		return Claimed{}, problem.Internalf(err, "poll deployment")
 	}
@@ -570,7 +707,7 @@ func validateImageRef(raw string) (string, error) {
 
 func isAgentReportableStatus(status string) bool {
 	switch status {
-	case StatusCloning, StatusBuilding, StatusPulling, StatusStarting, StatusRouting, StatusRunning, StatusFailed:
+	case StatusCloning, StatusBuilding, StatusPulling, StatusStarting, StatusHealthcheck, StatusRouting, StatusRunning, StatusFailed:
 		return true
 	}
 	return false

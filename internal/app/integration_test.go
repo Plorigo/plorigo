@@ -13,15 +13,14 @@ import (
 
 	"github.com/plorigo/plorigo/internal/agents"
 	"github.com/plorigo/plorigo/internal/auth"
+	configmod "github.com/plorigo/plorigo/internal/config"
 	"github.com/plorigo/plorigo/internal/deployments"
 	"github.com/plorigo/plorigo/internal/environments"
-	"github.com/plorigo/plorigo/internal/envvars"
 	"github.com/plorigo/plorigo/internal/platform/config"
 	"github.com/plorigo/plorigo/internal/platform/id"
 	"github.com/plorigo/plorigo/internal/platform/principal"
 	"github.com/plorigo/plorigo/internal/platform/problem"
 	"github.com/plorigo/plorigo/internal/projects"
-	"github.com/plorigo/plorigo/internal/secrets"
 	"github.com/plorigo/plorigo/internal/servers"
 	"github.com/plorigo/plorigo/internal/services"
 )
@@ -202,13 +201,13 @@ func TestIntegration_EnvironmentScopedToProjectWorkspace(t *testing.T) {
 	}
 }
 
-func TestIntegration_EnvVarsScopedToEnvironmentWorkspace(t *testing.T) {
+func TestIntegration_ServiceVariablesScopedToWorkspace(t *testing.T) {
 	a := newApp(t)
 	ctx := context.Background()
 	authSvc := a.auth.Service()
 	projSvc := a.projects.Service()
 	envSvc := a.environments.Service()
-	evSvc := a.envvars.Service()
+	cfgSvc := a.config.Service()
 
 	owner, _ := registerAndLogin(t, authSvc, ctx, "ev-owner")
 	ownerCtx := principal.NewContext(ctx, principal.Principal{UserID: owner.User.ID, Method: principal.MethodSession})
@@ -225,7 +224,6 @@ func TestIntegration_EnvVarsScopedToEnvironmentWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create environment: %v", err)
 	}
-	// Env vars are now SERVICE-scoped: create a service to hold them.
 	svcRes, err := a.services.Service().CreateService(ownerCtx, services.CreateInput{EnvironmentID: env.ID, Name: "web", SourceKind: services.SourceImage, ImageRef: "nginx", ContainerPort: 80})
 	if err != nil {
 		t.Fatalf("Create service: %v", err)
@@ -234,16 +232,16 @@ func TestIntegration_EnvVarsScopedToEnvironmentWorkspace(t *testing.T) {
 
 	// Set audits the REAL actor against the workspace resolved through the service (which
 	// denormalizes workspace_id from environment -> project).
-	ev, err := evSvc.Set(ownerCtx, envvars.SetInput{ServiceID: svc.ID, Key: "DATABASE_URL", Value: "postgres://a"})
+	ev, err := cfgSvc.Set(ownerCtx, configmod.SetInput{Type: configmod.TypeVariable, Scope: configmod.ScopeService, ServiceID: svc.ID, Key: "DATABASE_URL", Value: "postgres://a"})
 	if err != nil {
-		t.Fatalf("Set env var: %v", err)
+		t.Fatalf("Set variable: %v", err)
 	}
 	if ev.Key != "DATABASE_URL" || ev.Value != "postgres://a" {
-		t.Fatalf("env var = %+v, want key/value set", ev)
+		t.Fatalf("variable = %+v, want key/value set", ev)
 	}
 	var auditActor, auditWS string
 	if err := a.db.Pool.QueryRow(ctx,
-		`SELECT actor, workspace_id FROM audit_events WHERE target_id=$1 AND action='env_var.set'`, ev.ID).Scan(&auditActor, &auditWS); err != nil {
+		`SELECT actor, workspace_id FROM audit_events WHERE target_id=$1 AND action='config.set'`, ev.ID).Scan(&auditActor, &auditWS); err != nil {
 		t.Fatalf("query audit: %v", err)
 	}
 	if auditActor != owner.User.ID {
@@ -253,15 +251,15 @@ func TestIntegration_EnvVarsScopedToEnvironmentWorkspace(t *testing.T) {
 		t.Fatalf("audit workspace = %q, want the parent project's workspace %q", auditWS, wss[0].ID)
 	}
 
-	// List returns it with the value (env vars are non-secret).
-	if list, err := evSvc.List(ownerCtx, svc.ID); err != nil || len(list) != 1 || list[0].Value != "postgres://a" {
+	// ListForService returns it with the value (variables are readable).
+	if list, err := cfgSvc.ListForService(ownerCtx, svc.ID); err != nil || len(list) != 1 || list[0].Value != "postgres://a" {
 		t.Fatalf("List: list=%+v err=%v", list, err)
 	}
 
 	// Setting the same key again upserts: same row, new value, updated_at advances.
-	ev2, err := evSvc.Set(ownerCtx, envvars.SetInput{ServiceID: svc.ID, Key: "DATABASE_URL", Value: "postgres://b"})
+	ev2, err := cfgSvc.Set(ownerCtx, configmod.SetInput{Type: configmod.TypeVariable, Scope: configmod.ScopeService, ServiceID: svc.ID, Key: "DATABASE_URL", Value: "postgres://b"})
 	if err != nil {
-		t.Fatalf("re-Set env var: %v", err)
+		t.Fatalf("re-Set variable: %v", err)
 	}
 	if ev2.ID != ev.ID {
 		t.Fatalf("upsert changed the row id: got %q, want %q", ev2.ID, ev.ID)
@@ -269,18 +267,18 @@ func TestIntegration_EnvVarsScopedToEnvironmentWorkspace(t *testing.T) {
 	if !ev2.UpdatedAt.After(ev.UpdatedAt) {
 		t.Fatalf("updated_at did not advance: %v -> %v", ev.UpdatedAt, ev2.UpdatedAt)
 	}
-	if list, err := evSvc.List(ownerCtx, svc.ID); err != nil || len(list) != 1 || list[0].Value != "postgres://b" {
+	if list, err := cfgSvc.ListForService(ownerCtx, svc.ID); err != nil || len(list) != 1 || list[0].Value != "postgres://b" {
 		t.Fatalf("after upsert List: list=%+v err=%v", list, err)
 	}
 
 	// Delete removes it; a second delete reports NotFound (not a silent no-op).
-	if err := evSvc.Delete(ownerCtx, envvars.DeleteInput{ServiceID: svc.ID, Key: "DATABASE_URL"}); err != nil {
-		t.Fatalf("Delete env var: %v", err)
+	if err := cfgSvc.Delete(ownerCtx, configmod.DeleteInput{Scope: configmod.ScopeService, ServiceID: svc.ID, Key: "DATABASE_URL"}); err != nil {
+		t.Fatalf("Delete variable: %v", err)
 	}
-	if list, err := evSvc.List(ownerCtx, svc.ID); err != nil || len(list) != 0 {
+	if list, err := cfgSvc.ListForService(ownerCtx, svc.ID); err != nil || len(list) != 0 {
 		t.Fatalf("after delete List: list=%+v err=%v", list, err)
 	}
-	if err := evSvc.Delete(ownerCtx, envvars.DeleteInput{ServiceID: svc.ID, Key: "DATABASE_URL"}); !isKind(err, problem.KindNotFound) {
+	if err := cfgSvc.Delete(ownerCtx, configmod.DeleteInput{Scope: configmod.ScopeService, ServiceID: svc.ID, Key: "DATABASE_URL"}); !isKind(err, problem.KindNotFound) {
 		t.Fatalf("double delete: got %v, want NotFound", err)
 	}
 
@@ -288,34 +286,34 @@ func TestIntegration_EnvVarsScopedToEnvironmentWorkspace(t *testing.T) {
 	// resolves through the parent service, not caller-supplied input.
 	other, _ := registerAndLogin(t, authSvc, ctx, "ev-other")
 	otherCtx := principal.NewContext(ctx, principal.Principal{UserID: other.User.ID, Method: principal.MethodSession})
-	if _, err := evSvc.Set(otherCtx, envvars.SetInput{ServiceID: svc.ID, Key: "SNEAKY", Value: "x"}); !isKind(err, problem.KindPermissionDenied) {
+	if _, err := cfgSvc.Set(otherCtx, configmod.SetInput{Type: configmod.TypeVariable, Scope: configmod.ScopeService, ServiceID: svc.ID, Key: "SNEAKY", Value: "x"}); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("non-member set: got %v, want PermissionDenied", err)
 	}
-	if _, err := evSvc.List(otherCtx, svc.ID); !isKind(err, problem.KindPermissionDenied) {
+	if _, err := cfgSvc.ListForService(otherCtx, svc.ID); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("non-member list: got %v, want PermissionDenied", err)
 	}
-	if err := evSvc.Delete(otherCtx, envvars.DeleteInput{ServiceID: svc.ID, Key: "DATABASE_URL"}); !isKind(err, problem.KindPermissionDenied) {
+	if err := cfgSvc.Delete(otherCtx, configmod.DeleteInput{Scope: configmod.ScopeService, ServiceID: svc.ID, Key: "DATABASE_URL"}); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("non-member delete: got %v, want PermissionDenied", err)
 	}
 
 	// An anonymous caller is denied.
-	if _, err := evSvc.Set(ctx, envvars.SetInput{ServiceID: svc.ID, Key: "ANON", Value: "y"}); !isKind(err, problem.KindPermissionDenied) {
+	if _, err := cfgSvc.Set(ctx, configmod.SetInput{Type: configmod.TypeVariable, Scope: configmod.ScopeService, ServiceID: svc.ID, Key: "ANON", Value: "y"}); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("anonymous set: got %v, want PermissionDenied", err)
 	}
 
 	// Operating on a non-existent service resolves to no workspace -> NotFound.
-	if _, err := evSvc.Set(ownerCtx, envvars.SetInput{ServiceID: id.New().String(), Key: "GHOST", Value: "z"}); !isKind(err, problem.KindNotFound) {
+	if _, err := cfgSvc.Set(ownerCtx, configmod.SetInput{Type: configmod.TypeVariable, Scope: configmod.ScopeService, ServiceID: id.New().String(), Key: "GHOST", Value: "z"}); !isKind(err, problem.KindNotFound) {
 		t.Fatalf("set on missing service: got %v, want NotFound", err)
 	}
 }
 
-func TestIntegration_SecretsScopedToEnvironmentWorkspace(t *testing.T) {
+func TestIntegration_EnvironmentSecretsScopedToWorkspace(t *testing.T) {
 	a := newApp(t)
 	ctx := context.Background()
 	authSvc := a.auth.Service()
 	projSvc := a.projects.Service()
 	envSvc := a.environments.Service()
-	secSvc := a.secrets.Service()
+	cfgSvc := a.config.Service()
 
 	owner, _ := registerAndLogin(t, authSvc, ctx, "sec-owner")
 	ownerCtx := principal.NewContext(ctx, principal.Principal{UserID: owner.User.ID, Method: principal.MethodSession})
@@ -332,21 +330,27 @@ func TestIntegration_SecretsScopedToEnvironmentWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create environment: %v", err)
 	}
+	// A service in the environment, so ListForService surfaces the environment-shared secret.
+	svcRes, err := a.services.Service().CreateService(ownerCtx, services.CreateInput{EnvironmentID: env.ID, Name: "web", SourceKind: services.SourceImage, ImageRef: "nginx", ContainerPort: 80})
+	if err != nil {
+		t.Fatalf("Create service: %v", err)
+	}
+	svc := svcRes.Service
 
 	const plaintext = "sk_live_supersecret_value"
 
-	// Set audits the REAL actor against the workspace resolved through the two-ancestor
-	// JOIN (secret -> environment -> project -> workspace).
-	sec, err := secSvc.Set(ownerCtx, secrets.SetInput{EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY", Value: plaintext})
+	// An environment-shared secret. Set audits the REAL actor against the workspace resolved
+	// through the environment -> project -> workspace JOIN.
+	sec, err := cfgSvc.Set(ownerCtx, configmod.SetInput{Type: configmod.TypeSecret, Scope: configmod.ScopeEnvironment, EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY", Value: plaintext})
 	if err != nil {
 		t.Fatalf("Set secret: %v", err)
 	}
-	if sec.Key != "STRIPE_SECRET_KEY" {
-		t.Fatalf("secret = %+v, want key set", sec)
+	if sec.Key != "STRIPE_SECRET_KEY" || sec.Value != "" {
+		t.Fatalf("secret = %+v, want key set and value blanked (write-only)", sec)
 	}
 	var auditActor, auditWS string
 	if err := a.db.Pool.QueryRow(ctx,
-		`SELECT actor, workspace_id FROM audit_events WHERE target_id=$1 AND action='secret.set'`, sec.ID).Scan(&auditActor, &auditWS); err != nil {
+		`SELECT actor, workspace_id FROM audit_events WHERE target_id=$1 AND action='config.set'`, sec.ID).Scan(&auditActor, &auditWS); err != nil {
 		t.Fatalf("query audit: %v", err)
 	}
 	if auditActor != owner.User.ID {
@@ -356,10 +360,10 @@ func TestIntegration_SecretsScopedToEnvironmentWorkspace(t *testing.T) {
 		t.Fatalf("audit workspace = %q, want the parent project's workspace %q", auditWS, wss[0].ID)
 	}
 
-	// Stored at rest as CIPHERTEXT — the raw column must be non-empty and must not
-	// contain the plaintext. This proves the master key actually seals the value.
+	// Stored at rest as CIPHERTEXT — the raw column must be non-empty and must not contain the
+	// plaintext. This proves the master key actually seals the value.
 	var ciphertext []byte
-	if err := a.db.Pool.QueryRow(ctx, `SELECT ciphertext FROM secrets WHERE id=$1`, sec.ID).Scan(&ciphertext); err != nil {
+	if err := a.db.Pool.QueryRow(ctx, `SELECT ciphertext FROM config_entries WHERE id=$1`, sec.ID).Scan(&ciphertext); err != nil {
 		t.Fatalf("query ciphertext: %v", err)
 	}
 	if len(ciphertext) == 0 {
@@ -369,14 +373,15 @@ func TestIntegration_SecretsScopedToEnvironmentWorkspace(t *testing.T) {
 		t.Fatal("secret stored in the clear: the ciphertext column contains the plaintext")
 	}
 
-	// List returns metadata only — the key, never the value (Secret has no value field).
-	list, err := secSvc.List(ownerCtx, env.ID)
-	if err != nil || len(list) != 1 || list[0].Key != "STRIPE_SECRET_KEY" {
+	// ListForService returns the environment-shared secret as metadata only — the key, never
+	// the value.
+	list, err := cfgSvc.ListForService(ownerCtx, svc.ID)
+	if err != nil || len(list) != 1 || list[0].Key != "STRIPE_SECRET_KEY" || list[0].Value != "" {
 		t.Fatalf("List: list=%+v err=%v", list, err)
 	}
 
 	// Setting the same key again upserts: same row, re-encrypted, updated_at advances.
-	sec2, err := secSvc.Set(ownerCtx, secrets.SetInput{EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY", Value: "sk_live_rotated"})
+	sec2, err := cfgSvc.Set(ownerCtx, configmod.SetInput{Type: configmod.TypeSecret, Scope: configmod.ScopeEnvironment, EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY", Value: "sk_live_rotated"})
 	if err != nil {
 		t.Fatalf("re-Set secret: %v", err)
 	}
@@ -388,37 +393,36 @@ func TestIntegration_SecretsScopedToEnvironmentWorkspace(t *testing.T) {
 	}
 
 	// Delete removes it; a second delete reports NotFound (not a silent no-op).
-	if err := secSvc.Delete(ownerCtx, secrets.DeleteInput{EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY"}); err != nil {
+	if err := cfgSvc.Delete(ownerCtx, configmod.DeleteInput{Scope: configmod.ScopeEnvironment, EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY"}); err != nil {
 		t.Fatalf("Delete secret: %v", err)
 	}
-	if list, err := secSvc.List(ownerCtx, env.ID); err != nil || len(list) != 0 {
+	if list, err := cfgSvc.ListForService(ownerCtx, svc.ID); err != nil || len(list) != 0 {
 		t.Fatalf("after delete List: list=%+v err=%v", list, err)
 	}
-	if err := secSvc.Delete(ownerCtx, secrets.DeleteInput{EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY"}); !isKind(err, problem.KindNotFound) {
+	if err := cfgSvc.Delete(ownerCtx, configmod.DeleteInput{Scope: configmod.ScopeEnvironment, EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY"}); !isKind(err, problem.KindNotFound) {
 		t.Fatalf("double delete: got %v, want NotFound", err)
 	}
 
-	// A non-member of the environment's workspace is denied for every op — proving
-	// authorization resolves through the parent environment, not caller-supplied input.
+	// A non-member of the environment's workspace is denied for every op.
 	other, _ := registerAndLogin(t, authSvc, ctx, "sec-other")
 	otherCtx := principal.NewContext(ctx, principal.Principal{UserID: other.User.ID, Method: principal.MethodSession})
-	if _, err := secSvc.Set(otherCtx, secrets.SetInput{EnvironmentID: env.ID, Key: "SNEAKY", Value: "x"}); !isKind(err, problem.KindPermissionDenied) {
+	if _, err := cfgSvc.Set(otherCtx, configmod.SetInput{Type: configmod.TypeSecret, Scope: configmod.ScopeEnvironment, EnvironmentID: env.ID, Key: "SNEAKY", Value: "x"}); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("non-member set: got %v, want PermissionDenied", err)
 	}
-	if _, err := secSvc.List(otherCtx, env.ID); !isKind(err, problem.KindPermissionDenied) {
+	if _, err := cfgSvc.ListForService(otherCtx, svc.ID); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("non-member list: got %v, want PermissionDenied", err)
 	}
-	if err := secSvc.Delete(otherCtx, secrets.DeleteInput{EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY"}); !isKind(err, problem.KindPermissionDenied) {
+	if err := cfgSvc.Delete(otherCtx, configmod.DeleteInput{Scope: configmod.ScopeEnvironment, EnvironmentID: env.ID, Key: "STRIPE_SECRET_KEY"}); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("non-member delete: got %v, want PermissionDenied", err)
 	}
 
 	// An anonymous caller is denied.
-	if _, err := secSvc.Set(ctx, secrets.SetInput{EnvironmentID: env.ID, Key: "ANON", Value: "y"}); !isKind(err, problem.KindPermissionDenied) {
+	if _, err := cfgSvc.Set(ctx, configmod.SetInput{Type: configmod.TypeSecret, Scope: configmod.ScopeEnvironment, EnvironmentID: env.ID, Key: "ANON", Value: "y"}); !isKind(err, problem.KindPermissionDenied) {
 		t.Fatalf("anonymous set: got %v, want PermissionDenied", err)
 	}
 
 	// Operating on a non-existent environment resolves to no workspace -> NotFound.
-	if _, err := secSvc.Set(ownerCtx, secrets.SetInput{EnvironmentID: id.New().String(), Key: "GHOST", Value: "z"}); !isKind(err, problem.KindNotFound) {
+	if _, err := cfgSvc.Set(ownerCtx, configmod.SetInput{Type: configmod.TypeSecret, Scope: configmod.ScopeEnvironment, EnvironmentID: id.New().String(), Key: "GHOST", Value: "z"}); !isKind(err, problem.KindNotFound) {
 		t.Fatalf("set in missing environment: got %v, want NotFound", err)
 	}
 }
@@ -843,13 +847,13 @@ func TestIntegration_AgentHeartbeatRecordsHealth(t *testing.T) {
 		t.Fatalf("Register agent: %v", err)
 	}
 
-	// Before any heartbeat the agent has never connected: facts unknown, readiness unavailable.
+	// Before any heartbeat the agent has never connected: facts unknown, readiness unknown.
 	pre := agentForServer(t, agentsSvc, ownerCtx, ws.ID, srv.ID)
 	if pre.DockerAvailable != nil {
 		t.Fatalf("pre-heartbeat DockerAvailable = %v, want nil (unknown)", *pre.DockerAvailable)
 	}
-	if state, _ := pre.Readiness(time.Now()); state != agents.ReadinessUnavailable {
-		t.Fatalf("pre-heartbeat readiness = %q, want %q", state, agents.ReadinessUnavailable)
+	if state, _ := pre.Readiness(time.Now(), false); state != agents.ReadinessUnknown {
+		t.Fatalf("pre-heartbeat readiness = %q, want %q", state, agents.ReadinessUnknown)
 	}
 
 	// A heartbeat carrying Docker availability records liveness AND the compatibility facts
@@ -869,7 +873,7 @@ func TestIntegration_AgentHeartbeatRecordsHealth(t *testing.T) {
 	if got.DockerVersion != "27.1.1" || got.OS != "linux" || got.Arch != "amd64" {
 		t.Fatalf("facts = (%q, %q, %q), want (27.1.1, linux, amd64)", got.DockerVersion, got.OS, got.Arch)
 	}
-	if state, reason := got.Readiness(time.Now()); state != agents.ReadinessReady || reason != "" {
+	if state, reason := got.Readiness(time.Now(), false); state != agents.ReadinessReady || reason != "" {
 		t.Fatalf("readiness = (%q, %q), want (%q, empty)", state, reason, agents.ReadinessReady)
 	}
 }

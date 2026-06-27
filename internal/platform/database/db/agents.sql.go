@@ -91,36 +91,60 @@ func (q *Queries) GetServerWorkspace(ctx context.Context, id string) (string, er
 
 const heartbeatAgent = `-- name: HeartbeatAgent :one
 UPDATE agents
-SET last_seen_at     = now(),
-    agent_version    = $2,
-    docker_available = $3,
-    docker_version   = $4,
-    os               = $5,
-    arch             = $6
+SET last_seen_at        = now(),
+    agent_version       = $2,
+    docker_available    = $3,
+    docker_version      = $4,
+    os                  = $5,
+    arch                = $6,
+    caddy_available     = $7,
+    caddy_running       = $8,
+    caddy_version       = $9,
+    disk_total_bytes    = $10,
+    disk_free_bytes     = $11,
+    mem_total_bytes     = $12,
+    mem_available_bytes = $13,
+    cpu_count           = $14
 WHERE credential_hash = $1
-RETURNING id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, last_seen_at, created_at
+RETURNING id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, caddy_available, caddy_running, caddy_version, disk_total_bytes, disk_free_bytes, mem_total_bytes, mem_available_bytes, cpu_count, last_seen_at, created_at
 `
 
 type HeartbeatAgentParams struct {
-	CredentialHash  []byte
-	AgentVersion    string
-	DockerAvailable *bool
-	DockerVersion   string
-	Os              string
-	Arch            string
+	CredentialHash    []byte
+	AgentVersion      string
+	DockerAvailable   *bool
+	DockerVersion     string
+	Os                string
+	Arch              string
+	CaddyAvailable    *bool
+	CaddyRunning      bool
+	CaddyVersion      string
+	DiskTotalBytes    int64
+	DiskFreeBytes     int64
+	MemTotalBytes     int64
+	MemAvailableBytes int64
+	CpuCount          int32
 }
 
 type HeartbeatAgentRow struct {
-	ID              string
-	ServerID        string
-	WorkspaceID     string
-	AgentVersion    string
-	DockerAvailable *bool
-	DockerVersion   string
-	Os              string
-	Arch            string
-	LastSeenAt      *time.Time
-	CreatedAt       time.Time
+	ID                string
+	ServerID          string
+	WorkspaceID       string
+	AgentVersion      string
+	DockerAvailable   *bool
+	DockerVersion     string
+	Os                string
+	Arch              string
+	CaddyAvailable    *bool
+	CaddyRunning      bool
+	CaddyVersion      string
+	DiskTotalBytes    int64
+	DiskFreeBytes     int64
+	MemTotalBytes     int64
+	MemAvailableBytes int64
+	CpuCount          int32
+	LastSeenAt        *time.Time
+	CreatedAt         time.Time
 }
 
 // HeartbeatAgent validates the durable credential by its hash AND records liveness plus
@@ -134,6 +158,14 @@ func (q *Queries) HeartbeatAgent(ctx context.Context, arg HeartbeatAgentParams) 
 		arg.DockerVersion,
 		arg.Os,
 		arg.Arch,
+		arg.CaddyAvailable,
+		arg.CaddyRunning,
+		arg.CaddyVersion,
+		arg.DiskTotalBytes,
+		arg.DiskFreeBytes,
+		arg.MemTotalBytes,
+		arg.MemAvailableBytes,
+		arg.CpuCount,
 	)
 	var i HeartbeatAgentRow
 	err := row.Scan(
@@ -145,6 +177,14 @@ func (q *Queries) HeartbeatAgent(ctx context.Context, arg HeartbeatAgentParams) 
 		&i.DockerVersion,
 		&i.Os,
 		&i.Arch,
+		&i.CaddyAvailable,
+		&i.CaddyRunning,
+		&i.CaddyVersion,
+		&i.DiskTotalBytes,
+		&i.DiskFreeBytes,
+		&i.MemTotalBytes,
+		&i.MemAvailableBytes,
+		&i.CpuCount,
 		&i.LastSeenAt,
 		&i.CreatedAt,
 	)
@@ -152,23 +192,31 @@ func (q *Queries) HeartbeatAgent(ctx context.Context, arg HeartbeatAgentParams) 
 }
 
 const listAgentsByWorkspace = `-- name: ListAgentsByWorkspace :many
-SELECT id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, last_seen_at, created_at
+SELECT id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, caddy_available, caddy_running, caddy_version, disk_total_bytes, disk_free_bytes, mem_total_bytes, mem_available_bytes, cpu_count, last_seen_at, created_at
 FROM agents
 WHERE workspace_id = $1
 ORDER BY created_at DESC
 `
 
 type ListAgentsByWorkspaceRow struct {
-	ID              string
-	ServerID        string
-	WorkspaceID     string
-	AgentVersion    string
-	DockerAvailable *bool
-	DockerVersion   string
-	Os              string
-	Arch            string
-	LastSeenAt      *time.Time
-	CreatedAt       time.Time
+	ID                string
+	ServerID          string
+	WorkspaceID       string
+	AgentVersion      string
+	DockerAvailable   *bool
+	DockerVersion     string
+	Os                string
+	Arch              string
+	CaddyAvailable    *bool
+	CaddyRunning      bool
+	CaddyVersion      string
+	DiskTotalBytes    int64
+	DiskFreeBytes     int64
+	MemTotalBytes     int64
+	MemAvailableBytes int64
+	CpuCount          int32
+	LastSeenAt        *time.Time
+	CreatedAt         time.Time
 }
 
 func (q *Queries) ListAgentsByWorkspace(ctx context.Context, workspaceID string) ([]ListAgentsByWorkspaceRow, error) {
@@ -189,6 +237,14 @@ func (q *Queries) ListAgentsByWorkspace(ctx context.Context, workspaceID string)
 			&i.DockerVersion,
 			&i.Os,
 			&i.Arch,
+			&i.CaddyAvailable,
+			&i.CaddyRunning,
+			&i.CaddyVersion,
+			&i.DiskTotalBytes,
+			&i.DiskFreeBytes,
+			&i.MemTotalBytes,
+			&i.MemAvailableBytes,
+			&i.CpuCount,
 			&i.LastSeenAt,
 			&i.CreatedAt,
 		); err != nil {

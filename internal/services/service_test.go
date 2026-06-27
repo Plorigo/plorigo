@@ -109,12 +109,12 @@ func (f *fakeEnqueuer) EnqueueFirstDeployment(_ context.Context, _ database.Tx, 
 	return testDepID, nil
 }
 
-type fakeEnvVarSetter struct {
+type fakeConfigSetter struct {
 	serviceID string
 	vars      map[string]string
 }
 
-func (f *fakeEnvVarSetter) SetWithinTx(_ context.Context, _ database.Tx, serviceID string, vars map[string]string) error {
+func (f *fakeConfigSetter) SetWithinTx(_ context.Context, _ database.Tx, serviceID string, vars map[string]string) error {
 	f.serviceID = serviceID
 	f.vars = vars
 	return nil
@@ -177,12 +177,12 @@ func authedCtx() context.Context {
 }
 
 func newSvc(store Store, gh GitHubClient, enq Enqueuer, authorizer authz.Authorizer, rec Recorder) *service {
-	return newService(fakeTx{}, store, fakeBox{}, gh, enq, &fakeEnvVarSetter{}, authorizer, rec, slog.Default())
+	return newService(fakeTx{}, store, fakeBox{}, gh, enq, &fakeConfigSetter{}, authorizer, rec, slog.Default())
 }
 
 // newDBSvc builds a service with a caller-supplied env setter so CreateDatabase tests can
 // inspect the generated credentials it writes.
-func newDBSvc(store Store, enq Enqueuer, env EnvVarSetter, authorizer authz.Authorizer, rec Recorder) *service {
+func newDBSvc(store Store, enq Enqueuer, env ConfigSetter, authorizer authz.Authorizer, rec Recorder) *service {
 	return newService(fakeTx{}, store, fakeBox{}, fakeGH{}, enq, env, authorizer, rec, slog.Default())
 }
 
@@ -202,7 +202,7 @@ func TestCreateDatabase_PostgresPrivateWithCredsAndDeploy(t *testing.T) {
 	store := envResolved()
 	rec := &fakeRecorder{}
 	enq := &fakeEnqueuer{}
-	env := &fakeEnvVarSetter{}
+	env := &fakeConfigSetter{}
 	svc := newDBSvc(store, enq, env, fakeAuthz{}, rec)
 
 	res, err := svc.CreateDatabase(authedCtx(), DatabaseInput{
@@ -240,7 +240,7 @@ func TestCreateDatabase_PostgresPrivateWithCredsAndDeploy(t *testing.T) {
 func TestCreateDatabase_WithoutDeployStillProvisions(t *testing.T) {
 	store := envResolved()
 	enq := &fakeEnqueuer{}
-	env := &fakeEnvVarSetter{}
+	env := &fakeConfigSetter{}
 	svc := newDBSvc(store, enq, env, fakeAuthz{}, &fakeRecorder{})
 
 	res, err := svc.CreateDatabase(authedCtx(), DatabaseInput{EnvironmentID: testEnvID, Name: "db", TemplateID: "postgres"})
@@ -256,14 +256,14 @@ func TestCreateDatabase_WithoutDeployStillProvisions(t *testing.T) {
 }
 
 func TestCreateDatabase_UnknownTemplateRejected(t *testing.T) {
-	svc := newDBSvc(envResolved(), &fakeEnqueuer{}, &fakeEnvVarSetter{}, fakeAuthz{}, &fakeRecorder{})
+	svc := newDBSvc(envResolved(), &fakeEnqueuer{}, &fakeConfigSetter{}, fakeAuthz{}, &fakeRecorder{})
 	_, err := svc.CreateDatabase(authedCtx(), DatabaseInput{EnvironmentID: testEnvID, Name: "db", TemplateID: "mysql"})
 	wantKind(t, err, problem.KindInvalidInput)
 }
 
 func TestCreateDatabase_DeniedWritesNothing(t *testing.T) {
 	store := envResolved()
-	env := &fakeEnvVarSetter{}
+	env := &fakeConfigSetter{}
 	rec := &fakeRecorder{}
 	svc := newDBSvc(store, &fakeEnqueuer{}, env, fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
 

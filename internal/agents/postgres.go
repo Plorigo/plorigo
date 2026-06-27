@@ -81,12 +81,20 @@ func (s *postgresStore) UpsertAgent(ctx context.Context, tx database.Tx, a Agent
 
 func (s *postgresStore) Heartbeat(ctx context.Context, credentialHash []byte, facts HeartbeatFacts) (Agent, bool, error) {
 	row, err := db.New(s.pool).HeartbeatAgent(ctx, db.HeartbeatAgentParams{
-		CredentialHash:  credentialHash,
-		AgentVersion:    facts.AgentVersion,
-		DockerAvailable: facts.DockerAvailable,
-		DockerVersion:   facts.DockerVersion,
-		Os:              facts.OS,
-		Arch:            facts.Arch,
+		CredentialHash:    credentialHash,
+		AgentVersion:      facts.AgentVersion,
+		DockerAvailable:   facts.DockerAvailable,
+		DockerVersion:     facts.DockerVersion,
+		Os:                facts.OS,
+		Arch:              facts.Arch,
+		CaddyAvailable:    facts.CaddyAvailable,
+		CaddyRunning:      facts.CaddyRunning,
+		CaddyVersion:      facts.CaddyVersion,
+		DiskTotalBytes:    facts.DiskTotalBytes,
+		DiskFreeBytes:     facts.DiskFreeBytes,
+		MemTotalBytes:     facts.MemTotalBytes,
+		MemAvailableBytes: facts.MemAvailableBytes,
+		CpuCount:          facts.CPUCount,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -95,16 +103,24 @@ func (s *postgresStore) Heartbeat(ctx context.Context, credentialHash []byte, fa
 		return Agent{}, false, err
 	}
 	return Agent{
-		ID:              row.ID,
-		ServerID:        row.ServerID,
-		WorkspaceID:     row.WorkspaceID,
-		AgentVersion:    row.AgentVersion,
-		DockerAvailable: row.DockerAvailable,
-		DockerVersion:   row.DockerVersion,
-		OS:              row.Os,
-		Arch:            row.Arch,
-		LastSeenAt:      row.LastSeenAt,
-		CreatedAt:       row.CreatedAt,
+		ID:                row.ID,
+		ServerID:          row.ServerID,
+		WorkspaceID:       row.WorkspaceID,
+		AgentVersion:      row.AgentVersion,
+		DockerAvailable:   row.DockerAvailable,
+		DockerVersion:     row.DockerVersion,
+		OS:                row.Os,
+		Arch:              row.Arch,
+		CaddyAvailable:    row.CaddyAvailable,
+		CaddyRunning:      row.CaddyRunning,
+		CaddyVersion:      row.CaddyVersion,
+		DiskTotalBytes:    row.DiskTotalBytes,
+		DiskFreeBytes:     row.DiskFreeBytes,
+		MemTotalBytes:     row.MemTotalBytes,
+		MemAvailableBytes: row.MemAvailableBytes,
+		CPUCount:          row.CpuCount,
+		LastSeenAt:        row.LastSeenAt,
+		CreatedAt:         row.CreatedAt,
 	}, true, nil
 }
 
@@ -116,16 +132,24 @@ func (s *postgresStore) ListByWorkspace(ctx context.Context, workspaceID string)
 	out := make([]Agent, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, Agent{
-			ID:              r.ID,
-			ServerID:        r.ServerID,
-			WorkspaceID:     r.WorkspaceID,
-			AgentVersion:    r.AgentVersion,
-			DockerAvailable: r.DockerAvailable,
-			DockerVersion:   r.DockerVersion,
-			OS:              r.Os,
-			Arch:            r.Arch,
-			LastSeenAt:      r.LastSeenAt,
-			CreatedAt:       r.CreatedAt,
+			ID:                r.ID,
+			ServerID:          r.ServerID,
+			WorkspaceID:       r.WorkspaceID,
+			AgentVersion:      r.AgentVersion,
+			DockerAvailable:   r.DockerAvailable,
+			DockerVersion:     r.DockerVersion,
+			OS:                r.Os,
+			Arch:              r.Arch,
+			CaddyAvailable:    r.CaddyAvailable,
+			CaddyRunning:      r.CaddyRunning,
+			CaddyVersion:      r.CaddyVersion,
+			DiskTotalBytes:    r.DiskTotalBytes,
+			DiskFreeBytes:     r.DiskFreeBytes,
+			MemTotalBytes:     r.MemTotalBytes,
+			MemAvailableBytes: r.MemAvailableBytes,
+			CPUCount:          r.CpuCount,
+			LastSeenAt:        r.LastSeenAt,
+			CreatedAt:         r.CreatedAt,
 		})
 	}
 	return out, nil
