@@ -232,8 +232,68 @@ func TestCreateDatabase_PostgresPrivateWithCredsAndDeploy(t *testing.T) {
 	}
 	// The connection URI is consistent with the stored password and the in-network host (slug).
 	tmpl, _ := lookupDatabaseTemplate("postgres")
-	if want := tmpl.connectionURI(res.Service.Slug, env.vars["POSTGRES_PASSWORD"]); res.ConnectionURI != want {
+	if want := tmpl.connectionURI(res.Service.Slug, "plorigo", env.vars["POSTGRES_PASSWORD"], "app"); res.ConnectionURI != want {
 		t.Errorf("connection uri = %q, want %q", res.ConnectionURI, want)
+	}
+}
+
+func TestCreateDatabase_AppliesCallerOptions(t *testing.T) {
+	store := envResolved()
+	env := &fakeConfigSetter{}
+	svc := newDBSvc(store, &fakeEnqueuer{}, env, fakeAuthz{}, &fakeRecorder{})
+
+	const pw = "Sup3r-Secret_pw"
+	res, err := svc.CreateDatabase(authedCtx(), DatabaseInput{
+		EnvironmentID: testEnvID, Name: "Primary DB", TemplateID: "postgres",
+		DatabaseName: "orders", Username: "app_user", Password: pw,
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase failed: %v", err)
+	}
+	// The caller's database name, user, and password override the template defaults.
+	if env.vars["POSTGRES_USER"] != "app_user" || env.vars["POSTGRES_DB"] != "orders" || env.vars["POSTGRES_PASSWORD"] != pw {
+		t.Errorf("env = %v, want user=app_user db=orders and the supplied password", env.vars)
+	}
+	tmpl, _ := lookupDatabaseTemplate("postgres")
+	if want := tmpl.connectionURI(res.Service.Slug, "app_user", pw, "orders"); res.ConnectionURI != want {
+		t.Errorf("connection uri = %q, want %q", res.ConnectionURI, want)
+	}
+}
+
+func TestCreateDatabase_BlankOptionsFallBackToDefaults(t *testing.T) {
+	store := envResolved()
+	env := &fakeConfigSetter{}
+	svc := newDBSvc(store, &fakeEnqueuer{}, env, fakeAuthz{}, &fakeRecorder{})
+
+	_, err := svc.CreateDatabase(authedCtx(), DatabaseInput{
+		EnvironmentID: testEnvID, Name: "db", TemplateID: "postgres",
+		DatabaseName: "  ", Username: "", Password: "",
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase failed: %v", err)
+	}
+	if env.vars["POSTGRES_USER"] != "plorigo" || env.vars["POSTGRES_DB"] != "app" || env.vars["POSTGRES_PASSWORD"] == "" {
+		t.Errorf("env = %v, want template defaults and a generated password", env.vars)
+	}
+}
+
+func TestCreateDatabase_RejectsInvalidOptions(t *testing.T) {
+	cases := map[string]DatabaseInput{
+		"bad database name": {EnvironmentID: testEnvID, Name: "db", TemplateID: "postgres", DatabaseName: "no spaces"},
+		"bad username":      {EnvironmentID: testEnvID, Name: "db", TemplateID: "postgres", Username: "1starts-with-digit"},
+		"short password":    {EnvironmentID: testEnvID, Name: "db", TemplateID: "postgres", Password: "short"},
+	}
+	for name, in := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := envResolved()
+			env := &fakeConfigSetter{}
+			svc := newDBSvc(store, &fakeEnqueuer{}, env, fakeAuthz{}, &fakeRecorder{})
+			_, err := svc.CreateDatabase(authedCtx(), in)
+			wantKind(t, err, problem.KindInvalidInput)
+			if store.insertedImage.Name != "" || env.serviceID != "" {
+				t.Error("invalid options wrote a service or config")
+			}
+		})
 	}
 }
 
