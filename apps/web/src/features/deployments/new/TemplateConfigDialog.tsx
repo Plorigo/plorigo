@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from "react";
 import { ConnectError } from "@connectrpc/connect";
-import { TriangleAlert } from "lucide-react";
+import { Copy, Eye, EyeOff, RefreshCw, TriangleAlert } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button, Input, Select } from "@/components/ui";
 import {
@@ -13,10 +14,20 @@ import {
 } from "@/components/ui/dialog";
 import type { DeployTemplate, TemplateOption } from "@/lib/templates";
 
-// initialValues seeds the form from each option's default (empty when none).
+// generatePassword returns a strong, URL-safe secret (base64url, no padding — the same
+// unreserved alphabet the backend generates, so it injects and embeds in a connection URI
+// without escaping and passes the server's password validation). 18 bytes → 24 chars.
+function generatePassword(): string {
+  const bytes = new Uint8Array(18);
+  crypto.getRandomValues(bytes);
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// initialValues seeds the form from each option's default. A `generated` option is prefilled
+// with a fresh secret the user can see, copy, edit, or regenerate.
 function initialValues(options: TemplateOption[]): Record<string, string> {
   const v: Record<string, string> = {};
-  for (const o of options) v[o.key] = o.default ?? "";
+  for (const o of options) v[o.key] = o.generated ? generatePassword() : (o.default ?? "");
   return v;
 }
 
@@ -90,11 +101,17 @@ export function TemplateConfigDialog({
                     </option>
                   ))}
                 </Select>
+              ) : o.type === "password" ? (
+                <PasswordField
+                  value={values[o.key] ?? ""}
+                  onChange={(v) => set(o.key, v)}
+                  generated={o.generated}
+                  onRegenerate={() => set(o.key, generatePassword())}
+                />
               ) : (
                 <Input
                   value={values[o.key] ?? ""}
                   onChange={(e) => set(o.key, e.target.value)}
-                  type={o.type === "password" ? "password" : "text"}
                   inputMode={o.type === "number" ? "numeric" : undefined}
                   placeholder={o.placeholder}
                   autoCapitalize="none"
@@ -146,5 +163,56 @@ function Field({ label, help, children }: { label: string; help?: string; childr
       {children}
       {help && <span className="mt-1 block text-xs text-muted-foreground">{help}</span>}
     </label>
+  );
+}
+
+// PasswordField shows a credential the user can read, copy, edit, or (when it was generated for
+// them) regenerate — visible by default since it's a fresh secret being created here, with a
+// toggle to mask it.
+function PasswordField({
+  value,
+  onChange,
+  generated,
+  onRegenerate,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  generated?: boolean;
+  onRegenerate: () => void;
+}) {
+  const [revealed, setRevealed] = useState(true);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      toast.success("Copied password");
+    } catch {
+      toast.error("Could not copy the password");
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        type={revealed ? "text" : "password"}
+        className="font-mono"
+        autoCapitalize="none"
+        autoComplete="off"
+        spellCheck={false}
+      />
+      <Button type="button" size="icon" variant="ghost" onClick={() => setRevealed((r) => !r)} aria-label={revealed ? "Hide password" : "Show password"}>
+        {revealed ? <EyeOff className="h-4 w-4" aria-hidden="true" /> : <Eye className="h-4 w-4" aria-hidden="true" />}
+      </Button>
+      <Button type="button" size="icon" variant="ghost" onClick={copy} aria-label="Copy password">
+        <Copy className="h-4 w-4" aria-hidden="true" />
+      </Button>
+      {generated && (
+        <Button type="button" size="icon" variant="ghost" onClick={onRegenerate} aria-label="Regenerate password">
+          <RefreshCw className="h-4 w-4" aria-hidden="true" />
+        </Button>
+      )}
+    </div>
   );
 }

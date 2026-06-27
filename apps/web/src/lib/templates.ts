@@ -31,6 +31,7 @@ export interface TemplateOption {
   help?: string;
   editable?: boolean; // default true; false = display only
   optional?: boolean; // default false; true = may be blank
+  generated?: boolean; // seed with a freshly generated secret the user can see/copy/edit
   choices?: TemplateOptionChoice[]; // for type "select"
 }
 
@@ -152,9 +153,8 @@ export const deployTemplates: DeployTemplate[] = [
         key: "password",
         label: "Password",
         type: "password",
-        optional: true,
-        placeholder: "Leave blank to auto-generate",
-        help: "8–128 characters, no spaces. Auto-generated when blank.",
+        generated: true,
+        help: "Generated for you — copy it, edit it, or regenerate. Stored as POSTGRES_PASSWORD.",
       },
       {
         key: "port",

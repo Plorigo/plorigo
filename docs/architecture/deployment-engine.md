@@ -181,7 +181,8 @@ identifiers (≤ 63 chars); a supplied password is length-bounded.
 (`apps/web/src/lib/templates.ts`), alongside the image and repo templates — there is no separate
 database lane. Choosing any template opens a **"Configure & deploy" dialog**
 (`TemplateConfigDialog`) that renders the template's declared `options` (for Postgres: database
-name, username, an optional password, and a read-only port), then creates and deploys.
+name, username, a **generated password** the user can reveal, copy, edit, or regenerate, and a
+read-only port), then creates and deploys.
 
 **Adding a managed service** (e.g. MongoDB, Redis) is a data-only change: add a
 `databaseTemplate` entry — image, port, scheme, default user/db — plus a case in
