@@ -10,16 +10,15 @@ import (
 
 	"github.com/plorigo/plorigo/internal/agents"
 	"github.com/plorigo/plorigo/internal/auth"
+	"github.com/plorigo/plorigo/internal/config"
 	"github.com/plorigo/plorigo/internal/deployments"
 	"github.com/plorigo/plorigo/internal/domains"
 	"github.com/plorigo/plorigo/internal/environments"
-	"github.com/plorigo/plorigo/internal/envvars"
-	"github.com/plorigo/plorigo/internal/platform/config"
+	platformconfig "github.com/plorigo/plorigo/internal/platform/config"
 	"github.com/plorigo/plorigo/internal/platform/database"
 	"github.com/plorigo/plorigo/internal/platform/log"
 	"github.com/plorigo/plorigo/internal/platform/server"
 	"github.com/plorigo/plorigo/internal/projects"
-	"github.com/plorigo/plorigo/internal/secrets"
 	"github.com/plorigo/plorigo/internal/servers"
 	"github.com/plorigo/plorigo/internal/serversetup"
 	"github.com/plorigo/plorigo/internal/services"
@@ -28,7 +27,7 @@ import (
 
 // App is the assembled control plane.
 type App struct {
-	cfg config.Config
+	cfg platformconfig.Config
 	log *slog.Logger
 	db  *database.DB
 	srv *server.Server
@@ -38,8 +37,7 @@ type App struct {
 	auth         *auth.Module
 	projects     *projects.Module
 	environments *environments.Module
-	envvars      *envvars.Module
-	secrets      *secrets.Module
+	config       *config.Module
 	servers      *servers.Module
 	serversetup  *serversetup.Module
 	deployments  *deployments.Module
@@ -49,7 +47,7 @@ type App struct {
 }
 
 // New validates config, opens the DB pool, builds modules, and prepares the server.
-func New(ctx context.Context, cfg config.Config) (*App, error) {
+func New(ctx context.Context, cfg platformconfig.Config) (*App, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}

@@ -21,7 +21,7 @@ export type NavTo =
   | "/domains"
   | "/deployments"
   | "/servers"
-  | "/resources"
+  | "/variables"
   | "/backups"
   | "/security"
   | "/team"
@@ -31,7 +31,7 @@ export type ProjectNavTo =
   | "/projects/$projectId"
   | "/projects/$projectId/domains"
   | "/projects/$projectId/deployments"
-  | "/projects/$projectId/resources"
+  | "/projects/$projectId/variables"
   | "/projects/$projectId/activity";
 
 export interface NavItem {
@@ -51,7 +51,7 @@ export const navItems: NavItem[] = [
   { label: "Domains", to: "/domains", projectTo: "/projects/$projectId/domains", icon: Globe2, description: "Custom hostnames and DNS", scope: "project" },
   { label: "Deployments", to: "/deployments", projectTo: "/projects/$projectId/deployments", icon: Rocket, description: "Release timeline and logs", scope: "project" },
   { label: "Servers", to: "/servers", icon: Server, description: "Owned infrastructure", scope: "workspace" },
-  { label: "Resources", to: "/resources", projectTo: "/projects/$projectId/resources", icon: Layers3, description: "Env vars and secrets", scope: "project" },
+  { label: "Environment Variables", to: "/variables", projectTo: "/projects/$projectId/variables", icon: Layers3, description: "Variables and secrets", scope: "project" },
   { label: "Backups", to: "/backups", icon: HardDrive, description: "Recovery and restore", scope: "workspace" },
   { label: "Security", to: "/security", icon: Shield, description: "Production guardrails", scope: "workspace" },
   { label: "Team", to: "/team", icon: Users, description: "Members and access", scope: "workspace" },

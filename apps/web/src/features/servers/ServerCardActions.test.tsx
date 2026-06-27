@@ -35,12 +35,13 @@ function key(revokedAt = "") {
   };
 }
 
-function renderActions() {
+function renderActions(overrides: { onSetup?: () => void } = {}) {
   renderWithClient(
     <ServerCardActions
       serverId="srv-1"
       serverName="prod-1"
       minting={false}
+      onSetup={overrides.onSetup ?? vi.fn()}
       onInstallCommand={vi.fn()}
       onDelete={vi.fn()}
     />,
@@ -82,6 +83,24 @@ describe("ServerCardActions — SSH credential affordances", () => {
     await waitFor(() => expect(m.getManagementKey).toHaveBeenCalled());
     expect(screen.queryByRole("button", { name: /rotate ssh key/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /revoke ssh access/i })).not.toBeInTheDocument();
+  });
+
+  it("offers 'Set up over SSH' with no key and 'Re-run setup' with one, and reports the intent", async () => {
+    const onSetup = vi.fn();
+    m.getManagementKey.mockResolvedValue({ key: null });
+    renderActions({ onSetup });
+
+    const setUp = await screen.findByRole("button", { name: /set up ssh setup for prod-1/i });
+    expect(setUp).toHaveTextContent(/set up over ssh/i);
+    await userEvent.setup().click(setUp);
+    expect(onSetup).toHaveBeenCalledTimes(1);
+  });
+
+  it("labels the action 'Re-run setup' when an active key exists", async () => {
+    renderActions();
+    expect(await screen.findByRole("button", { name: /re-run ssh setup for prod-1/i })).toHaveTextContent(
+      /re-run setup/i,
+    );
   });
 
   it("hides rotate/revoke when the managed key is already revoked", async () => {

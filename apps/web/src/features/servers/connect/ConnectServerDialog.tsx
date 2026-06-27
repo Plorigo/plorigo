@@ -20,15 +20,22 @@ import { SetupProgress } from "./SetupProgress";
 type AuthMethod = "password" | "key";
 type ManagedPhase = "form" | "progress";
 
-// ConnectServerDialog offers two ways to connect a fresh machine: run a one-line install
-// command yourself, or let Plorigo prepare it over SSH. Both paths create at most ONE server
-// record (reused across tabs and retries). The managed path's bootstrap credential is held
-// only until StartSetup is called, then cleared from state.
+// ConnectServerDialog offers two ways to connect a machine: run a one-line install command
+// yourself, or let Plorigo prepare it over SSH. Both paths create at most ONE server record
+// (reused across tabs and retries). The managed path's bootstrap credential is held only until
+// StartSetup is called, then cleared from state.
+//
+// Pass `existingServer` to operate on a server that already exists (e.g. re-run SSH setup after
+// changing its password, or set up over SSH a box first connected with a command). In that mode
+// the dialog opens on the SSH tab, locks the name, and reuses the existing record instead of
+// creating a new one — backend StartSetup is re-runnable (it reuses the pinned host key and
+// re-provisions the management credential).
 export function ConnectServerDialog({
   workspaceId,
   open,
   onOpenChange,
   onManagedRun,
+  existingServer,
 }: {
   workspaceId: string;
   open: boolean;
@@ -36,11 +43,13 @@ export function ConnectServerDialog({
   // Reports the server + run id of a started managed bootstrap, so the page can reflect
   // "setting up" / "failed setup" on that server's card.
   onManagedRun: (serverId: string, runId: string) => void;
+  // When set, the dialog edits this server's connection instead of creating a new one.
+  existingServer?: { id: string; name: string };
 }) {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<"manual" | "managed">("manual");
-  const [name, setName] = useState("");
-  const [serverId, setServerId] = useState("");
+  const [tab, setTab] = useState<"manual" | "managed">(existingServer ? "managed" : "manual");
+  const [name, setName] = useState(existingServer?.name ?? "");
+  const [serverId, setServerId] = useState(existingServer?.id ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -65,9 +74,11 @@ export function ConnectServerDialog({
   }
 
   function reset() {
-    setTab("manual");
-    setName("");
-    setServerId("");
+    // Keep the target server's identity in existing-server mode (only the create flow starts
+    // from a blank slate); everything else returns to a fresh form.
+    setTab(existingServer ? "managed" : "manual");
+    setName(existingServer?.name ?? "");
+    setServerId(existingServer?.id ?? "");
     setBusy(false);
     setError("");
     setManualResult(null);
@@ -174,10 +185,11 @@ export function ConnectServerDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Connect a server</DialogTitle>
+          <DialogTitle>{existingServer ? `Set up ${existingServer.name}` : "Connect a server"}</DialogTitle>
           <DialogDescription>
-            Run a one-line command on the machine yourself, or let Plorigo prepare a fresh
-            Ubuntu server for you over SSH.
+            {existingServer
+              ? "Re-run Plorigo's SSH setup on this server — for example after changing its password — or generate a fresh install command instead."
+              : "Run a one-line command on the machine yourself, or let Plorigo prepare a fresh Ubuntu server for you over SSH."}
           </DialogDescription>
         </DialogHeader>
 
@@ -212,6 +224,7 @@ export function ConnectServerDialog({
                     placeholder="prod-1"
                     autoFocus
                     required
+                    disabled={!!existingServer}
                   />
                 </Field>
                 {error && <ErrorNote>{error}</ErrorNote>}
@@ -243,7 +256,13 @@ export function ConnectServerDialog({
                 </p>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Server name">
-                    <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="prod-1" required />
+                    <Input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="prod-1"
+                      required
+                      disabled={!!existingServer}
+                    />
                   </Field>
                   <Field label="Host or IP">
                     <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="203.0.113.10" required />
