@@ -183,6 +183,7 @@ func (a *App) buildModules() error {
 		Crypto:   box,
 		GitHub:   github.NewClient(github.Config{}),
 		Enqueuer: a.deployments.Service(),
+		Config:   a.config.Service(),
 		Log:      a.log,
 	})
 

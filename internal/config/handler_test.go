@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/plorigo/plorigo/internal/platform/database"
 	"github.com/plorigo/plorigo/internal/platform/problem"
 	controlplanev1 "github.com/plorigo/plorigo/proto/gen/controlplane/v1"
 )
@@ -36,6 +37,9 @@ func (f *fakeService) ListForService(_ context.Context, _ string) ([]Entry, erro
 	return f.list, f.err
 }
 func (f *fakeService) Delete(_ context.Context, _ DeleteInput) error { return f.err }
+func (f *fakeService) SetWithinTx(_ context.Context, _ database.Tx, _ string, _ map[string]string) error {
+	return f.err
+}
 
 func TestHandler_SetConfig_VariableRoundTrips(t *testing.T) {
 	h := &handler{svc: &fakeService{}}

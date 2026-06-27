@@ -33,13 +33,14 @@ type service struct {
 	box        SecretBox
 	gh         GitHubClient
 	enqueuer   Enqueuer
+	cfg        ConfigSetter
 	authorizer authz.Authorizer
 	audit      Recorder
 	log        *slog.Logger
 }
 
-func newService(tx TxRunner, store Store, box SecretBox, gh GitHubClient, enqueuer Enqueuer, authorizer authz.Authorizer, audit Recorder, log *slog.Logger) *service {
-	return &service{tx: tx, store: store, box: box, gh: gh, enqueuer: enqueuer, authorizer: authorizer, audit: audit, log: log}
+func newService(tx TxRunner, store Store, box SecretBox, gh GitHubClient, enqueuer Enqueuer, cfg ConfigSetter, authorizer authz.Authorizer, audit Recorder, log *slog.Logger) *service {
+	return &service{tx: tx, store: store, box: box, gh: gh, enqueuer: enqueuer, cfg: cfg, authorizer: authorizer, audit: audit, log: log}
 }
 
 var _ Servicer = (*service)(nil)
@@ -155,6 +156,100 @@ func (s *service) CreateService(ctx context.Context, in CreateInput) (Result, er
 	saved.GitHubLogin = rs.githubLogin
 	s.log.Info("service created", "id", saved.ID, "environment_id", saved.EnvironmentID, "source_kind", saved.SourceKind, "visibility", visibility, "deployed", deploy, "workspace_id", workspaceID, "actor", caller.UserID)
 	return Result{Service: saved, DeploymentID: deploymentID}, nil
+}
+
+// CreateDatabase provisions a managed database (e.g. Postgres) as a PRIVATE service from a
+// built-in template: the control plane picks the image + port, generates the credentials, and
+// stores them as the service's config variables (through the ConfigSetter port, the same way
+// deploy_now writes the deployments table through the Enqueuer port) so the container starts ready and
+// siblings can connect over the per-environment network. The credentials and the first
+// deployment commit in one transaction. The connection URI is returned so the dashboard can
+// surface it. Data is NOT persisted across redeploys yet (volumes are a later slice).
+func (s *service) CreateDatabase(ctx context.Context, in DatabaseInput) (DatabaseResult, error) {
+	if _, err := id.Parse(in.EnvironmentID); err != nil {
+		return DatabaseResult{}, problem.InvalidInput("a valid environment_id is required")
+	}
+	tmpl, ok := lookupDatabaseTemplate(in.TemplateID)
+	if !ok {
+		return DatabaseResult{}, problem.InvalidInput("unknown database template %q", in.TemplateID)
+	}
+	name, slug, err := validateName(in.Name)
+	if err != nil {
+		return DatabaseResult{}, err
+	}
+
+	workspaceID, projectID, ok, err := s.store.WorkspaceAndProjectForEnvironment(ctx, in.EnvironmentID)
+	if err != nil {
+		return DatabaseResult{}, problem.Internalf(err, "create database")
+	}
+	if !ok {
+		return DatabaseResult{}, problem.NotFound("environment %s not found", in.EnvironmentID)
+	}
+
+	caller := principal.FromContext(ctx)
+	if err := s.authorizer.Authorize(ctx, caller, authz.ActionServiceCreate, authz.Resource{Type: "service", WorkspaceID: workspaceID}); err != nil {
+		return DatabaseResult{}, err
+	}
+
+	// A database is always deployable (control-plane image), so deploy_now needs a server in
+	// the same workspace — the same cross-tenant guard CreateService applies.
+	deploy := in.DeployNow
+	var serverID string
+	if deploy {
+		if _, err := id.Parse(in.ServerID); err != nil {
+			return DatabaseResult{}, problem.InvalidInput("a valid server_id is required to deploy")
+		}
+		serverWorkspace, ok, err := s.store.WorkspaceForServer(ctx, in.ServerID)
+		if err != nil {
+			return DatabaseResult{}, problem.Internalf(err, "create database")
+		}
+		if !ok || serverWorkspace != workspaceID {
+			return DatabaseResult{}, problem.NotFound("server %s not found in this workspace", in.ServerID)
+		}
+		serverID = in.ServerID
+	}
+
+	password, err := generateDatabasePassword()
+	if err != nil {
+		return DatabaseResult{}, problem.Internalf(err, "create database")
+	}
+
+	var saved Service
+	var deploymentID string
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		var txErr error
+		// Always PRIVATE: a database must never get a public Caddy route — only its siblings
+		// reach it, at {slug}:{port} on the per-environment network.
+		saved, txErr = s.store.InsertService(ctx, tx, ServiceWrite{
+			EnvironmentID: in.EnvironmentID, ProjectID: projectID, WorkspaceID: workspaceID,
+			Name: name, Slug: slug, SourceKind: SourceTemplate, ImageRef: tmpl.image,
+			TemplateID: tmpl.id, ContainerPort: tmpl.port, Visibility: VisibilityPrivate,
+		})
+		if txErr != nil {
+			return txErr
+		}
+		// Store the generated credentials as the service's config variables so the agent injects
+		// them when it starts the container (config owns that table; we write through its port).
+		if txErr := s.cfg.SetWithinTx(ctx, tx, saved.ID, tmpl.env(password)); txErr != nil {
+			return txErr
+		}
+		if txErr := s.audit.Record(ctx, tx, "service.create_database", "service", saved.ID, workspaceID, caller.UserID); txErr != nil {
+			return txErr
+		}
+		if deploy {
+			deploymentID, txErr = s.enqueuer.EnqueueFirstDeployment(ctx, tx, saved.ID, serverID)
+			if txErr != nil {
+				return txErr
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return DatabaseResult{}, mapErr(err, "create database")
+	}
+	// Never log the password or the assembled URI — only the key facts.
+	s.log.Info("database service created", "id", saved.ID, "environment_id", saved.EnvironmentID, "template", tmpl.id, "deployed", deploy, "workspace_id", workspaceID, "actor", caller.UserID)
+	return DatabaseResult{Service: saved, DeploymentID: deploymentID, ConnectionURI: tmpl.connectionURI(saved.Slug, password)}, nil
 }
 
 func (s *service) GetService(ctx context.Context, serviceID string) (Service, error) {

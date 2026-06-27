@@ -109,6 +109,17 @@ func (f *fakeEnqueuer) EnqueueFirstDeployment(_ context.Context, _ database.Tx, 
 	return testDepID, nil
 }
 
+type fakeConfigSetter struct {
+	serviceID string
+	vars      map[string]string
+}
+
+func (f *fakeConfigSetter) SetWithinTx(_ context.Context, _ database.Tx, serviceID string, vars map[string]string) error {
+	f.serviceID = serviceID
+	f.vars = vars
+	return nil
+}
+
 type fakeBox struct{}
 
 func (fakeBox) Open(sealed []byte) ([]byte, error) { return sealed, nil }
@@ -166,7 +177,13 @@ func authedCtx() context.Context {
 }
 
 func newSvc(store Store, gh GitHubClient, enq Enqueuer, authorizer authz.Authorizer, rec Recorder) *service {
-	return newService(fakeTx{}, store, fakeBox{}, gh, enq, authorizer, rec, slog.Default())
+	return newService(fakeTx{}, store, fakeBox{}, gh, enq, &fakeConfigSetter{}, authorizer, rec, slog.Default())
+}
+
+// newDBSvc builds a service with a caller-supplied env setter so CreateDatabase tests can
+// inspect the generated credentials it writes.
+func newDBSvc(store Store, enq Enqueuer, env ConfigSetter, authorizer authz.Authorizer, rec Recorder) *service {
+	return newService(fakeTx{}, store, fakeBox{}, fakeGH{}, enq, env, authorizer, rec, slog.Default())
 }
 
 func wantKind(t *testing.T, err error, kind problem.Kind) {
@@ -179,6 +196,82 @@ func wantKind(t *testing.T, err error, kind problem.Kind) {
 
 func envResolved() *fakeStore {
 	return &fakeStore{envWs: testWorkspace, envProj: testProjectID, envOK: true, serverWs: testWorkspace, serverOK: true}
+}
+
+func TestCreateDatabase_PostgresPrivateWithCredsAndDeploy(t *testing.T) {
+	store := envResolved()
+	rec := &fakeRecorder{}
+	enq := &fakeEnqueuer{}
+	env := &fakeConfigSetter{}
+	svc := newDBSvc(store, enq, env, fakeAuthz{}, rec)
+
+	res, err := svc.CreateDatabase(authedCtx(), DatabaseInput{
+		EnvironmentID: testEnvID, Name: "Primary DB", TemplateID: "postgres",
+		ServerID: testServerID, DeployNow: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateDatabase failed: %v", err)
+	}
+	// A database is always a PRIVATE template service built from the catalogue image + port.
+	w := store.insertedImage
+	if w.SourceKind != SourceTemplate || w.ImageRef != "postgres:16-alpine" || w.ContainerPort != 5432 || w.Visibility != VisibilityPrivate || w.TemplateID != "postgres" {
+		t.Errorf("inserted = %+v, want a private postgres template service on :5432", w)
+	}
+	// The generated credentials are written as THIS service's env vars.
+	if env.serviceID != testServiceID {
+		t.Errorf("env vars written for %q, want the new service %q", env.serviceID, testServiceID)
+	}
+	if env.vars["POSTGRES_USER"] != "plorigo" || env.vars["POSTGRES_DB"] != "app" || env.vars["POSTGRES_PASSWORD"] == "" {
+		t.Errorf("generated env = %v, want user/db set and a non-empty password", env.vars)
+	}
+	if !enq.called || res.DeploymentID != testDepID {
+		t.Errorf("deploy_now did not enqueue a first deployment (called=%v id=%q)", enq.called, res.DeploymentID)
+	}
+	if rec.action != "service.create_database" {
+		t.Errorf("audit action = %q, want service.create_database", rec.action)
+	}
+	// The connection URI is consistent with the stored password and the in-network host (slug).
+	tmpl, _ := lookupDatabaseTemplate("postgres")
+	if want := tmpl.connectionURI(res.Service.Slug, env.vars["POSTGRES_PASSWORD"]); res.ConnectionURI != want {
+		t.Errorf("connection uri = %q, want %q", res.ConnectionURI, want)
+	}
+}
+
+func TestCreateDatabase_WithoutDeployStillProvisions(t *testing.T) {
+	store := envResolved()
+	enq := &fakeEnqueuer{}
+	env := &fakeConfigSetter{}
+	svc := newDBSvc(store, enq, env, fakeAuthz{}, &fakeRecorder{})
+
+	res, err := svc.CreateDatabase(authedCtx(), DatabaseInput{EnvironmentID: testEnvID, Name: "db", TemplateID: "postgres"})
+	if err != nil {
+		t.Fatalf("CreateDatabase failed: %v", err)
+	}
+	if enq.called || res.DeploymentID != "" {
+		t.Errorf("enqueued a deployment without deploy_now (called=%v id=%q)", enq.called, res.DeploymentID)
+	}
+	if env.vars["POSTGRES_PASSWORD"] == "" || res.ConnectionURI == "" {
+		t.Error("provisioning should still generate credentials and a connection URI")
+	}
+}
+
+func TestCreateDatabase_UnknownTemplateRejected(t *testing.T) {
+	svc := newDBSvc(envResolved(), &fakeEnqueuer{}, &fakeConfigSetter{}, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.CreateDatabase(authedCtx(), DatabaseInput{EnvironmentID: testEnvID, Name: "db", TemplateID: "mysql"})
+	wantKind(t, err, problem.KindInvalidInput)
+}
+
+func TestCreateDatabase_DeniedWritesNothing(t *testing.T) {
+	store := envResolved()
+	env := &fakeConfigSetter{}
+	rec := &fakeRecorder{}
+	svc := newDBSvc(store, &fakeEnqueuer{}, env, fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
+
+	_, err := svc.CreateDatabase(authedCtx(), DatabaseInput{EnvironmentID: testEnvID, Name: "db", TemplateID: "postgres", ServerID: testServerID, DeployNow: true})
+	wantKind(t, err, problem.KindPermissionDenied)
+	if store.insertedImage.Name != "" || env.serviceID != "" || rec.called {
+		t.Error("denied CreateDatabase wrote a service, env vars, or audit row")
+	}
 }
 
 func TestCreateService_ImageDeployNow(t *testing.T) {

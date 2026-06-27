@@ -6,6 +6,7 @@ import {
   ArrowLeft,
   Container,
   Copy,
+  Database,
   ExternalLink,
   GitBranch,
   GitFork,
@@ -15,6 +16,7 @@ import {
   RefreshCw,
   Sparkles,
   Trash2,
+  TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -34,11 +36,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ConfigType } from "@/gen/controlplane/v1/config_pb";
 import type { Domain } from "@/gen/controlplane/v1/domains_pb";
 import type { Service } from "@/gen/controlplane/v1/services_pb";
 import { deploymentClient, domainClient } from "@/lib/clients";
 import {
   useAgents,
+  useConfig,
   useDeploymentsByService,
   useDomainsByService,
   useServers,
@@ -254,6 +258,9 @@ export function ServiceDetailPage() {
           </div>
         </Panel>
       </div>
+
+      {/* Connection — managed databases (template services) expose how to connect. */}
+      {s.sourceKind === "template" && <ConnectionPanel service={s} />}
 
       <DomainsPanel service={s} />
 
@@ -543,6 +550,103 @@ function DomainsPanel({ service }: { service: Service }) {
         </DialogContent>
       </Dialog>
     </Panel>
+  );
+}
+
+// ConnectionPanel shows how to connect to a managed database (a template service). It rebuilds
+// the connection string from the service's config variables — POSTGRES_USER/PASSWORD/DB, written
+// at provision time — plus the service's internal host and container port; siblings reach it at
+// that host on the per-environment network. Each field has a copy control. Data is NOT yet
+// persisted across redeploys (volumes are a later slice), so the panel flags it as ephemeral.
+function ConnectionPanel({ service }: { service: Service }) {
+  const config = useConfig(service.id);
+  const entries = config.data ?? [];
+  const get = (key: string) =>
+    entries.find((e) => e.key === key && e.type === ConfigType.VARIABLE)?.value ?? "";
+  const user = get("POSTGRES_USER");
+  const password = get("POSTGRES_PASSWORD");
+  const database = get("POSTGRES_DB");
+  const host = service.internalHost;
+  const port = service.containerPort;
+  const ready = Boolean(user && password && database && host && port > 0);
+  const connectionString = ready
+    ? `postgresql://${user}:${password}@${host}:${port}/${database}`
+    : "";
+
+  async function copy(text: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`Copied ${label}`);
+    } catch {
+      toast.error(`Could not copy ${label}`);
+    }
+  }
+
+  return (
+    <Panel>
+      <PanelHeader
+        title="Connection"
+        description="How sibling services connect to this managed database."
+      />
+      <div className="space-y-4 p-4">
+        <div className="flex items-start gap-2 rounded-lg border border-warning/20 bg-warning/10 px-3 py-2.5 text-xs leading-5 text-warning">
+          <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <p>
+            Data is <span className="font-medium">not yet persisted across redeploys</span> — a redeploy starts a fresh,
+            empty database. Persistent volumes are coming in a later release; treat this database as ephemeral for now.
+          </p>
+        </div>
+
+        {config.isLoading ? (
+          <Skeleton className="h-40 w-full" />
+        ) : !ready ? (
+          <EmptyState
+            title="Connection details unavailable"
+            body="Provision details appear once the database has its generated credentials. Try again after the first deployment."
+          />
+        ) : (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <ConnField label="Host" value={host} onCopy={() => copy(host, "host")} />
+              <ConnField label="Port" value={String(port)} onCopy={() => copy(String(port), "port")} />
+              <ConnField label="User" value={user} onCopy={() => copy(user, "user")} />
+              <ConnField label="Database" value={database} onCopy={() => copy(database, "database")} />
+            </div>
+            <div>
+              <span className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-foreground">
+                <Database className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                Connection string
+              </span>
+              <button
+                type="button"
+                onClick={() => copy(connectionString, "connection string")}
+                className="flex w-full items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-left font-mono text-xs text-foreground transition hover:bg-accent"
+              >
+                <span className="min-w-0 flex-1 truncate">{connectionString}</span>
+                <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+// ConnField is one labeled, copyable connection field (host/port/user/database).
+function ConnField({ label, value, onCopy }: { label: string; value: string; onCopy: () => void }) {
+  return (
+    <div>
+      <span className="mb-1.5 block text-xs font-medium text-foreground">{label}</span>
+      <button
+        type="button"
+        onClick={onCopy}
+        className="flex w-full items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-left font-mono text-xs text-foreground transition hover:bg-accent"
+      >
+        <span className="min-w-0 flex-1 truncate">{value}</span>
+        <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+      </button>
+    </div>
   );
 }
 
