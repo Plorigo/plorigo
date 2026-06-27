@@ -41,6 +41,8 @@ interface ServerRow {
   readiness?: string;
   readinessReason?: string;
   dockerVersion?: string;
+  caddyVersion?: string;
+  caddyRunning?: boolean; // undefined when the agent doesn't report extended facts
   os?: string;
   arch?: string;
   version?: string;
@@ -76,21 +78,34 @@ export function ServersPage() {
   const agentByServer = new Map((agents.data ?? []).map((a) => [a.serverId, a]));
   const liveRows: ServerRow[] = (servers.data ?? []).map((server) => {
     const agent = agentByServer.get(server.id);
+    const base = { id: server.id, name: server.name, region: "Workspace server" };
+    if (!agent) {
+      return { ...base, cpu: "not reported", memory: "not reported", disk: "not reported", status: "no agent" };
+    }
+    // cpuCount > 0 marks an agent that reports the extended host facts (PLO-95); older
+    // agents leave them zeroed, which we render as "not reported" rather than "0".
+    const ext = agent.cpuCount > 0;
     return {
-      id: server.id,
-      name: server.name,
-      region: "Workspace server",
-      cpu: "not reported",
-      memory: "not reported",
-      disk: "not reported",
-      status: agent ? agent.status : "no agent",
-      readiness: agent?.readiness,
-      readinessReason: agent?.readinessReason,
-      dockerVersion: agent?.dockerVersion,
-      os: agent?.os,
-      arch: agent?.arch,
-      version: agent?.agentVersion,
-      lastSeen: agent?.lastSeenAt,
+      ...base,
+      cpu: ext ? `${agent.cpuCount} vCPU` : "not reported",
+      memory:
+        ext && agent.memTotalBytes > 0n
+          ? fmtUsed(agent.memTotalBytes - agent.memAvailableBytes, agent.memTotalBytes)
+          : "not reported",
+      disk:
+        ext && agent.diskTotalBytes > 0n
+          ? fmtUsed(agent.diskTotalBytes - agent.diskFreeBytes, agent.diskTotalBytes)
+          : "not reported",
+      status: agent.status,
+      readiness: agent.readiness,
+      readinessReason: agent.readinessReason,
+      dockerVersion: agent.dockerVersion,
+      caddyVersion: ext ? agent.caddyVersion : undefined,
+      caddyRunning: ext ? agent.caddyRunning : undefined,
+      os: agent.os,
+      arch: agent.arch,
+      version: agent.agentVersion,
+      lastSeen: agent.lastSeenAt,
     };
   });
   const rows: ServerRow[] = liveRows.length > 0 ? liveRows : demo ? serverHealth : [];
@@ -275,11 +290,25 @@ function InstallCommandDialog({
 
 // dockerFactsLabel renders the raw compatibility facts behind a server's readiness, so the
 // detail is one glance away (progressive disclosure). Shown only for health-reporting
-// agents (those that set os); "Docker unavailable" when the daemon isn't reachable.
+// agents (those that set os); "Docker unavailable" when the daemon isn't reachable, plus the
+// Caddy reverse-proxy state when the agent reports it (PLO-95).
 function dockerFactsLabel(server: ServerRow): string {
   const docker = server.dockerVersion ? `Docker ${server.dockerVersion}` : "Docker unavailable";
+  let caddy = "";
+  if (server.caddyVersion) {
+    caddy = `Caddy ${server.caddyVersion}${server.caddyRunning === false ? " (not running)" : ""}`;
+  } else if (server.caddyRunning === false) {
+    caddy = "Caddy not running";
+  }
   const host = server.os ? `${server.os}${server.arch ? `/${server.arch}` : ""}` : "";
-  return host ? `${docker} · ${host}` : docker;
+  return [docker, caddy, host].filter(Boolean).join(" · ");
+}
+
+// fmtUsed renders a "used / total GiB" label whose embedded fraction drives the meter bar
+// (see percentFromLabel) — a fuller bar means more of the resource is in use.
+function fmtUsed(usedBytes: bigint, totalBytes: bigint): string {
+  const gib = (b: bigint) => (Number(b) / 1024 ** 3).toFixed(1);
+  return `${gib(usedBytes)} / ${gib(totalBytes)} GiB`;
 }
 
 // lastSeenLabel renders a short relative time for an agent's last heartbeat.

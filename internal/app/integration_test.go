@@ -847,13 +847,13 @@ func TestIntegration_AgentHeartbeatRecordsHealth(t *testing.T) {
 		t.Fatalf("Register agent: %v", err)
 	}
 
-	// Before any heartbeat the agent has never connected: facts unknown, readiness unavailable.
+	// Before any heartbeat the agent has never connected: facts unknown, readiness unknown.
 	pre := agentForServer(t, agentsSvc, ownerCtx, ws.ID, srv.ID)
 	if pre.DockerAvailable != nil {
 		t.Fatalf("pre-heartbeat DockerAvailable = %v, want nil (unknown)", *pre.DockerAvailable)
 	}
-	if state, _ := pre.Readiness(time.Now()); state != agents.ReadinessUnavailable {
-		t.Fatalf("pre-heartbeat readiness = %q, want %q", state, agents.ReadinessUnavailable)
+	if state, _ := pre.Readiness(time.Now()); state != agents.ReadinessUnknown {
+		t.Fatalf("pre-heartbeat readiness = %q, want %q", state, agents.ReadinessUnknown)
 	}
 
 	// A heartbeat carrying Docker availability records liveness AND the compatibility facts
