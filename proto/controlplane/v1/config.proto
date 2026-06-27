@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// A ConfigEntry is one configuration key/value with two independent axes:
+//
+//   type  — VARIABLE (plaintext, readable) or SECRET (encrypted at rest, WRITE-ONLY).
+//   scope — SERVICE (one service) or ENVIRONMENT (shared by every service in it).
+//
+// At deploy time a service receives its environment-shared entries merged with its own
+// service-level entries, the latter overriding on a key collision (environment =
+// defaults, service = override). A SECRET value is encrypted with APP_MASTER_KEY and is
+// never returned by any RPC, so for secrets `value` is always empty — the entry carries
+// only metadata (key + timestamps). See docs/architecture/security.md and data-and-api.md.
+message ConfigEntry {
+  string id = 1;
+  ConfigType type = 2;
+  ConfigScope scope = 3;
+  // Exactly one of service_id / environment_id is set, matching scope.
+  string service_id = 4;
+  string environment_id = 5;
+  string key = 6;
+  // Plaintext for VARIABLE entries; ALWAYS empty for SECRET entries (write-only).
+  string value = 7;
+  string created_at = 8; // RFC 3339
+  string updated_at = 9; // RFC 3339
+}
+
+// ConfigType is whether an entry's value is readable plaintext or an encrypted secret.
+enum ConfigType {
+  CONFIG_TYPE_UNSPECIFIED = 0;
+  CONFIG_TYPE_VARIABLE = 1;
+  CONFIG_TYPE_SECRET = 2;
+}
+
+// ConfigScope is whether an entry belongs to a single service or is shared across every
+// service in an environment.
+enum ConfigScope {
+  CONFIG_SCOPE_UNSPECIFIED = 0;
+  CONFIG_SCOPE_SERVICE = 1;
+  CONFIG_SCOPE_ENVIRONMENT = 2;
+}
+
+message SetConfigRequest {
+  ConfigType type = 1;
+  ConfigScope scope = 2;
+  // Set service_id when scope is SERVICE, environment_id when scope is ENVIRONMENT.
+  string service_id = 3;
+  string environment_id = 4;
+  string key = 5;
+  // The plaintext value. For SECRET entries it is encrypted before storage and never
+  // returned again.
+  string value = 6;
+}
+
+message SetConfigResponse {
+  // entry.value is empty when type is SECRET (write-only).
+  ConfigEntry entry = 1;
+}
+
+message ListConfigRequest {
+  // Lists everything that applies to this service: its service-level entries plus the
+  // entries shared across the service's environment. The server resolves the environment.
+  string service_id = 1;
+}
+
+message ListConfigResponse {
+  // Secret entries carry metadata only (value empty).
+  repeated ConfigEntry entries = 1;
+}
+
+message DeleteConfigRequest {
+  ConfigScope scope = 1;
+  // Set service_id when scope is SERVICE, environment_id when scope is ENVIRONMENT.
+  string service_id = 2;
+  string environment_id = 3;
+  string key = 4;
+}
+
+message DeleteConfigResponse {}
+
+// ConfigService manages variables and secrets at service and environment scope. SetConfig
+// upserts (create-or-update) by (scope, key); a secret value is encrypted at rest and is
+// never returned by ListConfig (which yields the value for variables and metadata only for
+// secrets).
+service ConfigService {
+  rpc SetConfig(SetConfigRequest) returns (SetConfigResponse);
+  rpc ListConfig(ListConfigRequest) returns (ListConfigResponse);
+  rpc DeleteConfig(DeleteConfigRequest) returns (DeleteConfigResponse);
+}
