@@ -49,6 +49,9 @@ func (h *handler) CreateDatabaseService(ctx context.Context, req *connect.Reques
 		EnvironmentID: req.Msg.GetEnvironmentId(),
 		Name:          req.Msg.GetName(),
 		TemplateID:    req.Msg.GetTemplateId(),
+		DatabaseName:  req.Msg.GetDatabaseName(),
+		Username:      req.Msg.GetUsername(),
+		Password:      req.Msg.GetPassword(),
 		ServerID:      req.Msg.GetServerId(),
 		DeployNow:     req.Msg.GetDeployNow(),
 	})

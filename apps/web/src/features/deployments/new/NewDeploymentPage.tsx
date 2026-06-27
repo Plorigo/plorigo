@@ -44,9 +44,10 @@ import {
   useServers,
 } from "@/lib/queries";
 import { pickDefaultServer, serverStatusLabel } from "@/lib/serverSelection";
-import { deployTemplates, templateSourceKind, type DeployTemplate, type TemplateCategory } from "@/lib/templates";
+import { deployTemplates, type DeployTemplate, type TemplateCategory } from "@/lib/templates";
 import { type Intent, intentSoft } from "@/lib/status";
 import { useWorkspaceStore } from "@/store";
+import { TemplateConfigDialog } from "./TemplateConfigDialog";
 
 // Per-template icon + tint so the Templates gallery reads at a glance; falls back by
 // category for any template that doesn't have its own entry. Visual only — the template
@@ -56,11 +57,13 @@ const TEMPLATE_ICONS: Record<string, { icon: LucideIcon; intent: Intent }> = {
   "nginx-hello": { icon: Globe, intent: "info" },
   httpbin: { icon: FlaskConical, intent: "success" },
   "welcome-to-docker": { icon: Container, intent: "warning" },
+  postgres: { icon: Database, intent: "info" },
 };
 const CATEGORY_ICONS: Record<TemplateCategory, { icon: LucideIcon; intent: Intent }> = {
   Starter: { icon: Sparkles, intent: "violet" },
   Web: { icon: Globe, intent: "info" },
   API: { icon: FlaskConical, intent: "success" },
+  Database: { icon: Database, intent: "info" },
 };
 function templateVisual(t: DeployTemplate) {
   return TEMPLATE_ICONS[t.id] ?? CATEGORY_ICONS[t.category];
@@ -119,8 +122,8 @@ export function NewDeploymentPage() {
   const [repoBranch, setRepoBranch] = useState("");
   // Templates.
   const [templateFilter, setTemplateFilter] = useState("");
-  // Managed database (Postgres) — its own name, independent of the source-driven name above.
-  const [dbName, setDbName] = useState("");
+  // The template whose "Configure & deploy" dialog is open (null = closed).
+  const [configTemplate, setConfigTemplate] = useState<DeployTemplate | null>(null);
   // Shared action state — busyKey names the item being acted on so only its button spins.
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -259,6 +262,7 @@ export function NewDeploymentPage() {
   // Creating a service needs a full target (project + at least one environment + server).
   const canDeploy = Boolean(projectId) && environmentIds.length > 0 && Boolean(serverId) && !noServers;
   const slugPreview = slugify(name);
+  const serverLabel = (servers.data ?? []).find((s) => s.id === serverId)?.name ?? "the selected server";
 
   function startConnect() {
     // Return to this add-service flow after GitHub authorizes — the OAuth handler defaults to
@@ -314,16 +318,10 @@ export function NewDeploymentPage() {
     "name" | "sourceKind" | "imageRef" | "repoUrl" | "owner" | "repo" | "branch" | "containerPort"
   >;
 
-  // runCreate creates the SAME service in EVERY selected environment (each environment gets
-  // its own service + first deployment). One environment behaves like before — it lands on the
-  // deployment, or the service detail page for an OAuth source that can't build yet. Several
-  // environments report the spread and return to the project, where all the new services are
-  // listed. Partial failure (e.g. a duplicate name in one environment) is surfaced without
-  // discarding the environments that succeeded.
-  async function runCreate(source: ServiceSource, key: string, fallback: string) {
-    if (!guardTarget()) return;
-    setBusyKey(key);
-    setError("");
+  // createInEnvironments creates the SAME service in EVERY selected environment (each gets its
+  // own service + first deployment), returning what succeeded and the per-environment failures.
+  // A partial failure (e.g. a duplicate name in one environment) doesn't discard the others.
+  async function createInEnvironments(source: ServiceSource, vis: Visibility, fallback: string) {
     const serviceName = source.name ?? "service";
     const created: { serviceId: string; deploymentId: string }[] = [];
     const failures: string[] = [];
@@ -332,7 +330,7 @@ export function NewDeploymentPage() {
         const { service, deploymentId } = await serviceClient.createService({
           ...source,
           environmentId: envId,
-          visibility,
+          visibility: vis,
           serverId,
           deployNow: true,
         });
@@ -342,6 +340,18 @@ export function NewDeploymentPage() {
         failures.push(formatErr(err, envName(envId), serviceName, fallback));
       }
     }
+    return { created, failures };
+  }
+
+  // runCreate is the page-lane wrapper (the quick box + OAuth repo import): it creates with the
+  // shared visibility, spins the named button, and reports the spread inline. One environment
+  // lands on the deployment (or the service detail page for an OAuth source that can't build
+  // yet); several report success and return to the project.
+  async function runCreate(source: ServiceSource, key: string, fallback: string) {
+    if (!guardTarget()) return;
+    setBusyKey(key);
+    setError("");
+    const { created, failures } = await createInEnvironments(source, visibility, fallback);
     setBusyKey(null);
     if (created.length === 0) {
       setError(failures.join(" · ") || fallback);
@@ -354,7 +364,7 @@ export function NewDeploymentPage() {
       onCreated(created[0].serviceId, created[0].deploymentId);
       return;
     }
-    toast.success(`Created "${serviceName}" in ${created.length} environments`);
+    toast.success(`Created "${source.name ?? "service"}" in ${created.length} environments`);
     void navigate({ to: "/projects/$projectId", params: { projectId } });
   }
 
@@ -414,35 +424,33 @@ export function NewDeploymentPage() {
     }
   }
 
+  // Clicking a template opens its configure dialog (once the target is set); the dialog collects
+  // the template's options and calls submitTemplate to create + deploy.
   function runTemplate(t: DeployTemplate) {
-    if (templateSourceKind(t) === "image") {
-      void createImageService(t.imageRef ?? "", t.containerPort, `tpl:${t.id}`, t.id);
-    } else {
-      void createPublicGitService(t.repoUrl ?? "", t.defaultBranch ?? "", t.containerPort, `tpl:${t.id}`, t.id);
-    }
+    if (!guardTarget()) return;
+    setConfigTemplate(t);
   }
 
-  // Provision a managed Postgres database. Unlike the other lanes, CreateDatabaseService
-  // takes a single environment (the control plane picks the image/port and generates the
-  // credentials), so it provisions into the FIRST selected environment. The connection URI
-  // is returned ONCE here (it embeds the generated password), so we surface it in the toast
-  // and then land on the new service's detail page where the Connection panel rebuilds it.
-  async function createDatabase() {
-    if (!guardTarget()) return;
-    const environmentId = environmentIds[0];
-    const serviceName = dbName.trim() || "postgres";
-    setBusyKey("database");
-    setError("");
-    try {
+  // submitTemplate is invoked by the configure dialog with the user's chosen option values. It
+  // creates + deploys the template, THROWING on failure so the dialog surfaces the message and
+  // stays open; on success it navigates away (unmounting the dialog). A managed service uses the
+  // dedicated CreateDatabaseService RPC and a single environment (it picks the image/port and
+  // resolves the credentials); image/repo templates fan out to all selected environments like
+  // the page lanes do.
+  async function submitTemplate(t: DeployTemplate, values: Record<string, string>) {
+    if (t.kind === "managed") {
+      const environmentId = environmentIds[0];
       const { service, connectionUri } = await serviceClient.createDatabaseService({
         environmentId,
-        name: serviceName,
-        templateId: "postgres",
+        name: values.name?.trim() || t.id,
+        templateId: t.managedTemplateId ?? t.id,
+        databaseName: values.databaseName?.trim() ?? "",
+        username: values.username?.trim() ?? "",
+        password: values.password ?? "",
         serverId,
         deployNow: true,
       });
       if (!service) throw new Error("the database service was not created");
-      setBusyKey(null);
       void queryClient.invalidateQueries({ queryKey: ["services"] });
       void queryClient.invalidateQueries({ queryKey: ["deployments"] });
       toast.success("Database provisioned", {
@@ -452,10 +460,35 @@ export function NewDeploymentPage() {
         to: "/projects/$projectId/services/$serviceId",
         params: { projectId, serviceId: service.id },
       });
-    } catch (err) {
-      setBusyKey(null);
-      setError(formatErr(err, envName(environmentId), serviceName, "Could not provision the database"));
+      return;
     }
+
+    const port = Number(values.port);
+    if (t.kind === "image" && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      throw new Error("Container port must be between 1 and 65535");
+    }
+    if (t.kind === "repo" && port !== 0 && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      throw new Error("Container port must be between 1 and 65535, or 0 to auto-detect");
+    }
+    const serviceName = values.name?.trim() || t.id;
+    const source: ServiceSource =
+      t.kind === "image"
+        ? { name: serviceName, sourceKind: "image", imageRef: t.imageRef ?? "", containerPort: port }
+        : { name: serviceName, sourceKind: "git", repoUrl: t.repoUrl ?? "", branch: (values.branch ?? "").trim(), containerPort: port };
+    const vis: Visibility = values.visibility === "private" ? "private" : "public";
+    const fallback = t.kind === "image" ? "Could not create the service" : "Could not create and deploy the repository";
+
+    const { created, failures } = await createInEnvironments(source, vis, fallback);
+    if (created.length === 0) throw new Error(failures.join(" · ") || fallback);
+    void queryClient.invalidateQueries({ queryKey: ["services"] });
+    void queryClient.invalidateQueries({ queryKey: ["deployments"] });
+    if (failures.length) toast.error(failures.join(" · "));
+    if (created.length === 1) {
+      onCreated(created[0].serviceId, created[0].deploymentId);
+      return;
+    }
+    toast.success(`Created "${serviceName}" in ${created.length} environments`);
+    void navigate({ to: "/projects/$projectId", params: { projectId } });
   }
 
   return (
@@ -679,41 +712,6 @@ export function NewDeploymentPage() {
             )}
           </Panel>
 
-          {/* Database — provision a managed Postgres service (private, reachable by siblings). */}
-          <Panel className="p-4 sm:p-5">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-              <div className="min-w-0 flex-1">
-                <span className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-foreground">
-                  <Database className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-                  PostgreSQL database
-                </span>
-                <div className="relative">
-                  <Database className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-                  <Input
-                    value={dbName}
-                    onChange={(e) => {
-                      setError("");
-                      setDbName(e.target.value);
-                    }}
-                    placeholder="postgres"
-                    className="pl-9"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                  />
-                </div>
-              </div>
-              <Button onClick={createDatabase} disabled={busy || !canDeploy}>
-                <Database className="h-4 w-4" aria-hidden="true" />
-                {busyKey === "database" ? "Provisioning…" : "Add database"}
-              </Button>
-            </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {environmentIds.length > 1
-                ? `Provisions a private Postgres database in ${envName(environmentIds[0])} (databases are created in one environment). Credentials are generated for you; data is not yet persisted across redeploys.`
-                : "Provisions a private Postgres database with generated credentials. Data is not yet persisted across redeploys."}
-            </p>
-          </Panel>
-
           <div className="grid gap-6 lg:grid-cols-2">
             {/* Import Git Repository — the connected account's repos. */}
             <Panel className="flex flex-col overflow-hidden">
@@ -835,7 +833,7 @@ export function NewDeploymentPage() {
               <SectionHeader
                 icon={Sparkles}
                 title="Templates"
-                subtitle="Start from a ready-made image or repo."
+                subtitle="Start from a ready-made image, repo, or managed service."
                 count={filteredTemplates.length}
               >
                 <SearchInput value={templateFilter} onChange={setTemplateFilter} placeholder="Search templates…" />
@@ -846,12 +844,19 @@ export function NewDeploymentPage() {
                 <div className="max-h-[24rem] overflow-y-auto">
                   <div className="grid gap-3 p-4 sm:grid-cols-2">
                     {filteredTemplates.map((t) => {
-                      const isImg = templateSourceKind(t) === "image";
-                      const key = `tpl:${t.id}`;
                       const { icon: Icon, intent } = templateVisual(t);
-                      const detail = isImg
-                        ? `${t.imageRef} · :${t.containerPort}`
-                        : `${shortRepo(t.repoUrl ?? "")} · ${t.defaultBranch || "default"}`;
+                      const badge =
+                        t.kind === "image"
+                          ? { tone: "green" as const, label: "image" }
+                          : t.kind === "repo"
+                            ? { tone: "blue" as const, label: "git" }
+                            : { tone: "purple" as const, label: "managed" };
+                      const detail =
+                        t.kind === "image"
+                          ? `${t.imageRef} · :${t.containerPort}`
+                          : t.kind === "repo"
+                            ? `${shortRepo(t.repoUrl ?? "")} · ${t.defaultBranch || "default"}`
+                            : `${t.managedTemplateId} · :${t.containerPort}`;
                       return (
                         <div
                           key={t.id}
@@ -864,7 +869,7 @@ export function NewDeploymentPage() {
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-2">
                                 <span className="truncate text-sm font-medium text-foreground">{t.name}</span>
-                                <Badge tone={isImg ? "green" : "blue"}>{isImg ? "image" : "git"}</Badge>
+                                <Badge tone={badge.tone}>{badge.label}</Badge>
                               </div>
                               <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{t.category}</p>
                             </div>
@@ -875,10 +880,10 @@ export function NewDeploymentPage() {
                             size="sm"
                             variant="secondary"
                             className="mt-3 w-full"
-                            disabled={busy || !canDeploy}
+                            disabled={!canDeploy}
                             onClick={() => runTemplate(t)}
                           >
-                            {busyKey === key ? (isImg ? "Starting…" : "Building…") : "Add service"}
+                            Configure
                           </Button>
                         </div>
                       );
@@ -889,6 +894,17 @@ export function NewDeploymentPage() {
             </Panel>
           </div>
         </div>
+      )}
+
+      {configTemplate && (
+        <TemplateConfigDialog
+          template={configTemplate}
+          open
+          onOpenChange={(next) => !next && setConfigTemplate(null)}
+          environmentNames={environmentIds.map(envName)}
+          serverLabel={serverLabel}
+          onSubmit={(values) => submitTemplate(configTemplate, values)}
+        />
       )}
     </div>
   );

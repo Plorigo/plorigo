@@ -161,18 +161,38 @@ A service's **visibility** decides what is exposed to the outside:
 ## Managed database services
 
 A **managed database** (Postgres today) is provisioned as a `template` service from a small,
-**control-plane-owned catalogue** (`internal/services` — there is no template registry table):
-the control plane fixes the image and port, forces **`private`** visibility (a database must
-never get a public route), generates the credentials, and stores them as the service's **env
-vars** so the agent injects them when it starts the container. Credentials + the service +
-the first deployment commit in one transaction (the credentials are written through a
-consumer-defined env-var port, the same shape as the deploy `Enqueuer`). Siblings connect over
-the per-environment network at `{slug}:{port}`; the connection URI is returned once at create
-time and the dashboard also rebuilds it from the stored env vars.
+**control-plane-owned catalogue** (`internal/services/templates.go` — there is no template
+registry table): the control plane fixes the image and port, forces **`private`** visibility (a
+database must never get a public route), resolves the credentials, and stores them as the
+service's **config variables** so the agent injects them when it starts the container.
+Credentials + the service + the first deployment commit in one transaction (the config is
+written through a consumer-defined `ConfigSetter` port, the same shape as the deploy
+`Enqueuer`). Siblings connect over the per-environment network at `{slug}:{port}`; the
+connection URI is returned once at create time and the dashboard also rebuilds it from the
+stored config.
+
+**Caller options.** `CreateDatabaseService` accepts an optional **database name**, **username**,
+and **password**; each falls back to the template default, and a blank password is generated
+(`crypto/rand`). The image and port stay control-plane-chosen, so a caller can't smuggle an
+arbitrary image through the database path. The database name and user are validated as plain
+identifiers (≤ 63 chars); a supplied password is length-bounded.
+
+**Dashboard.** A managed database is one **template** in the unified "Add a service" gallery
+(`apps/web/src/lib/templates.ts`), alongside the image and repo templates — there is no separate
+database lane. Choosing any template opens a **"Configure & deploy" dialog**
+(`TemplateConfigDialog`) that renders the template's declared `options` (for Postgres: database
+name, username, a **generated password** the user can reveal, copy, edit, or regenerate, and a
+read-only port), then creates and deploys.
+
+**Adding a managed service** (e.g. MongoDB, Redis) is a data-only change: add a
+`databaseTemplate` entry — image, port, scheme, default user/db — plus a case in
+`env()`/`connectionURI()` (`internal/services/templates.go`), and a matching `managed` template
+with its `options` in `apps/web/src/lib/templates.ts`. No new RPC, table, or agent change.
 
 > [!NOTE]
 > This is the **basic** path. Data is **not yet persisted across redeploys** — the agent does
 > not mount volumes, so a redeploy starts a fresh database (persistent volumes are a later
-> slice; see [ROADMAP.md](../../ROADMAP.md)). The generated password lives in the service's
-> (plaintext, readable) env vars rather than the sealed-secret path, because secret *injection*
-> at deploy time isn't wired yet — moving managed credentials onto that path is a follow-up.
+> slice; see [ROADMAP.md](../../ROADMAP.md)). Credentials (including a user-supplied password)
+> live in the service's (plaintext, readable) config variables rather than the sealed-secret
+> path, because secret *injection* at deploy time isn't wired yet — moving managed credentials
+> onto that path is a follow-up.

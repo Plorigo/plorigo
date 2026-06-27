@@ -178,6 +178,23 @@ func (s *service) CreateDatabase(ctx context.Context, in DatabaseInput) (Databas
 		return DatabaseResult{}, err
 	}
 
+	// Resolve the caller's overrides against the template defaults, then validate. The database
+	// name and user must be plain identifiers; a supplied password is bounded (a blank one is
+	// generated below).
+	dbName := firstNonEmpty(in.DatabaseName, tmpl.defaultDB)
+	user := firstNonEmpty(in.Username, tmpl.defaultUser)
+	if err := validatePGIdentifier("database name", dbName); err != nil {
+		return DatabaseResult{}, err
+	}
+	if err := validatePGIdentifier("username", user); err != nil {
+		return DatabaseResult{}, err
+	}
+	if in.Password != "" {
+		if err := validateDBPassword(in.Password); err != nil {
+			return DatabaseResult{}, err
+		}
+	}
+
 	workspaceID, projectID, ok, err := s.store.WorkspaceAndProjectForEnvironment(ctx, in.EnvironmentID)
 	if err != nil {
 		return DatabaseResult{}, problem.Internalf(err, "create database")
@@ -209,9 +226,12 @@ func (s *service) CreateDatabase(ctx context.Context, in DatabaseInput) (Databas
 		serverID = in.ServerID
 	}
 
-	password, err := generateDatabasePassword()
-	if err != nil {
-		return DatabaseResult{}, problem.Internalf(err, "create database")
+	password := in.Password
+	if password == "" {
+		password, err = generateDatabasePassword()
+		if err != nil {
+			return DatabaseResult{}, problem.Internalf(err, "create database")
+		}
 	}
 
 	var saved Service
@@ -230,7 +250,7 @@ func (s *service) CreateDatabase(ctx context.Context, in DatabaseInput) (Databas
 		}
 		// Store the generated credentials as the service's config variables so the agent injects
 		// them when it starts the container (config owns that table; we write through its port).
-		if txErr := s.cfg.SetWithinTx(ctx, tx, saved.ID, tmpl.env(password)); txErr != nil {
+		if txErr := s.cfg.SetWithinTx(ctx, tx, saved.ID, tmpl.env(user, password, dbName)); txErr != nil {
 			return txErr
 		}
 		if txErr := s.audit.Record(ctx, tx, "service.create_database", "service", saved.ID, workspaceID, caller.UserID); txErr != nil {
@@ -249,7 +269,7 @@ func (s *service) CreateDatabase(ctx context.Context, in DatabaseInput) (Databas
 	}
 	// Never log the password or the assembled URI — only the key facts.
 	s.log.Info("database service created", "id", saved.ID, "environment_id", saved.EnvironmentID, "template", tmpl.id, "deployed", deploy, "workspace_id", workspaceID, "actor", caller.UserID)
-	return DatabaseResult{Service: saved, DeploymentID: deploymentID, ConnectionURI: tmpl.connectionURI(saved.Slug, password)}, nil
+	return DatabaseResult{Service: saved, DeploymentID: deploymentID, ConnectionURI: tmpl.connectionURI(saved.Slug, user, password, dbName)}, nil
 }
 
 func (s *service) GetService(ctx context.Context, serviceID string) (Service, error) {
@@ -652,6 +672,17 @@ func validatePort(kind string, port int32) (int32, error) {
 		return 0, problem.InvalidInput("a container_port is required for an image service")
 	}
 	return port, nil
+}
+
+// firstNonEmpty returns the first argument that is non-empty after trimming whitespace, or ""
+// if all are blank — used to fall back to a template default when the caller omits a value.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // validateImageRef trims and sanity-checks a container image reference, defaulting the tag
