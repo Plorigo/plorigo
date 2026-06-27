@@ -44,6 +44,19 @@ message HeartbeatRequest {
   string docker_version = 5; // daemon version; empty when Docker is unreachable
   string os = 6; // host GOOS (e.g. "linux")
   string arch = 7; // host GOARCH (e.g. "amd64")
+
+  // Extended host-readiness facts (PLO-95): whether the Caddy reverse proxy is installed and
+  // serving, plus coarse host resources. They expose nothing sensitive. A non-zero cpu_count
+  // marks an agent that reports these — older agents send 0/false and the control plane skips
+  // the Caddy/disk/memory readiness checks rather than raising false alarms.
+  bool caddy_available = 8; // the caddy binary is installed
+  bool caddy_running = 9; // caddy's admin API is reachable (it is serving traffic)
+  string caddy_version = 10; // caddy version; empty when unknown
+  int64 disk_total_bytes = 11; // total bytes on the data-dir filesystem; 0 when unknown
+  int64 disk_free_bytes = 12; // free bytes available to the agent; 0 when unknown
+  int64 mem_total_bytes = 13; // total host memory; 0 when unknown
+  int64 mem_available_bytes = 14; // memory available without swapping; 0 when unknown
+  uint32 cpu_count = 15; // logical CPUs; 0 means extended facts are not reported
 }
 
 message HeartbeatResponse {

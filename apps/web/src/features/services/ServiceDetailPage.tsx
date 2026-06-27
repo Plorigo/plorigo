@@ -36,12 +36,11 @@ import {
 } from "@/components/ui/table";
 import type { Domain } from "@/gen/controlplane/v1/domains_pb";
 import type { Service } from "@/gen/controlplane/v1/services_pb";
-import { deploymentClient, domainClient, envVarClient } from "@/lib/clients";
+import { deploymentClient, domainClient } from "@/lib/clients";
 import {
   useAgents,
   useDeploymentsByService,
   useDomainsByService,
-  useEnvVars,
   useServers,
   useService,
 } from "@/lib/queries";
@@ -53,7 +52,8 @@ import { deploymentRefLabel } from "@/features/deployments/timeline";
 import { internalUrl, isPublic, sourceLabel } from "./serviceData";
 
 // ServiceDetailPage is the single service: its identity and live URL, where it deploys from,
-// its non-secret env vars, and its deployment history. The Redeploy button triggers a fresh
+// and its deployment history. Its variables and secrets are managed on the Environment Variables
+// page (scoped to this service). The Redeploy button triggers a fresh
 // deployment of the service onto a chosen server (CreateDeploymentForService); the control
 // plane re-resolves the service's source so a private URL can't be smuggled through.
 export function ServiceDetailPage() {
@@ -253,9 +253,6 @@ export function ServiceDetailPage() {
             />
           </div>
         </Panel>
-
-        {/* Env vars — non-secret per-service configuration. */}
-        <EnvVarsPanel serviceId={id} />
       </div>
 
       <DomainsPanel service={s} />
@@ -545,105 +542,6 @@ function DomainsPanel({ service }: { service: Service }) {
           </form>
         </DialogContent>
       </Dialog>
-    </Panel>
-  );
-}
-
-// EnvVarsPanel lists a service's non-secret env vars and lets you add/update/delete them
-// (SetEnvVar upserts by key). Values are stored in plaintext and shown back.
-function EnvVarsPanel({ serviceId }: { serviceId: string }) {
-  const queryClient = useQueryClient();
-  const envVars = useEnvVars(serviceId);
-  const [key, setKey] = useState("");
-  const [value, setValue] = useState("");
-  const [busy, setBusy] = useState(false);
-  const rows = envVars.data ?? [];
-
-  async function invalidate() {
-    await queryClient.invalidateQueries({ queryKey: ["envVars", serviceId] });
-  }
-
-  async function onAdd(e: FormEvent) {
-    e.preventDefault();
-    const k = key.trim();
-    if (!k || busy) return;
-    setBusy(true);
-    try {
-      await envVarClient.setEnvVar({ serviceId, key: k, value });
-      await invalidate();
-      setKey("");
-      setValue("");
-      toast.success(`Saved ${k}`);
-    } catch (err) {
-      toast.error(err instanceof ConnectError ? err.message : "Could not save the variable");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onDelete(k: string) {
-    try {
-      await envVarClient.deleteEnvVar({ serviceId, key: k });
-      await invalidate();
-      toast.success(`Removed ${k}`);
-    } catch (err) {
-      toast.error(err instanceof ConnectError ? err.message : "Could not remove the variable");
-    }
-  }
-
-  return (
-    <Panel>
-      <PanelHeader
-        title="Environment variables"
-        description="Non-secret configuration injected at run time. Applied on the next deploy."
-      />
-      <div className="space-y-4 p-4">
-        <form onSubmit={onAdd} className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <div className="min-w-0 flex-1">
-            <span className="mb-1.5 block text-xs font-medium text-foreground">Key</span>
-            <Input value={key} onChange={(e) => setKey(e.target.value)} placeholder="PORT" autoCapitalize="none" spellCheck={false} />
-          </div>
-          <div className="min-w-0 flex-1">
-            <span className="mb-1.5 block text-xs font-medium text-foreground">Value</span>
-            <Input value={value} onChange={(e) => setValue(e.target.value)} placeholder="8080" autoCapitalize="none" spellCheck={false} />
-          </div>
-          <Button type="submit" size="sm" disabled={busy || !key.trim()}>
-            <Plus className="h-4 w-4" aria-hidden="true" />
-            {busy ? "Saving…" : "Set"}
-          </Button>
-        </form>
-
-        {envVars.isLoading ? (
-          <Skeleton className="h-24 w-full" />
-        ) : rows.length === 0 ? (
-          <EmptyState title="No variables yet" body="Add a key/value above to configure this service." />
-        ) : (
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Key</TableHead>
-                  <TableHead>Value</TableHead>
-                  <TableHead className="w-10" />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((v) => (
-                  <TableRow key={v.id || v.key}>
-                    <TableCell className="font-medium text-foreground">{v.key}</TableCell>
-                    <TableCell className="max-w-[260px] truncate font-mono text-xs text-muted-foreground">{v.value}</TableCell>
-                    <TableCell>
-                      <Button size="sm" variant="ghost" aria-label={`Remove ${v.key}`} onClick={() => onDelete(v.key)}>
-                        <Trash2 className="h-4 w-4" aria-hidden="true" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </div>
     </Panel>
   );
 }

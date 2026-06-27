@@ -78,14 +78,20 @@ func (s *postgresStore) AgentServerByCredential(ctx context.Context, credentialH
 	return row.ID, row.ServerID, true, nil
 }
 
-func (s *postgresStore) EnvVarsForService(ctx context.Context, serviceID string) (map[string]string, error) {
-	rows, err := db.New(s.pool).ListEnvVarsByService(ctx, serviceID)
+func (s *postgresStore) ConfigForService(ctx context.Context, serviceID string) ([]ConfigForDeploy, error) {
+	rows, err := db.New(s.pool).ListConfigForService(ctx, &serviceID)
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]string, len(rows))
+	out := make([]ConfigForDeploy, 0, len(rows))
 	for _, r := range rows {
-		out[r.Key] = r.Value
+		out = append(out, ConfigForDeploy{
+			Type:       r.Type,
+			Scope:      r.Scope,
+			Key:        r.Key,
+			Value:      r.Value,
+			Ciphertext: r.Ciphertext,
+		})
 	}
 	return out, nil
 }

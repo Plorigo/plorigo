@@ -442,12 +442,17 @@ func (f *fakeRouter) apply(_ context.Context, routes []managedRoute) ([]string, 
 }
 
 func hasReportStatus(reports []*agentv1.ReportDeploymentRequest, status string) bool {
-	for _, r := range reports {
+	return statusReportIndex(reports, status) >= 0
+}
+
+// statusReportIndex is the index of the first report carrying status, or -1.
+func statusReportIndex(reports []*agentv1.ReportDeploymentRequest, status string) int {
+	for i, r := range reports {
 		if r.GetStatus() == status {
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
 }
 
 func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *testing.T) {
@@ -505,7 +510,13 @@ func TestExecuteDeployment_RetiresPreviousOnlyAfterNewContainerIsHealthy(t *test
 	if !hasReportStatus(deploy.reports, statusRouting) {
 		t.Fatalf("reports = %+v, want a routing transition before running", deploy.reports)
 	}
-	// The build/pull/start/routing transitions on the way there are tagged as the build stream.
+	// The health check is reported as its own phase, before routing — so the timeline shows
+	// it distinctly and a failure here is attributed to the health check, not to starting.
+	hc, route := statusReportIndex(deploy.reports, statusHealthcheck), statusReportIndex(deploy.reports, statusRouting)
+	if hc < 0 || hc >= route {
+		t.Fatalf("reports = %+v, want a health-check transition before routing", deploy.reports)
+	}
+	// The build/pull/start/healthcheck/routing transitions on the way there are tagged as the build stream.
 	for _, r := range deploy.reports[:len(deploy.reports)-1] {
 		if r.GetLogStream() != streamBuild {
 			t.Fatalf("pre-running report (%s) log stream = %q, want %q", r.GetStatus(), r.GetLogStream(), streamBuild)

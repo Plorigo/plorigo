@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// An SSHManagementKey is the non-secret metadata for a server's persistent SSH
+// management credential (the dashboard-managed setup/repair channel). The private key is
+// sealed at rest with APP_MASTER_KEY and is WRITE-ONLY: it is never returned by any RPC,
+// so this message carries only the public key, fingerprint, and lifecycle timestamps.
+// See docs/architecture/server-management.md and security.md.
+message SSHManagementKey {
+  string server_id = 1;
+  // SHA256 fingerprint of the management public key (e.g. "SHA256:…"), so a user can
+  // verify out of band which key is installed.
+  string fingerprint = 2;
+  // The public OpenSSH authorized_keys line ("ssh-ed25519 AAAA…"). Non-secret.
+  string public_key = 3;
+  // active | rotating | superseded.
+  string rotation_state = 4;
+  string last_used_at = 5; // RFC 3339; empty if never used
+  string rotated_at = 6;   // RFC 3339; empty if never rotated
+  string revoked_at = 7;   // RFC 3339; empty while active
+  string created_by = 8;   // user id that provisioned it; empty if unknown
+  string created_at = 9;   // RFC 3339
+  string updated_at = 10;  // RFC 3339
+}
+
+message GetManagementKeyRequest {
+  string server_id = 1;
+}
+
+message GetManagementKeyResponse {
+  SSHManagementKey key = 1;
+}
+
+message RotateManagementKeyRequest {
+  string server_id = 1;
+}
+
+message RotateManagementKeyResponse {
+  // Metadata only — the new public key + fingerprint. The private key never leaves the
+  // control plane.
+  SSHManagementKey key = 1;
+}
+
+message RevokeManagementKeyRequest {
+  string server_id = 1;
+}
+
+message RevokeManagementKeyResponse {}
+
+// A ServerSetupRun is one asynchronous attempt to bootstrap a server over SSH.
+message ServerSetupRun {
+  string id = 1;
+  string server_id = 2;
+  string status = 3;         // queued | running | succeeded | failed
+  string failure_reason = 4; // plain-English; empty unless failed
+  string created_at = 5;     // RFC 3339
+  string updated_at = 6;     // RFC 3339
+  string finished_at = 7;    // RFC 3339; empty until terminal
+}
+
+// A ServerSetupEvent is one ordered, redacted status/log line of a run. Messages never
+// contain a raw credential, private key, or registration token.
+message ServerSetupEvent {
+  uint64 seq = 1;
+  string step = 2;    // detect_os | check_privilege | preflight | install_prereqs | provision_user | await_agent
+  string kind = 3;    // status | log
+  string status = 4;  // started | ok | failed | skipped
+  string message = 5;
+  string created_at = 6; // RFC 3339
+}
+
+message StartSetupRequest {
+  string server_id = 1;
+  string host = 2;
+  uint32 port = 3;     // SSH port; defaults to 22 when 0
+  string username = 4; // the bootstrap user, e.g. "root"
+  // Exactly one of password / private_key. The one-time bootstrap credential is held in
+  // memory for the active attempt only — never stored, never logged, never returned.
+  string password = 5;
+  string private_key = 6;            // PEM
+  string private_key_passphrase = 7; // optional, for an encrypted private key
+}
+
+message StartSetupResponse {
+  ServerSetupRun run = 1;
+}
+
+message GetSetupRunRequest {
+  string setup_run_id = 1;
+}
+
+message GetSetupRunResponse {
+  ServerSetupRun run = 1;
+}
+
+message ListSetupEventsRequest {
+  string setup_run_id = 1;
+  uint64 after_seq = 2; // return events with seq greater than this (0 for all)
+}
+
+message ListSetupEventsResponse {
+  repeated ServerSetupEvent events = 1;
+}
+
+// ServerSetupService governs the dashboard-managed SSH setup run AND the persistent SSH
+// management credential it provisions. StartSetup kicks off an asynchronous bootstrap over
+// SSH (the raw bootstrap credential is held only for the attempt); GetSetupRun / ListSetupEvents
+// expose redacted progress. GetManagementKey / RotateManagementKey / RevokeManagementKey are the
+// user-driven credential lifecycle controls. No RPC accepts or returns private key material.
+// See docs/architecture/server-management.md.
+service ServerSetupService {
+  rpc StartSetup(StartSetupRequest) returns (StartSetupResponse);
+  rpc GetSetupRun(GetSetupRunRequest) returns (GetSetupRunResponse);
+  rpc ListSetupEvents(ListSetupEventsRequest) returns (ListSetupEventsResponse);
+  rpc GetManagementKey(GetManagementKeyRequest) returns (GetManagementKeyResponse);
+  rpc RotateManagementKey(RotateManagementKeyRequest) returns (RotateManagementKeyResponse);
+  rpc RevokeManagementKey(RevokeManagementKeyRequest) returns (RevokeManagementKeyResponse);
+}

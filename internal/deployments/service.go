@@ -31,14 +31,66 @@ type service struct {
 	store      Store
 	authorizer authz.Authorizer
 	audit      Recorder
+	opener     Opener
 	log        *slog.Logger
 }
 
-func newService(tx TxRunner, store Store, authorizer authz.Authorizer, audit Recorder, log *slog.Logger) *service {
-	return &service{tx: tx, store: store, authorizer: authorizer, audit: audit, log: log}
+func newService(tx TxRunner, store Store, authorizer authz.Authorizer, audit Recorder, opener Opener, log *slog.Logger) *service {
+	return &service{tx: tx, store: store, authorizer: authorizer, audit: audit, opener: opener, log: log}
 }
 
 var _ Service = (*service)(nil)
+
+// Config scope/type values, matching the config_entries table (deployments must not import
+// the config module — these are the stored enum strings).
+const (
+	configScopeService     = "service"
+	configScopeEnvironment = "environment"
+	configTypeSecret       = "secret"
+)
+
+// configEnvForService builds the container env for a service: its environment-shared entries
+// merged with its own service-level entries, the latter overriding on a key collision
+// (environment = defaults, service = override). Secret values are decrypted here via the
+// Opener; variable values are plaintext. The merged map of plaintext KEY=VALUE travels to
+// the agent in the signed deploy job, exactly as env vars always have.
+func (s *service) configEnvForService(ctx context.Context, serviceID string) (map[string]string, error) {
+	entries, err := s.store.ConfigForService(ctx, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	env := make(map[string]string, len(entries))
+	// Apply environment-shared first, then service-level so service overrides on collision.
+	for _, scope := range []string{configScopeEnvironment, configScopeService} {
+		for _, e := range entries {
+			if e.Scope != scope {
+				continue
+			}
+			val, verr := s.configValue(e)
+			if verr != nil {
+				return nil, verr
+			}
+			env[e.Key] = val
+		}
+	}
+	return env, nil
+}
+
+// configValue returns an entry's plaintext: a variable's stored value, or a secret's
+// decrypted ciphertext (opened in-process, never logged).
+func (s *service) configValue(e ConfigForDeploy) (string, error) {
+	if e.Type == configTypeSecret {
+		plain, err := s.opener.Open(e.Ciphertext)
+		if err != nil {
+			return "", err
+		}
+		return string(plain), nil
+	}
+	if e.Value != nil {
+		return *e.Value, nil
+	}
+	return "", nil
+}
 
 // CreateForService records a queued deployment for an existing service on a server, so the
 // agent for that server claims it on its next poll. The service resolves the source
@@ -392,7 +444,7 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 		return Claimed{HasWork: false}, nil
 	}
 
-	env, err := s.store.EnvVarsForService(ctx, claimed.ServiceID)
+	env, err := s.configEnvForService(ctx, claimed.ServiceID)
 	if err != nil {
 		return Claimed{}, problem.Internalf(err, "poll deployment")
 	}
@@ -655,7 +707,7 @@ func validateImageRef(raw string) (string, error) {
 
 func isAgentReportableStatus(status string) bool {
 	switch status {
-	case StatusCloning, StatusBuilding, StatusPulling, StatusStarting, StatusRouting, StatusRunning, StatusFailed:
+	case StatusCloning, StatusBuilding, StatusPulling, StatusStarting, StatusHealthcheck, StatusRouting, StatusRunning, StatusFailed:
 		return true
 	}
 	return false

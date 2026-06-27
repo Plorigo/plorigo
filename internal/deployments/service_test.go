@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/plorigo/plorigo/internal/platform/authz"
@@ -45,7 +46,7 @@ type fakeStore struct {
 	credAgentID, credServerID string
 	credOK                    bool
 
-	env map[string]string
+	config []ConfigForDeploy
 
 	inserted    NewDeployment
 	insertedGit NewDeploymentFromGit
@@ -84,8 +85,8 @@ func (f *fakeStore) WorkspaceForProject(_ context.Context, _ string) (string, bo
 func (f *fakeStore) AgentServerByCredential(_ context.Context, _ []byte) (string, string, bool, error) {
 	return f.credAgentID, f.credServerID, f.credOK, nil
 }
-func (f *fakeStore) EnvVarsForService(_ context.Context, _ string) (map[string]string, error) {
-	return f.env, nil
+func (f *fakeStore) ConfigForService(_ context.Context, _ string) ([]ConfigForDeploy, error) {
+	return f.config, nil
 }
 func (f *fakeStore) ServiceForDeploy(_ context.Context, _ string) (ServiceForDeploy, bool, error) {
 	return f.svc, f.svcOK, nil
@@ -205,8 +206,18 @@ func authedCtx() context.Context {
 }
 
 func newSvc(store Store, authorizer authz.Authorizer, rec Recorder) *service {
-	return newService(fakeTx{}, store, authorizer, rec, slog.Default())
+	return newService(fakeTx{}, store, authorizer, rec, fakeOpener{}, slog.Default())
 }
+
+// fakeOpener returns the sealed bytes with a "sealed:" prefix stripped, mirroring fakeSealer
+// in the config module, so a deploy-time secret decrypts to a recognizable plaintext.
+type fakeOpener struct{}
+
+func (fakeOpener) Open(sealed []byte) ([]byte, error) {
+	return []byte(strings.TrimPrefix(string(sealed), "sealed:")), nil
+}
+
+func strptr(s string) *string { return &s }
 
 func wantKind(t *testing.T, err error, kind problem.Kind) {
 	t.Helper()
@@ -503,8 +514,15 @@ func TestPollDeployment_ClaimsJobWithServiceLabelAndNetwork(t *testing.T) {
 		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
 		claimDep: Deployment{ID: testDeployID, ServiceID: testServiceID, EnvironmentID: testEnvID, ImageRef: "img:latest", ContainerPort: 8080},
 		claimOK:  true,
-		env:      map[string]string{"FOO": "bar"},
-		svc:      ServiceForDeploy{Slug: "api", Visibility: "private"}, svcOK: true,
+		config: []ConfigForDeploy{
+			// Environment-shared defaults; the service-level FOO overrides the env-shared one.
+			{Type: "variable", Scope: "environment", Key: "FOO", Value: strptr("env-default")},
+			{Type: "variable", Scope: "environment", Key: "SHARED", Value: strptr("from-env")},
+			{Type: "variable", Scope: "service", Key: "FOO", Value: strptr("bar")},
+			// A secret is decrypted at deploy time (fakeOpener strips the "sealed:" prefix).
+			{Type: "secret", Scope: "service", Key: "TOKEN", Ciphertext: []byte("sealed:s3cr3t")},
+		},
+		svc: ServiceForDeploy{Slug: "api", Visibility: "private"}, svcOK: true,
 	}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
 
@@ -516,8 +534,19 @@ func TestPollDeployment_ClaimsJobWithServiceLabelAndNetwork(t *testing.T) {
 		t.Errorf("claimed = %+v, want the queued job", claimed)
 	}
 	// The app label is the SERVICE id (route + container key), not the environment id.
-	if claimed.AppLabel != testServiceID || claimed.Env["FOO"] != "bar" {
-		t.Errorf("claimed = %+v, want env + service app label", claimed)
+	if claimed.AppLabel != testServiceID {
+		t.Errorf("claimed = %+v, want the service app label", claimed)
+	}
+	// Service-level overrides environment-shared on a key collision; env-only keys pass
+	// through; secrets are decrypted into plaintext.
+	if claimed.Env["FOO"] != "bar" {
+		t.Errorf("FOO = %q, want service-level to override env-shared (bar)", claimed.Env["FOO"])
+	}
+	if claimed.Env["SHARED"] != "from-env" {
+		t.Errorf("SHARED = %q, want env-shared default", claimed.Env["SHARED"])
+	}
+	if claimed.Env["TOKEN"] != "s3cr3t" {
+		t.Errorf("TOKEN = %q, want decrypted secret plaintext", claimed.Env["TOKEN"])
 	}
 	if claimed.NetworkName != "plorigo-"+testEnvID || claimed.NetworkAlias != "api" || claimed.Visibility != "private" {
 		t.Errorf("claimed = %+v, want per-env network + slug alias + visibility", claimed)
@@ -727,6 +756,29 @@ func TestReportDeployment_BuildPhasesAndCommitAccepted(t *testing.T) {
 	last := store.statusUpdates[len(store.statusUpdates)-1]
 	if last.CommitSha != "deadbeef" || last.BuiltImageRef != "plorigo-build:"+testDeployID {
 		t.Errorf("status update = %+v, want commit + built image carried", last)
+	}
+}
+
+func TestReportDeployment_HealthcheckAccepted(t *testing.T) {
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		getDep: Deployment{ID: testDeployID, ServiceID: testServiceID, ServerID: testServerID, EnvironmentID: testEnvID},
+		getOK:  true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	// healthcheck is the explicit phase the agent reports before probing the new container;
+	// it must be accepted and persisted, and (carrying no host port) must not supersede.
+	if err := svc.ReportDeployment(context.Background(), ReportInput{
+		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID,
+		Status: StatusHealthcheck, Message: "running health check",
+	}); err != nil {
+		t.Fatalf("healthcheck report rejected: %v", err)
+	}
+	if len(store.statusUpdates) != 1 || store.statusUpdates[0].Status != StatusHealthcheck {
+		t.Fatalf("status updates = %+v, want one healthcheck update", store.statusUpdates)
+	}
+	if store.superseded {
+		t.Fatalf("healthcheck superseded a deployment, want none (no host port)")
 	}
 }
 

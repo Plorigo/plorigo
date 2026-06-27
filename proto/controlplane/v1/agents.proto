@@ -14,7 +14,7 @@ message Agent {
   string created_at = 7; // RFC 3339
 
   // Server readiness for deployment, derived (not stored) from liveness + the reported
-  // compatibility facts below. readiness is "ready" | "degraded" | "unavailable";
+  // compatibility facts below. readiness is "ready" | "degraded" | "blocked" | "unknown";
   // readiness_reason is a plain-English explanation (empty when ready) a user can act on
   // without SSHing in. The raw facts are kept available for progressive disclosure.
   string readiness = 8;
@@ -23,6 +23,18 @@ message Agent {
   string docker_version = 11; // Docker daemon version; empty when unknown/unavailable
   string os = 12; // host GOOS; empty if the agent predates health reporting
   string arch = 13; // host GOARCH
+
+  // Extended host-readiness facts (see proto/agent/v1/agent.proto). cpu_count == 0 means the
+  // agent does not report them (older agent); the control plane then skips the Caddy/disk/
+  // memory readiness checks. Surfaced for progressive disclosure on the server card.
+  bool caddy_available = 14;
+  bool caddy_running = 15;
+  string caddy_version = 16;
+  int64 disk_total_bytes = 17;
+  int64 disk_free_bytes = 18;
+  int64 mem_total_bytes = 19;
+  int64 mem_available_bytes = 20;
+  uint32 cpu_count = 21;
 }
 
 message CreateRegistrationTokenRequest {

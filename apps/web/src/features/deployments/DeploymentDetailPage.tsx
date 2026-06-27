@@ -73,7 +73,10 @@ export function DeploymentDetailPage() {
   // distinction, so they fall back into the build view.
   const buildLogs = allLogs.filter((e) => e.stream === "build" || e.stream === "");
   const runtimeLogs = allLogs.filter((e) => e.stream === "runtime");
-  const failedBecauseCaddy = /caddy/i.test(d.message);
+  // A health-check failure is the most specific case (the container started but never
+  // accepted connections), so it takes priority over the generic Caddy/build messages.
+  const failedHealthCheck = /health check/i.test(d.message);
+  const failedBecauseCaddy = !failedHealthCheck && /caddy/i.test(d.message);
   // On failure, show the tail of whichever stream is relevant: a container/health failure
   // has runtime output; a build-phase failure has only build output.
   const failureTail = (runtimeLogs.length > 0 ? runtimeLogs : buildLogs).slice(-6).map((l) => l.message);
@@ -114,11 +117,13 @@ export function DeploymentDetailPage() {
         <FailureSummary
           headline={d.message || "The deployment failed."}
           suggestion={
-            failedBecauseCaddy
-              ? "The app built and started, but the agent could not update Caddy. Install Caddy on the server or set the agent's Caddy binary path, then deploy again — any previous running release is kept."
-              : isGit
-                ? "The build or container did not succeed. Check that the repo has a Dockerfile at its root and that the app listens on the container port you set, then deploy again — any previous running release is kept."
-                : "The container did not reach a healthy state or Caddy could not route traffic. Check the image reference, app port, and Caddy service, then deploy again — any previous running release is kept."
+            failedHealthCheck
+              ? "The container started but never began accepting connections on its port within the health-check window. Make sure the app listens on the container port you configured and binds to 0.0.0.0 (not just localhost), then deploy again — any previous running release is kept."
+              : failedBecauseCaddy
+                ? "The app built and started, but the agent could not update Caddy. Install Caddy on the server or set the agent's Caddy binary path, then deploy again — any previous running release is kept."
+                : isGit
+                  ? "The build or container did not succeed. Check that the repo has a Dockerfile at its root and that the app listens on the container port you set, then deploy again — any previous running release is kept."
+                  : "The container did not reach a healthy state or Caddy could not route traffic. Check the image reference, app port, and Caddy service, then deploy again — any previous running release is kept."
           }
           logs={failureTail}
         />
@@ -128,7 +133,7 @@ export function DeploymentDetailPage() {
         <Panel>
           <PanelHeader
             title="Timeline"
-            description={isGit ? "Clone → build → start → route → running." : "Pull → start → health check → route → running."}
+            description={isGit ? "Clone → build → start → health check → route → running." : "Pull → start → health check → route → running."}
           />
           <div className="p-5">
             <Timeline steps={steps} />

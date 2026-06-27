@@ -201,15 +201,23 @@ func heartbeatLoop(ctx context.Context, out io.Writer, client agentv1connect.Age
 	reregisterTried := false
 	for {
 		st := ident.get()
-		facts := collectHealth(ctx, prober)
+		facts := collectHealth(ctx, prober, opts)
 		resp, err := client.Heartbeat(ctx, connect.NewRequest(&agentv1.HeartbeatRequest{
-			AgentId:         st.AgentID,
-			Credential:      st.Credential,
-			AgentVersion:    Version,
-			DockerAvailable: facts.DockerAvailable,
-			DockerVersion:   facts.DockerVersion,
-			Os:              facts.OS,
-			Arch:            facts.Arch,
+			AgentId:           st.AgentID,
+			Credential:        st.Credential,
+			AgentVersion:      Version,
+			DockerAvailable:   facts.DockerAvailable,
+			DockerVersion:     facts.DockerVersion,
+			Os:                facts.OS,
+			Arch:              facts.Arch,
+			CaddyAvailable:    facts.CaddyAvailable,
+			CaddyRunning:      facts.CaddyRunning,
+			CaddyVersion:      facts.CaddyVersion,
+			DiskTotalBytes:    facts.diskTotalBytes,
+			DiskFreeBytes:     facts.diskFreeBytes,
+			MemTotalBytes:     facts.memTotalBytes,
+			MemAvailableBytes: facts.memAvailableBytes,
+			CpuCount:          uint32(facts.CPUCount),
 		}))
 		if err != nil {
 			if ctx.Err() != nil {

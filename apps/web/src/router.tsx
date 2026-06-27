@@ -8,11 +8,12 @@ import { DeploymentDetailPage } from "./features/deployments/DeploymentDetailPag
 import { DeploymentsPage } from "./features/deployments/DeploymentsPage";
 import { NewDeploymentPage } from "./features/deployments/new/NewDeploymentPage";
 import { DomainsPage } from "./features/domains/DomainsPage";
+import { EnvironmentDetailPage } from "./features/environments/EnvironmentDetailPage";
 import { OverviewPage } from "./features/overview/OverviewPage";
 import { ProjectDetailPage } from "./features/projects/ProjectDetailPage";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
 import { NewProjectPage } from "./features/projects/new/NewProjectPage";
-import { ResourcesPage } from "./features/resources/ResourcesPage";
+import { EnvironmentVariablesPage } from "./features/variables/EnvironmentVariablesPage";
 import { ServiceDetailPage } from "./features/services/ServiceDetailPage";
 import { SecurityPage } from "./features/security/SecurityPage";
 import { ServersPage } from "./features/servers/ServersPage";
@@ -56,6 +57,11 @@ const serviceDetailRoute = createRoute({
   path: "/projects/$projectId/services/$serviceId",
   component: ServiceDetailPage,
 });
+const environmentDetailRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/projects/$projectId/environments/$environmentId",
+  component: EnvironmentDetailPage,
+});
 const domainsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/domains", component: DomainsPage });
 const projectDomainsRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
@@ -63,11 +69,11 @@ const projectDomainsRoute = createRoute({
   component: DomainsPage,
 });
 const serversRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/servers", component: ServersPage });
-const resourcesRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/resources", component: ResourcesPage });
-const projectResourcesRoute = createRoute({
+const variablesRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/variables", component: EnvironmentVariablesPage });
+const projectVariablesRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
-  path: "/projects/$projectId/resources",
-  component: ResourcesPage,
+  path: "/projects/$projectId/variables",
+  component: EnvironmentVariablesPage,
 });
 const deploymentsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/deployments", component: DeploymentsPage });
 const projectDeploymentsRoute = createRoute({
@@ -118,11 +124,12 @@ export const routeTree = rootRoute.addChildren([
     projectsNewRoute,
     projectDetailRoute,
     serviceDetailRoute,
+    environmentDetailRoute,
     domainsRoute,
     projectDomainsRoute,
     serversRoute,
-    resourcesRoute,
-    projectResourcesRoute,
+    variablesRoute,
+    projectVariablesRoute,
     deploymentsRoute,
     projectDeploymentsRoute,
     deploymentsNewRoute,

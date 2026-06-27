@@ -16,7 +16,7 @@ message Deployment {
   string image_ref = 6;    // the pre-built image (image deployments); empty for git
   int32 container_port = 7; // the port the app listens on inside the container
   int32 host_port = 8;      // the published host port (0 until the agent binds it)
-  string status = 9;        // queued|assigned|cloning|building|pulling|starting|routing|running|failed|superseded
+  string status = 9;        // queued|assigned|cloning|building|pulling|starting|healthcheck|routing|running|failed|superseded
   string message = 10;      // latest human-readable status line
   string created_at = 11;   // RFC 3339
   string updated_at = 12;   // RFC 3339

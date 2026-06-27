@@ -31,6 +31,15 @@ fulfills it (see [deployment-engine.md](./deployment-engine.md)). Agent-executed
 > **Temporal** is an explicit *later-if-needed* option, only if deployment workflows outgrow a
 > simple state machine / queue. Don't add it on day one.
 
+> [!NOTE]
+> The durable queue is **not built yet**. The first async control-plane work —
+> dashboard-managed server setup (`internal/serversetup`, see
+> [server-management.md](./server-management.md)) — runs as an **in-process goroutine** that
+> persists ordered steps to `server_setup_runs` / `server_setup_events`, which the dashboard
+> polls (the same persist-and-poll model as deployment events). It is bounded by a timeout and
+> records a terminal status even on cancel; a process restart mid-run leaves the run for the
+> user to retry. Migrating these onto the queue is a follow-up.
+
 ## Realtime
 
 Two transports, chosen per use case:

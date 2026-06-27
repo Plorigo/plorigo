@@ -28,9 +28,12 @@ type Store interface {
 	// credential hash, so the agent-facing RPCs authenticate the caller and scope work
 	// to its own server. ok is false (nil error) when no agent has that credential.
 	AgentServerByCredential(ctx context.Context, credentialHash []byte) (agentID, serverID string, ok bool, err error)
-	// EnvVarsForService returns the service's non-secret config to inject into the
-	// container, reading the env_vars table directly (a sibling-table read Rule 2 permits).
-	EnvVarsForService(ctx context.Context, serviceID string) (map[string]string, error)
+	// ConfigForService returns every configuration entry that applies to a service: its
+	// service-level entries plus the environment-shared entries for its environment. Reads
+	// config_entries directly (a sibling-table read Rule 2 permits). Secret entries carry
+	// ciphertext; the service decrypts them via the Opener and merges with service-level
+	// overriding environment-shared on a key collision.
+	ConfigForService(ctx context.Context, serviceID string) ([]ConfigForDeploy, error)
 	// ServiceForDeploy resolves a service's source + routing facts (committed read), used by
 	// CreateForService and PollDeployment. ServiceForDeployTx reads the same through a
 	// transaction, so EnqueueFirstDeployment sees a service inserted earlier in the same tx.
@@ -127,4 +130,22 @@ type TxRunner interface {
 // module. *audit.Service satisfies it structurally — deployments never imports audit.
 type Recorder interface {
 	Record(ctx context.Context, tx database.Tx, action, targetType, targetID, workspaceID, actor string) error
+}
+
+// Opener is the CONSUMER-DEFINED port for decrypting a sealed secret value at deploy time.
+// *crypto.Box satisfies it structurally — deployments never imports platform/crypto.
+type Opener interface {
+	Open(sealed []byte) ([]byte, error)
+}
+
+// ConfigForDeploy is one configuration entry to inject into a service's container at deploy
+// time. Scope is "service" or "environment"; on a key collision service overrides
+// environment. For a variable Value holds the plaintext; for a secret Ciphertext holds the
+// sealed bytes, decrypted by the service via the Opener.
+type ConfigForDeploy struct {
+	Type       string
+	Scope      string
+	Key        string
+	Value      *string
+	Ciphertext []byte
 }
