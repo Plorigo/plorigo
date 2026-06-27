@@ -243,10 +243,15 @@ status to the dashboard, plus management RPCs to **rotate**, **revoke**, and **i
 
 ### Security review — residual risk
 
-Bare-server preparation has shipped in the one-line installer (`scripts/install-agent.sh`); the
-implementation work that still follows this model — storing the management credential and running
-setup over SSH (see [ROADMAP.md](../../ROADMAP.md)) — carries the risk that remains. Each of the
-following must get **explicit security review** before it ships:
+Bare-server preparation has shipped in the one-line installer (`scripts/install-agent.sh`), and
+encrypted storage of the management credential — sealed private key, fingerprint, last-used,
+rotation and revocation state, with workspace-scoped authorization and an audit record for every
+provision, use, rotation, revocation, and failed auth — has shipped in the `internal/serversetup`
+module (write-only: no RPC returns the private key). The implementation work that still follows
+this model — **running setup/repair over SSH** (connecting, installing/removing the
+`authorized_keys` entry, host-key TOFU pinning on the `servers` row; see
+[ROADMAP.md](../../ROADMAP.md)) — carries the risk that remains. Each of the following must get
+**explicit security review** before it ships:
 
 - **The installer's package sources** — Docker and Caddy are installed from their official apt
   repositories with pinned, `signed-by=` keyrings under `/etc/apt/keyrings`; the repo and key URLs

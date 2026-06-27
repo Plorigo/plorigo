@@ -39,7 +39,7 @@ backups              restore_jobs         audit_events
 invitations          log_streams          readiness_checks
 approval_requests    ai_agent_sessions
 sessions             api_tokens           user_tokens
-agent_registration_tokens
+agent_registration_tokens                 ssh_management_keys
 ```
 
 Token tables (`sessions`, `api_tokens`, `user_tokens`, `agent_registration_tokens`) and the
@@ -83,9 +83,11 @@ verification time; automatic HTTPS is a later slice.
 
 - Migrations are **forward-only** and reviewed like code.
 - After a schema change, **regenerate `sqlc`** in the same change; never hand-edit generated files.
-- Privileged data — secret values, and the GitHub OAuth tokens in `source_connections` —
-  follows the rules in [security.md](./security.md): store ciphertext and metadata, never
-  plaintext. A `git` **service** records how the repo is reached in an `access` column
+- Privileged data — secret values, the GitHub OAuth tokens in `source_connections`, and the
+  sealed SSH management private key in `ssh_management_keys` — follows the rules in
+  [security.md](./security.md): store ciphertext and metadata, never plaintext. The SSH
+  management key is **write-only** (no RPC returns it); only its fingerprint, public key, and
+  lifecycle timestamps are readable — see [server-management.md](./server-management.md). A `git` **service** records how the repo is reached in an `access` column
   (`oauth` | `public` | `app`); a **public** source has a **NULL `connection_id`** and stores no
   credential at all, so `connection_id` is nullable and the reads `LEFT JOIN source_connections`.
 - **`env_vars` are service-scoped** (`env_vars.service_id`), since each service is its own app.

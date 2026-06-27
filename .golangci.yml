@@ -43,6 +43,7 @@ linters:
             - "**/internal/policy/**"
             - "**/internal/projects/**"
             - "**/internal/servers/**"
+            - "**/internal/serversetup/**"
             - "**/internal/services/**"
             - "**/internal/sources/**"
           deny:
@@ -67,6 +68,8 @@ linters:
             - pkg: github.com/plorigo/plorigo/internal/projects
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/servers
+              desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
+            - pkg: github.com/plorigo/plorigo/internal/serversetup
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/services
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"

@@ -18,6 +18,7 @@ import (
 	"github.com/plorigo/plorigo/internal/policy"
 	"github.com/plorigo/plorigo/internal/projects"
 	"github.com/plorigo/plorigo/internal/servers"
+	"github.com/plorigo/plorigo/internal/serversetup"
 	"github.com/plorigo/plorigo/internal/services"
 	"github.com/plorigo/plorigo/internal/sources"
 )
@@ -81,6 +82,19 @@ func (a *App) buildModules() error {
 		DB:     a.db,
 		Audit:  auditSvc,
 		Policy: policySvc,
+		Log:    a.log,
+	})
+
+	// serversetup owns the persistent SSH management credential for a server (the
+	// dashboard-managed setup/repair channel). The private key is sealed at rest by the
+	// same crypto box as secrets (reused here) and is write-only; the module governs its
+	// lifecycle (provision/rotate/revoke), authorized/audited against the server's
+	// workspace. The actual SSH bootstrap runner is built on top of this later.
+	a.serversetup = serversetup.New(serversetup.Deps{
+		DB:     a.db,
+		Audit:  auditSvc,
+		Policy: policySvc,
+		Crypto: box,
 		Log:    a.log,
 	})
 

@@ -24,6 +24,7 @@ func (a *App) router() http.Handler {
 	mux.Handle(a.environments.Route(ic))
 	mux.Handle(a.config.Route(ic))
 	mux.Handle(a.servers.Route(ic))
+	mux.Handle(a.serversetup.Route(ic))
 	mux.Handle(a.agents.Route(ic))
 	mux.Handle(a.deployments.Route(ic))
 	mux.Handle(a.domains.Route(ic))

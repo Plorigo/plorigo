@@ -20,6 +20,7 @@ import (
 	"github.com/plorigo/plorigo/internal/platform/server"
 	"github.com/plorigo/plorigo/internal/projects"
 	"github.com/plorigo/plorigo/internal/servers"
+	"github.com/plorigo/plorigo/internal/serversetup"
 	"github.com/plorigo/plorigo/internal/services"
 	"github.com/plorigo/plorigo/internal/sources"
 )
@@ -38,6 +39,7 @@ type App struct {
 	environments *environments.Module
 	config       *config.Module
 	servers      *servers.Module
+	serversetup  *serversetup.Module
 	deployments  *deployments.Module
 	domains      *domains.Module
 	sources      *sources.Module
