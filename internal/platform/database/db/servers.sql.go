@@ -12,7 +12,7 @@ import (
 const createServer = `-- name: CreateServer :one
 INSERT INTO servers (workspace_id, name, slug)
 VALUES ($1, $2, $3)
-RETURNING id, workspace_id, name, slug, created_at
+RETURNING id, workspace_id, name, slug, created_at, host_key_fingerprint
 `
 
 type CreateServerParams struct {
@@ -30,6 +30,7 @@ func (q *Queries) CreateServer(ctx context.Context, arg CreateServerParams) (Ser
 		&i.Name,
 		&i.Slug,
 		&i.CreatedAt,
+		&i.HostKeyFingerprint,
 	)
 	return i, err
 }
@@ -51,7 +52,7 @@ func (q *Queries) DeleteServer(ctx context.Context, id string) (string, error) {
 }
 
 const getServer = `-- name: GetServer :one
-SELECT id, workspace_id, name, slug, created_at
+SELECT id, workspace_id, name, slug, created_at, host_key_fingerprint
 FROM servers
 WHERE id = $1
 `
@@ -65,12 +66,13 @@ func (q *Queries) GetServer(ctx context.Context, id string) (Server, error) {
 		&i.Name,
 		&i.Slug,
 		&i.CreatedAt,
+		&i.HostKeyFingerprint,
 	)
 	return i, err
 }
 
 const listServersByWorkspace = `-- name: ListServersByWorkspace :many
-SELECT id, workspace_id, name, slug, created_at
+SELECT id, workspace_id, name, slug, created_at, host_key_fingerprint
 FROM servers
 WHERE workspace_id = $1
 ORDER BY created_at DESC
@@ -91,6 +93,7 @@ func (q *Queries) ListServersByWorkspace(ctx context.Context, workspaceID string
 			&i.Name,
 			&i.Slug,
 			&i.CreatedAt,
+			&i.HostKeyFingerprint,
 		); err != nil {
 			return nil, err
 		}

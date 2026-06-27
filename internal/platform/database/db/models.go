@@ -148,11 +148,35 @@ type Project struct {
 }
 
 type Server struct {
-	ID          string
-	WorkspaceID string
-	Name        string
-	Slug        string
-	CreatedAt   time.Time
+	ID                 string
+	WorkspaceID        string
+	Name               string
+	Slug               string
+	CreatedAt          time.Time
+	HostKeyFingerprint string
+}
+
+type ServerSetupEvent struct {
+	ID         string
+	SetupRunID string
+	Seq        int64
+	Step       string
+	Kind       string
+	Status     string
+	Message    string
+	CreatedAt  time.Time
+}
+
+type ServerSetupRun struct {
+	ID            string
+	ServerID      string
+	WorkspaceID   string
+	Status        string
+	FailureReason string
+	StartedBy     *string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	FinishedAt    *time.Time
 }
 
 type Service struct {

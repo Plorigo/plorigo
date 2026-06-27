@@ -111,6 +111,22 @@ func (a *App) buildModules() error {
 		Log:       a.log,
 	})
 
+	// serversetup owns the dashboard-managed SSH setup run AND the persistent management
+	// credential it provisions. The private key is sealed by the same crypto box as secrets;
+	// the run drives the shared installer over SSH (via its own dialer) and waits on the agent
+	// through an adapter over the agents module (so serversetup never imports it). Built after
+	// agents because it depends on them.
+	a.serversetup = serversetup.New(serversetup.Deps{
+		DB:        a.db,
+		Audit:     auditSvc,
+		Policy:    policySvc,
+		Crypto:    box,
+		Log:       a.log,
+		Dialer:    serversetup.NewSSHDialer(),
+		Agents:    agentSetupAdapter{agents: a.agents.Service(), now: time.Now},
+		PublicURL: a.cfg.PublicURL,
+	})
+
 	// deployments record an attempt to run an image in an environment on a server and
 	// dispatch it to that server's agent. Environment-scoped like env vars (workspace
 	// resolved through environment -> project); also serves the agent-facing

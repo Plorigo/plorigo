@@ -10,6 +10,56 @@ import (
 	"time"
 )
 
+const appendServerSetupEvent = `-- name: AppendServerSetupEvent :one
+INSERT INTO server_setup_events (setup_run_id, step, kind, status, message)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, setup_run_id, seq, step, kind, status, message, created_at
+`
+
+type AppendServerSetupEventParams struct {
+	SetupRunID string
+	Step       string
+	Kind       string
+	Status     string
+	Message    string
+}
+
+// Append an ordered, redacted status/log line for a run.
+func (q *Queries) AppendServerSetupEvent(ctx context.Context, arg AppendServerSetupEventParams) (ServerSetupEvent, error) {
+	row := q.db.QueryRow(ctx, appendServerSetupEvent,
+		arg.SetupRunID,
+		arg.Step,
+		arg.Kind,
+		arg.Status,
+		arg.Message,
+	)
+	var i ServerSetupEvent
+	err := row.Scan(
+		&i.ID,
+		&i.SetupRunID,
+		&i.Seq,
+		&i.Step,
+		&i.Kind,
+		&i.Status,
+		&i.Message,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const countServerSetupRunsForServer = `-- name: CountServerSetupRunsForServer :one
+SELECT count(*) FROM server_setup_runs WHERE server_id = $1
+`
+
+// How many setup runs a server already has — used to distinguish a first setup from a retry
+// when auditing.
+func (q *Queries) CountServerSetupRunsForServer(ctx context.Context, serverID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countServerSetupRunsForServer, serverID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getSSHManagementKey = `-- name: GetSSHManagementKey :one
 SELECT id, server_id, fingerprint, public_key, rotation_state, last_used_at, rotated_at, revoked_at, created_by, created_at, updated_at
 FROM ssh_management_keys
@@ -63,6 +113,114 @@ func (q *Queries) GetSealedSSHManagementKey(ctx context.Context, serverID string
 	var sealed_private_key []byte
 	err := row.Scan(&sealed_private_key)
 	return sealed_private_key, err
+}
+
+const getServerHostKeyFingerprint = `-- name: GetServerHostKeyFingerprint :one
+SELECT host_key_fingerprint FROM servers WHERE id = $1
+`
+
+// The pinned TOFU host-key fingerprint for a server (” if not yet pinned).
+func (q *Queries) GetServerHostKeyFingerprint(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, getServerHostKeyFingerprint, id)
+	var host_key_fingerprint string
+	err := row.Scan(&host_key_fingerprint)
+	return host_key_fingerprint, err
+}
+
+const getServerSetupRun = `-- name: GetServerSetupRun :one
+SELECT id, server_id, workspace_id, status, failure_reason, started_by, created_at, updated_at, finished_at
+FROM server_setup_runs
+WHERE id = $1
+`
+
+func (q *Queries) GetServerSetupRun(ctx context.Context, id string) (ServerSetupRun, error) {
+	row := q.db.QueryRow(ctx, getServerSetupRun, id)
+	var i ServerSetupRun
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.WorkspaceID,
+		&i.Status,
+		&i.FailureReason,
+		&i.StartedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const insertServerSetupRun = `-- name: InsertServerSetupRun :one
+INSERT INTO server_setup_runs (server_id, workspace_id, status, started_by)
+VALUES ($1, $2, 'queued', $3)
+RETURNING id, server_id, workspace_id, status, failure_reason, started_by, created_at, updated_at, finished_at
+`
+
+type InsertServerSetupRunParams struct {
+	ServerID    string
+	WorkspaceID string
+	StartedBy   *string
+}
+
+// Start a setup run for a server. The raw bootstrap credential is never stored — only the
+// run's lifecycle is persisted here.
+func (q *Queries) InsertServerSetupRun(ctx context.Context, arg InsertServerSetupRunParams) (ServerSetupRun, error) {
+	row := q.db.QueryRow(ctx, insertServerSetupRun, arg.ServerID, arg.WorkspaceID, arg.StartedBy)
+	var i ServerSetupRun
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.WorkspaceID,
+		&i.Status,
+		&i.FailureReason,
+		&i.StartedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
+const listServerSetupEvents = `-- name: ListServerSetupEvents :many
+SELECT id, setup_run_id, seq, step, kind, status, message, created_at
+FROM server_setup_events
+WHERE setup_run_id = $1 AND seq > $2
+ORDER BY seq
+`
+
+type ListServerSetupEventsParams struct {
+	SetupRunID string
+	Seq        int64
+}
+
+// Events with seq greater than the cursor, oldest first (dashboard polling).
+func (q *Queries) ListServerSetupEvents(ctx context.Context, arg ListServerSetupEventsParams) ([]ServerSetupEvent, error) {
+	rows, err := q.db.Query(ctx, listServerSetupEvents, arg.SetupRunID, arg.Seq)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ServerSetupEvent{}
+	for rows.Next() {
+		var i ServerSetupEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.SetupRunID,
+			&i.Seq,
+			&i.Step,
+			&i.Kind,
+			&i.Status,
+			&i.Message,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markSSHManagementKeyUsed = `-- name: MarkSSHManagementKeyUsed :one
@@ -156,6 +314,56 @@ func (q *Queries) RotateSSHManagementKey(ctx context.Context, arg RotateSSHManag
 		&i.CreatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setServerHostKeyFingerprint = `-- name: SetServerHostKeyFingerprint :exec
+UPDATE servers SET host_key_fingerprint = $2 WHERE id = $1
+`
+
+type SetServerHostKeyFingerprintParams struct {
+	ID                 string
+	HostKeyFingerprint string
+}
+
+// Pin (or re-pin, after explicit user re-confirmation) a server's host-key fingerprint.
+func (q *Queries) SetServerHostKeyFingerprint(ctx context.Context, arg SetServerHostKeyFingerprintParams) error {
+	_, err := q.db.Exec(ctx, setServerHostKeyFingerprint, arg.ID, arg.HostKeyFingerprint)
+	return err
+}
+
+const setServerSetupRunStatus = `-- name: SetServerSetupRunStatus :one
+UPDATE server_setup_runs
+SET status = $2,
+    failure_reason = $3,
+    updated_at = now(),
+    finished_at = CASE WHEN $2 IN ('succeeded', 'failed') THEN now() ELSE finished_at END
+WHERE id = $1
+RETURNING id, server_id, workspace_id, status, failure_reason, started_by, created_at, updated_at, finished_at
+`
+
+type SetServerSetupRunStatusParams struct {
+	ID            string
+	Status        string
+	FailureReason string
+}
+
+// Advance a run's status; stamps finished_at on a terminal status. failure_reason is
+// plain-English and never a secret.
+func (q *Queries) SetServerSetupRunStatus(ctx context.Context, arg SetServerSetupRunStatusParams) (ServerSetupRun, error) {
+	row := q.db.QueryRow(ctx, setServerSetupRunStatus, arg.ID, arg.Status, arg.FailureReason)
+	var i ServerSetupRun
+	err := row.Scan(
+		&i.ID,
+		&i.ServerID,
+		&i.WorkspaceID,
+		&i.Status,
+		&i.FailureReason,
+		&i.StartedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FinishedAt,
 	)
 	return i, err
 }

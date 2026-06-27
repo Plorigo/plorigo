@@ -22,6 +22,12 @@ type Deps struct {
 	Policy authz.Authorizer
 	Crypto Sealer
 	Log    *slog.Logger
+	// Dialer opens the bootstrap SSH session; Agents mints registration tokens and reports
+	// agent liveness; PublicURL is the control-plane URL passed to the installer. All are
+	// for the dashboard-managed setup run.
+	Dialer    SSHDialer
+	Agents    AgentProvisioner
+	PublicURL string
 }
 
 // Module is the serversetup module: the only wiring surface other code touches.
@@ -33,7 +39,7 @@ type Module struct {
 func New(d Deps) *Module {
 	store := newPostgresStore(d.DB)
 	return &Module{
-		service: newService(d.DB, store, defaultKeyGen{}, d.Crypto, d.Policy, d.Audit, d.Log),
+		service: newService(d.DB, store, defaultKeyGen{}, d.Crypto, d.Policy, d.Audit, d.Log, d.Dialer, d.Agents, d.PublicURL),
 	}
 }
 

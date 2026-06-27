@@ -109,6 +109,29 @@ func (f *fakeStore) WorkspaceIDForServer(_ context.Context, _ string) (string, b
 	return f.wsID, f.wsOK, f.wsErr
 }
 
+// Setup-run store methods are unused by the credential-lifecycle tests below (the bootstrap
+// runner is exercised in bootstrap_test.go), so they are inert stubs here.
+func (f *fakeStore) InsertSetupRun(_ context.Context, _ database.Tx, serverID, workspaceID string, _ *string) (SetupRun, error) {
+	return SetupRun{ID: "run-1", ServerID: serverID, WorkspaceID: workspaceID}, nil
+}
+func (f *fakeStore) CountSetupRuns(_ context.Context, _ string) (int64, error) { return 0, nil }
+func (f *fakeStore) SetSetupRunStatus(_ context.Context, _, _, _ string) (SetupRun, bool, error) {
+	return SetupRun{}, true, nil
+}
+func (f *fakeStore) GetSetupRun(_ context.Context, _ string) (SetupRun, bool, error) {
+	return SetupRun{}, false, nil
+}
+func (f *fakeStore) AppendSetupEvent(_ context.Context, _ NewSetupEvent) (SetupEvent, error) {
+	return SetupEvent{}, nil
+}
+func (f *fakeStore) ListSetupEvents(_ context.Context, _ string, _ int64) ([]SetupEvent, error) {
+	return nil, nil
+}
+func (f *fakeStore) HostKeyFingerprint(_ context.Context, _ string) (string, bool, error) {
+	return "", true, nil
+}
+func (f *fakeStore) SetHostKeyFingerprint(_ context.Context, _, _ string) error { return nil }
+
 type fakeRecorder struct {
 	called      bool
 	action      string
@@ -192,7 +215,8 @@ func authedCtx() context.Context {
 }
 
 func newSvc(store Store, keys KeyGenerator, sealer Sealer, authorizer authz.Authorizer, rec Recorder) *service {
-	return newService(fakeTx{}, store, keys, sealer, authorizer, rec, slog.Default())
+	// The credential-lifecycle tests don't start setup runs, so the dialer/agents/URL are nil.
+	return newService(fakeTx{}, store, keys, sealer, authorizer, rec, slog.Default(), nil, nil, "")
 }
 
 func isKind(err error, k problem.Kind) bool {
