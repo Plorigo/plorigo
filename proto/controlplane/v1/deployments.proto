@@ -31,6 +31,9 @@ message Deployment {
   string built_image_ref = 18; // the local image tag the agent produced
   string route_url = 19;      // the real deployment URL (public services only; empty for private)
   string service_id = 20;     // the owning service (its source, port, and visibility)
+  // Set when this deployment was created by rolling back to an earlier one: the id of the
+  // previous healthy deployment it reproduces. Empty for a normal deploy.
+  string rolled_back_from = 21;
 }
 
 // A DeploymentEvent is one entry in a deployment's timeline: either a status
@@ -73,6 +76,20 @@ message ListDeploymentsByServiceRequest {
 
 message ListDeploymentsByServiceResponse {
   repeated Deployment deployments = 1;
+}
+
+// RollbackDeployment redeploys a previous healthy version: it enqueues a NEW deployment that
+// reproduces the target deployment's artifact (the same pre-built image, or the same repo
+// pinned to the exact built commit) on the same service and server, linked back to the
+// target via rolled_back_from. The new deployment goes through the normal flow (health check,
+// then traffic switch) so a failed rollback keeps the current running release. The target
+// must be a previously healthy deployment (running or superseded).
+message RollbackDeploymentRequest {
+  string target_deployment_id = 1; // the previous healthy deployment to roll back to
+}
+
+message RollbackDeploymentResponse {
+  Deployment deployment = 1; // the new deployment enqueued to restore the target
 }
 
 message GetDeploymentRequest {
@@ -124,6 +141,7 @@ message ListDeploymentEventsResponse {
 // redeploying an existing service.
 service DeploymentService {
   rpc CreateDeploymentForService(CreateDeploymentForServiceRequest) returns (CreateDeploymentForServiceResponse);
+  rpc RollbackDeployment(RollbackDeploymentRequest) returns (RollbackDeploymentResponse);
   rpc GetDeployment(GetDeploymentRequest) returns (GetDeploymentResponse);
   rpc ListDeploymentsByService(ListDeploymentsByServiceRequest) returns (ListDeploymentsByServiceResponse);
   rpc ListDeploymentsByEnvironment(ListDeploymentsByEnvironmentRequest) returns (ListDeploymentsByEnvironmentResponse);

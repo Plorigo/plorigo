@@ -14,9 +14,11 @@ WHERE e.id = $1;
 -- name: GetAgentServerByCredential :one
 SELECT id, server_id FROM agents WHERE credential_hash = $1;
 
+-- rolled_back_from is NULL for a normal deploy and set to the restored deployment's id when
+-- this row is a rollback (see RollbackDeployment).
 -- name: CreateDeployment :one
-INSERT INTO deployments (service_id, environment_id, project_id, workspace_id, server_id, image_ref, container_port)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO deployments (service_id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, rolled_back_from)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
 -- CreateDeploymentFromGit records a queued deployment whose source is a repo+ref to clone
@@ -25,9 +27,9 @@ RETURNING *;
 -- name: CreateDeploymentFromGit :one
 INSERT INTO deployments (
     service_id, environment_id, project_id, workspace_id, server_id,
-    container_port, source_kind, source_access, clone_url, git_ref
+    container_port, source_kind, source_access, clone_url, git_ref, rolled_back_from
 )
-VALUES ($1, $2, $3, $4, $5, $6, 'git', $7, $8, $9)
+VALUES ($1, $2, $3, $4, $5, $6, 'git', $7, $8, $9, $10)
 RETURNING *;
 
 -- name: GetDeployment :one

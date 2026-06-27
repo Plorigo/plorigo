@@ -334,23 +334,27 @@ func TestAgentReadiness(t *testing.T) {
 	}
 
 	cases := []struct {
-		name       string
-		mutate     func(a *Agent)
-		wantState  string
-		wantReason bool // a non-empty, actionable reason is expected
+		name          string
+		mutate        func(a *Agent)
+		allowNonLinux bool // dev relaxes the Linux-only host requirement
+		wantState     string
+		wantReason    bool // a non-empty, actionable reason is expected
 	}{
-		{"ready", nil, ReadinessReady, false},
-		{"offline agent", func(a *Agent) { a.LastSeenAt = &stale }, ReadinessUnknown, true},
-		{"never connected", func(a *Agent) { a.LastSeenAt = nil }, ReadinessUnknown, true},
-		{"unsupported OS", func(a *Agent) { a.OS = "windows" }, ReadinessBlocked, true},
-		{"docker missing", func(a *Agent) { a.DockerAvailable = &down }, ReadinessBlocked, true},
-		{"docker too old", func(a *Agent) { a.DockerVersion = "19.03.5" }, ReadinessDegraded, true},
-		{"docker not yet reported", func(a *Agent) { a.DockerAvailable = nil; a.DockerVersion = "" }, ReadinessDegraded, true},
-		{"caddy missing", func(a *Agent) { a.CaddyAvailable = &down }, ReadinessBlocked, true},
-		{"occupied ports (caddy installed, not running)", func(a *Agent) { a.CaddyRunning = false }, ReadinessBlocked, true},
-		{"critically low disk", func(a *Agent) { a.DiskFreeBytes = 512 * mib }, ReadinessBlocked, true},
-		{"low disk", func(a *Agent) { a.DiskFreeBytes = 3 * gib }, ReadinessDegraded, true},
-		{"low memory", func(a *Agent) { a.MemAvailableBytes = 128 * mib }, ReadinessDegraded, true},
+		{"ready", nil, false, ReadinessReady, false},
+		{"offline agent", func(a *Agent) { a.LastSeenAt = &stale }, false, ReadinessUnknown, true},
+		{"never connected", func(a *Agent) { a.LastSeenAt = nil }, false, ReadinessUnknown, true},
+		{"unsupported OS", func(a *Agent) { a.OS = "windows" }, false, ReadinessBlocked, true},
+		// In dev, a non-Linux host (a contributor's macOS workstation) is no longer a hard
+		// blocker, so an otherwise-ready agent reports ready.
+		{"non-linux host allowed in dev", func(a *Agent) { a.OS = "darwin" }, true, ReadinessReady, false},
+		{"docker missing", func(a *Agent) { a.DockerAvailable = &down }, false, ReadinessBlocked, true},
+		{"docker too old", func(a *Agent) { a.DockerVersion = "19.03.5" }, false, ReadinessDegraded, true},
+		{"docker not yet reported", func(a *Agent) { a.DockerAvailable = nil; a.DockerVersion = "" }, false, ReadinessDegraded, true},
+		{"caddy missing", func(a *Agent) { a.CaddyAvailable = &down }, false, ReadinessBlocked, true},
+		{"occupied ports (caddy installed, not running)", func(a *Agent) { a.CaddyRunning = false }, false, ReadinessBlocked, true},
+		{"critically low disk", func(a *Agent) { a.DiskFreeBytes = 512 * mib }, false, ReadinessBlocked, true},
+		{"low disk", func(a *Agent) { a.DiskFreeBytes = 3 * gib }, false, ReadinessDegraded, true},
+		{"low memory", func(a *Agent) { a.MemAvailableBytes = 128 * mib }, false, ReadinessDegraded, true},
 		// An agent that predates the extended facts (CPUCount == 0) is judged on Docker
 		// alone — its zeroed Caddy/disk/memory fields must never falsely block it.
 		{"older agent without extended facts", func(a *Agent) {
@@ -358,7 +362,7 @@ func TestAgentReadiness(t *testing.T) {
 			a.CaddyAvailable, a.CaddyRunning = nil, false
 			a.DiskTotalBytes, a.DiskFreeBytes = 0, 0
 			a.MemTotalBytes, a.MemAvailableBytes = 0, 0
-		}, ReadinessReady, false},
+		}, false, ReadinessReady, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -366,7 +370,7 @@ func TestAgentReadiness(t *testing.T) {
 			if c.mutate != nil {
 				c.mutate(&a)
 			}
-			state, reason := a.Readiness(now)
+			state, reason := a.Readiness(now, c.allowNonLinux)
 			if state != c.wantState {
 				t.Errorf("state = %q, want %q (reason %q)", state, c.wantState, reason)
 			}

@@ -35,6 +35,14 @@ func (h *adminHandler) CreateDeploymentForService(ctx context.Context, req *conn
 	return connect.NewResponse(&controlplanev1.CreateDeploymentForServiceResponse{Deployment: toProto(dep)}), nil
 }
 
+func (h *adminHandler) RollbackDeployment(ctx context.Context, req *connect.Request[controlplanev1.RollbackDeploymentRequest]) (*connect.Response[controlplanev1.RollbackDeploymentResponse], error) {
+	dep, err := h.svc.RollbackToDeployment(ctx, req.Msg.GetTargetDeploymentId())
+	if err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&controlplanev1.RollbackDeploymentResponse{Deployment: toProto(dep)}), nil
+}
+
 func (h *adminHandler) ListDeploymentsByService(ctx context.Context, req *connect.Request[controlplanev1.ListDeploymentsByServiceRequest]) (*connect.Response[controlplanev1.ListDeploymentsByServiceResponse], error) {
 	deps, err := h.svc.ListByService(ctx, req.Msg.GetServiceId())
 	if err != nil {
@@ -196,26 +204,27 @@ func toProtos(ds []Deployment) []*controlplanev1.Deployment {
 
 func toProto(d Deployment) *controlplanev1.Deployment {
 	return &controlplanev1.Deployment{
-		Id:            d.ID,
-		ServiceId:     d.ServiceID,
-		EnvironmentId: d.EnvironmentID,
-		ProjectId:     d.ProjectID,
-		WorkspaceId:   d.WorkspaceID,
-		ServerId:      d.ServerID,
-		ImageRef:      d.ImageRef,
-		ContainerPort: d.ContainerPort,
-		HostPort:      d.HostPort,
-		Status:        d.Status,
-		Message:       d.Message,
-		CreatedAt:     d.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:     d.UpdatedAt.UTC().Format(time.RFC3339),
-		SourceKind:    d.SourceKind,
-		SourceAccess:  d.SourceAccess,
-		CloneUrl:      d.CloneURL,
-		GitRef:        d.GitRef,
-		CommitSha:     d.CommitSha,
-		BuiltImageRef: d.BuiltImageRef,
-		RouteUrl:      d.RouteURL,
+		Id:             d.ID,
+		ServiceId:      d.ServiceID,
+		EnvironmentId:  d.EnvironmentID,
+		ProjectId:      d.ProjectID,
+		WorkspaceId:    d.WorkspaceID,
+		ServerId:       d.ServerID,
+		ImageRef:       d.ImageRef,
+		ContainerPort:  d.ContainerPort,
+		HostPort:       d.HostPort,
+		Status:         d.Status,
+		Message:        d.Message,
+		CreatedAt:      d.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:      d.UpdatedAt.UTC().Format(time.RFC3339),
+		SourceKind:     d.SourceKind,
+		SourceAccess:   d.SourceAccess,
+		CloneUrl:       d.CloneURL,
+		GitRef:         d.GitRef,
+		CommitSha:      d.CommitSha,
+		BuiltImageRef:  d.BuiltImageRef,
+		RouteUrl:       d.RouteURL,
+		RolledBackFrom: d.RolledBackFrom,
 	}
 }
 
