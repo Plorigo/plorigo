@@ -34,16 +34,15 @@ const (
 	// reading agent liveness. The agent-facing Register/Heartbeat RPCs are not
 	// user-scoped and authenticate by their own token/credential, so they have no
 	// Action here.
-	ActionAgentCreate  Action = "agent.create"
-	ActionAgentRead    Action = "agent.read"
-	ActionEnvVarSet    Action = "env_var.set"
-	ActionEnvVarRead   Action = "env_var.read"
-	ActionEnvVarDelete Action = "env_var.delete"
-	// Secret actions never expose a value — there is no "read" action because
-	// secrets are write-only. ActionSecretList covers metadata (keys + timestamps).
-	ActionSecretSet    Action = "secret.set"
-	ActionSecretList   Action = "secret.list"
-	ActionSecretDelete Action = "secret.delete"
+	ActionAgentCreate Action = "agent.create"
+	ActionAgentRead   Action = "agent.read"
+	// Config actions cover unified configuration: variables (plaintext, readable) and
+	// secrets (encrypted, write-only), at service or environment scope. ActionConfigRead
+	// returns variable values and secret metadata only — a secret value is never returned
+	// by any RPC, so confidentiality does not depend on a separate read action.
+	ActionConfigSet    Action = "config.set"
+	ActionConfigRead   Action = "config.read"
+	ActionConfigDelete Action = "config.delete"
 	// Deployment actions cover triggering a deploy and reading deployment status,
 	// timeline, and logs. The agent-facing Poll/Report RPCs are not user-scoped and
 	// authenticate by the agent credential, so they have no Action here.
