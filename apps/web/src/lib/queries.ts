@@ -3,12 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 import {
   agentClient,
   authClient,
+  configClient,
   deploymentClient,
   domainClient,
   environmentClient,
-  envVarClient,
   projectClient,
-  secretClient,
   serverClient,
   serviceClient,
   sourceClient,
@@ -93,20 +92,22 @@ export function useEnvironments(projectId: string) {
   });
 }
 
-// Env vars are now per-SERVICE: list/set/delete are keyed by serviceId.
-export function useEnvVars(serviceId: string) {
+export function useEnvironment(environmentId: string) {
   return useQuery({
-    queryKey: ["envVars", serviceId],
-    queryFn: async () => (await envVarClient.listEnvVars({ serviceId })).envVars,
-    enabled: serviceId.length > 0,
+    queryKey: ["environment", environmentId],
+    queryFn: async () => (await environmentClient.getEnvironment({ id: environmentId })).environment ?? null,
+    enabled: environmentId.length > 0 && !isPrototypeId(environmentId),
   });
 }
 
-export function useSecrets(environmentId: string) {
+// Unified config: variables (readable) and secrets (write-only, value blank) at service or
+// environment scope. ListConfig is keyed by serviceId — the server returns the service's
+// service-level entries plus its environment's shared entries.
+export function useConfig(serviceId: string) {
   return useQuery({
-    queryKey: ["secrets", environmentId],
-    queryFn: async () => (await secretClient.listSecrets({ environmentId })).secrets,
-    enabled: environmentId.length > 0,
+    queryKey: ["config", serviceId],
+    queryFn: async () => (await configClient.listConfig({ serviceId })).entries,
+    enabled: serviceId.length > 0,
   });
 }
 

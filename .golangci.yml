@@ -35,14 +35,13 @@ linters:
             - "**/internal/agents/**"
             - "**/internal/audit/**"
             - "**/internal/auth/**"
+            - "**/internal/config/**"
             - "**/internal/deployments/**"
             - "**/internal/domains/**"
             - "**/internal/environments/**"
-            - "**/internal/envvars/**"
             - "**/internal/membership/**"
             - "**/internal/policy/**"
             - "**/internal/projects/**"
-            - "**/internal/secrets/**"
             - "**/internal/servers/**"
             - "**/internal/serversetup/**"
             - "**/internal/services/**"
@@ -54,21 +53,19 @@ linters:
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/auth
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
+            - pkg: github.com/plorigo/plorigo/internal/config
+              desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/deployments
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/domains
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/environments
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
-            - pkg: github.com/plorigo/plorigo/internal/envvars
-              desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/membership
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/policy
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/projects
-              desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
-            - pkg: github.com/plorigo/plorigo/internal/secrets
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"
             - pkg: github.com/plorigo/plorigo/internal/servers
               desc: "modules must not import each other; use a consumer-defined port wired in internal/app"

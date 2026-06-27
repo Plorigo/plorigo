@@ -56,6 +56,19 @@ type AuditEvent struct {
 	CreatedAt   time.Time
 }
 
+type ConfigEntry struct {
+	ID            string
+	Type          string
+	Scope         string
+	ServiceID     *string
+	EnvironmentID *string
+	Key           string
+	Value         *string
+	Ciphertext    []byte
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 type Deployment struct {
 	ID            string
 	EnvironmentID string
@@ -105,15 +118,6 @@ type Domain struct {
 	UpdatedAt     time.Time
 }
 
-type EnvVar struct {
-	ID        string
-	Key       string
-	Value     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	ServiceID string
-}
-
 type Environment struct {
 	ID        string
 	ProjectID string
@@ -141,15 +145,6 @@ type Project struct {
 	Name        string
 	Slug        string
 	CreatedAt   time.Time
-}
-
-type Secret struct {
-	ID            string
-	EnvironmentID string
-	Key           string
-	Ciphertext    []byte
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
 }
 
 type Server struct {

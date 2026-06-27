@@ -7,17 +7,16 @@ import (
 	"github.com/plorigo/plorigo/internal/agents"
 	"github.com/plorigo/plorigo/internal/audit"
 	"github.com/plorigo/plorigo/internal/auth"
+	"github.com/plorigo/plorigo/internal/config"
 	"github.com/plorigo/plorigo/internal/deployments"
 	"github.com/plorigo/plorigo/internal/domains"
 	"github.com/plorigo/plorigo/internal/environments"
-	"github.com/plorigo/plorigo/internal/envvars"
 	"github.com/plorigo/plorigo/internal/membership"
 	"github.com/plorigo/plorigo/internal/platform/crypto"
 	"github.com/plorigo/plorigo/internal/platform/github"
 	"github.com/plorigo/plorigo/internal/platform/mailer"
 	"github.com/plorigo/plorigo/internal/policy"
 	"github.com/plorigo/plorigo/internal/projects"
-	"github.com/plorigo/plorigo/internal/secrets"
 	"github.com/plorigo/plorigo/internal/servers"
 	"github.com/plorigo/plorigo/internal/serversetup"
 	"github.com/plorigo/plorigo/internal/services"
@@ -57,23 +56,19 @@ func (a *App) buildModules() error {
 		Log:    a.log,
 	})
 
-	// env vars are non-secret, per-environment config; like environments they
-	// authorize/audit against the workspace resolved through environment -> project.
-	a.envvars = envvars.New(envvars.Deps{
-		DB:     a.db,
-		Audit:  auditSvc,
-		Policy: policySvc,
-		Log:    a.log,
-	})
-
-	// secrets are the encrypted, write-only counterpart to env vars: same
-	// environment-scoping, but values are sealed at rest by the crypto box (keyed by
-	// APP_MASTER_KEY). A bad master key fails here, before the server starts.
+	// The crypto box seals secret values at rest (AES-256-GCM, keyed by APP_MASTER_KEY) and
+	// opens them at deploy time. A bad master key fails here, before the server starts. It is
+	// reused by config (seal), deployments (open), and sources/services (OAuth token sealing).
 	box, err := crypto.NewBox(a.cfg.MasterKey)
 	if err != nil {
 		return err
 	}
-	a.secrets = secrets.New(secrets.Deps{
+
+	// config is unified configuration: variables (plaintext, readable) and secrets
+	// (encrypted, write-only) at service or environment scope. It authorizes/audits against
+	// the workspace resolved through the service or the environment's project, and seals
+	// secret values with the crypto box.
+	a.config = config.New(config.Deps{
 		DB:     a.db,
 		Audit:  auditSvc,
 		Policy: policySvc,
@@ -124,6 +119,9 @@ func (a *App) buildModules() error {
 		DB:     a.db,
 		Audit:  auditSvc,
 		Policy: policySvc,
+		// Decrypts environment/service secrets at deploy time so their plaintext can be
+		// injected into the container (the same box that config seals them with).
+		Crypto: box,
 		Log:    a.log,
 	})
 
