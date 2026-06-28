@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/plorigo/plorigo/internal/platform/authz"
@@ -47,7 +48,7 @@ type fakeStore struct {
 }
 
 func (f *fakeStore) InsertBackup(_ context.Context, _ database.Tx, b NewBackup) (Backup, error) {
-	f.inserted = Backup{ID: testBackupID, ServiceID: b.ServiceID, WorkspaceID: b.WorkspaceID, ServerID: b.ServerID, Status: StatusQueued}
+	f.inserted = Backup{ID: testBackupID, ServiceID: b.ServiceID, WorkspaceID: b.WorkspaceID, ServerID: b.ServerID, Status: StatusQueued, Label: b.Label, TriggerSource: b.TriggerSource}
 	return f.inserted, nil
 }
 func (f *fakeStore) GetBackup(context.Context, string) (Backup, bool, error) {
@@ -127,15 +128,28 @@ func postgresTarget() ServiceTarget {
 func TestCreateBackup_Success(t *testing.T) {
 	store := &fakeStore{target: postgresTarget(), targetOK: true, runningServer: testServerID, running: true}
 	rec := &fakeRecorder{}
-	b, err := newSvc(store, allowAll{}, rec).CreateBackup(context.Background(), testServiceID)
+	b, err := newSvc(store, allowAll{}, rec).CreateBackup(context.Background(), testServiceID, "  nightly  ")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if b.ServerID != testServerID || b.Status != StatusQueued {
 		t.Errorf("backup = %+v, want queued on the running server", b)
 	}
+	// The label is trimmed and persisted, and a dashboard-initiated backup is triggered manually —
+	// the identifying info the row carries.
+	if store.inserted.Label != "nightly" || store.inserted.TriggerSource != TriggerManual {
+		t.Errorf("inserted = %+v, want label %q trigger %q", store.inserted, "nightly", TriggerManual)
+	}
 	if rec.calls != 1 {
 		t.Errorf("audit calls = %d, want 1 (create must be audited)", rec.calls)
+	}
+}
+
+func TestCreateBackup_RejectsOverlongLabel(t *testing.T) {
+	store := &fakeStore{target: postgresTarget(), targetOK: true, runningServer: testServerID, running: true}
+	long := strings.Repeat("x", maxLabelLen+1)
+	if _, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID, long); err == nil {
+		t.Fatal("expected an error for a label longer than the limit")
 	}
 }
 
@@ -144,7 +158,7 @@ func TestCreateBackup_RejectsNonDatabaseService(t *testing.T) {
 	target.SourceKind = "git"
 	target.TemplateID = ""
 	store := &fakeStore{target: target, targetOK: true, running: true, runningServer: testServerID}
-	_, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID)
+	_, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID, "")
 	if err == nil {
 		t.Fatal("expected an error backing up a non-database service")
 	}
@@ -152,7 +166,7 @@ func TestCreateBackup_RejectsNonDatabaseService(t *testing.T) {
 
 func TestCreateBackup_RequiresRunningDatabase(t *testing.T) {
 	store := &fakeStore{target: postgresTarget(), targetOK: true, running: false}
-	_, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID)
+	_, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID, "")
 	if err == nil {
 		t.Fatal("expected an error backing up a database that isn't running")
 	}
@@ -160,14 +174,14 @@ func TestCreateBackup_RequiresRunningDatabase(t *testing.T) {
 
 func TestCreateBackup_Unauthorized(t *testing.T) {
 	store := &fakeStore{target: postgresTarget(), targetOK: true, runningServer: testServerID, running: true}
-	if _, err := newSvc(store, denyAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID); err == nil {
+	if _, err := newSvc(store, denyAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID, ""); err == nil {
 		t.Fatal("expected a permission error")
 	}
 }
 
 func TestCreateBackup_NotFound(t *testing.T) {
 	store := &fakeStore{targetOK: false}
-	if _, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID); err == nil {
+	if _, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID, ""); err == nil {
 		t.Fatal("expected a not-found error for a missing service")
 	}
 }

@@ -80,6 +80,8 @@ type Backup struct {
 	Error         string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	Label         string
+	TriggerSource string
 }
 
 type ConfigEntry struct {

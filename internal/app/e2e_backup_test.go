@@ -153,7 +153,7 @@ func TestE2EBackupRestore(t *testing.T) {
 	}
 
 	// Back it up and wait for success.
-	b, err := a.backups.Service().CreateBackup(ownerCtx, dbRes.Service.ID)
+	b, err := a.backups.Service().CreateBackup(ownerCtx, dbRes.Service.ID, "e2e snapshot")
 	if err != nil {
 		t.Fatalf("CreateBackup: %v", err)
 	}

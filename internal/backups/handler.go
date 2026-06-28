@@ -21,7 +21,7 @@ type adminHandler struct {
 var _ controlplanev1connect.BackupServiceHandler = (*adminHandler)(nil)
 
 func (h *adminHandler) CreateBackup(ctx context.Context, req *connect.Request[controlplanev1.CreateBackupRequest]) (*connect.Response[controlplanev1.CreateBackupResponse], error) {
-	b, err := h.svc.CreateBackup(ctx, req.Msg.GetServiceId())
+	b, err := h.svc.CreateBackup(ctx, req.Msg.GetServiceId(), req.Msg.GetLabel())
 	if err != nil {
 		return nil, problem.ToConnect(err)
 	}
@@ -158,6 +158,8 @@ func toProto(b Backup) *controlplanev1.Backup {
 		Status:        b.Status,
 		Message:       b.Message,
 		Error:         b.Error,
+		Label:         b.Label,
+		TriggerSource: b.TriggerSource,
 		CreatedAt:     b.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:     b.UpdatedAt.UTC().Format(time.RFC3339),
 	}

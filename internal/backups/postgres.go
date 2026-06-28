@@ -29,6 +29,8 @@ func (s *postgresStore) InsertBackup(ctx context.Context, tx database.Tx, b NewB
 		ProjectID:     b.ProjectID,
 		WorkspaceID:   b.WorkspaceID,
 		ServerID:      b.ServerID,
+		Label:         b.Label,
+		TriggerSource: b.TriggerSource,
 	})
 	if err != nil {
 		return Backup{}, err
@@ -247,6 +249,8 @@ func backupFromRow(r db.Backup) Backup {
 		Status:        r.Status,
 		Message:       r.Message,
 		Error:         r.Error,
+		Label:         r.Label,
+		TriggerSource: r.TriggerSource,
 		CreatedAt:     r.CreatedAt,
 		UpdatedAt:     r.UpdatedAt,
 	}

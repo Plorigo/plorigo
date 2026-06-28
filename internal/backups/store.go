@@ -85,6 +85,8 @@ type NewBackup struct {
 	ProjectID     string
 	WorkspaceID   string
 	ServerID      string
+	Label         string // optional operator-typed name
+	TriggerSource string // "manual" or "scheduled"
 }
 
 // StatusUpdate is an agent's reported transition for a backup. A zero/empty artifact_uri /

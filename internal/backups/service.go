@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"log/slog"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/plorigo/plorigo/internal/platform/authz"
 	"github.com/plorigo/plorigo/internal/platform/database"
@@ -26,10 +28,15 @@ func newService(tx TxRunner, store Store, authorizer authz.Authorizer, audit Rec
 
 // CreateBackup enqueues a backup for a managed Postgres service. It authorizes before resolving
 // the target's running server, then inserts the queued backup and its audit row in one tx; the
-// database's server agent claims and runs it.
-func (s *service) CreateBackup(ctx context.Context, serviceID string) (Backup, error) {
+// database's server agent claims and runs it. label is an optional operator-typed name to tell
+// backups apart; a dashboard-initiated backup is always triggered manually.
+func (s *service) CreateBackup(ctx context.Context, serviceID, label string) (Backup, error) {
 	if _, err := id.Parse(serviceID); err != nil {
 		return Backup{}, problem.InvalidInput("a valid service_id is required")
+	}
+	label = strings.TrimSpace(label)
+	if utf8.RuneCountInString(label) > maxLabelLen {
+		return Backup{}, problem.InvalidInput("the backup name must be at most %d characters", maxLabelLen)
 	}
 	target, ok, err := s.store.ServiceTarget(ctx, serviceID)
 	if err != nil {
@@ -62,6 +69,8 @@ func (s *service) CreateBackup(ctx context.Context, serviceID string) (Backup, e
 			ProjectID:     target.ProjectID,
 			WorkspaceID:   target.WorkspaceID,
 			ServerID:      serverID,
+			Label:         label,
+			TriggerSource: TriggerManual,
 		})
 		if txErr != nil {
 			return txErr

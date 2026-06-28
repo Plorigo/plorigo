@@ -22,10 +22,13 @@ message Backup {
   string error = 13;
   string created_at = 14;  // RFC 3339
   string updated_at = 15;  // RFC 3339
+  string label = 16;       // optional operator-typed name, to tell backups apart
+  string trigger_source = 17; // who started it: "manual" (dashboard) or "scheduled" (later slice)
 }
 
 message CreateBackupRequest {
   string service_id = 1;
+  string label = 2; // optional name for the backup ("before v2 migration"); trimmed, may be empty
 }
 
 message CreateBackupResponse {

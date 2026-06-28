@@ -36,6 +36,17 @@ const (
 // DestinationLocal is the MVP artifact destination: the server's own disk.
 const DestinationLocal = "local"
 
+// Trigger sources for a backup: who started it. A dashboard-initiated backup is always "manual";
+// scheduled backups are a later slice (see docs/architecture/backups.md). Mirrored in the DB CHECK
+// constraint (00027_backup_label_trigger.sql).
+const (
+	TriggerManual    = "manual"
+	TriggerScheduled = "scheduled"
+)
+
+// maxLabelLen bounds an operator-typed backup label, so it stays a short identifier.
+const maxLabelLen = 80
+
 // Engine + kind + template identifiers shared with the agent protocol.
 const (
 	EnginePostgres   = "postgres"
@@ -59,6 +70,8 @@ type Backup struct {
 	Status        string
 	Message       string
 	Error         string
+	Label         string // optional operator-typed name, to tell backups apart
+	TriggerSource string // "manual" (dashboard) or "scheduled" (later slice)
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
@@ -137,7 +150,7 @@ type ReportInput struct {
 // Service is the backups module surface: the dashboard-facing create/read methods plus the
 // agent-facing gateway (credential-authenticated, not policy-authorized).
 type Service interface {
-	CreateBackup(ctx context.Context, serviceID string) (Backup, error)
+	CreateBackup(ctx context.Context, serviceID, label string) (Backup, error)
 	GetBackup(ctx context.Context, backupID string) (Backup, error)
 	ListByService(ctx context.Context, serviceID string) ([]Backup, error)
 	RestoreBackup(ctx context.Context, backupID string) (RestoreJob, error)

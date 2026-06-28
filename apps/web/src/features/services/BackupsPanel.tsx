@@ -5,7 +5,7 @@ import { DatabaseBackup, History, RotateCcw, TriangleAlert } from "lucide-react"
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { Button, EmptyState, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
+import { Badge, Button, EmptyState, Input, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
 import type { Backup, RestoreJob } from "@/gen/controlplane/v1/backups_pb";
 import { backupClient } from "@/lib/clients";
 import { useBackupsByService, useRestoresByService } from "@/lib/queries";
@@ -19,6 +19,7 @@ export function BackupsPanel({ serviceId }: { serviceId: string }) {
   const backups = useBackupsByService(serviceId, true);
   const restores = useRestoresByService(serviceId, true);
   const [creating, setCreating] = useState(false);
+  const [label, setLabel] = useState("");
   const [restoringId, setRestoringId] = useState("");
   const rows = backups.data ?? [];
   const restoreRows = restores.data ?? [];
@@ -26,7 +27,8 @@ export function BackupsPanel({ serviceId }: { serviceId: string }) {
   async function createBackup() {
     setCreating(true);
     try {
-      await backupClient.createBackup({ serviceId });
+      await backupClient.createBackup({ serviceId, label: label.trim() });
+      setLabel("");
       await queryClient.invalidateQueries({ queryKey: ["backups", "service", serviceId] });
       toast.success("Backup started");
     } catch (err) {
@@ -55,10 +57,24 @@ export function BackupsPanel({ serviceId }: { serviceId: string }) {
         title="Backups"
         description="Snapshot this database with pg_dump, and restore a snapshot back into it. Both run on the database's server."
         action={
-          <Button size="sm" disabled={creating} onClick={() => void createBackup()}>
-            <DatabaseBackup className="h-4 w-4" aria-hidden="true" />
-            {creating ? "Starting…" : "Back up now"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !creating) void createBackup();
+              }}
+              placeholder="Optional name"
+              maxLength={80}
+              disabled={creating}
+              aria-label="Backup name"
+              className="h-8 w-40 text-xs"
+            />
+            <Button size="sm" disabled={creating} onClick={() => void createBackup()}>
+              <DatabaseBackup className="h-4 w-4" aria-hidden="true" />
+              {creating ? "Starting…" : "Back up now"}
+            </Button>
+          </div>
         }
       />
       <div className="space-y-4 p-4">
@@ -114,6 +130,12 @@ function BackupRow({ backup, restoring, onRestore }: { backup: Backup; restoring
     <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2.5">
       <div className="min-w-0">
         <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-medium">{backup.label || shortId(backup.id)}</span>
+          {backup.triggerSource && (
+            <Badge tone={backup.triggerSource === "scheduled" ? "purple" : "neutral"}>{backup.triggerSource}</Badge>
+          )}
+        </div>
+        <div className="mt-0.5 flex items-center gap-2">
           <StatusDot tone={jobTone(backup.status)} label={backup.status} />
           {backup.sizeBytes > 0n && (
             <span className="text-xs text-muted-foreground">{formatBytes(backup.sizeBytes)}</span>
@@ -122,7 +144,9 @@ function BackupRow({ backup, restoring, onRestore }: { backup: Backup; restoring
         {detail && <p className="mt-0.5 truncate text-xs text-muted-foreground">{detail}</p>}
       </div>
       <div className="flex shrink-0 items-center gap-3">
-        <span className="text-xs text-muted-foreground">{timeAgo(backup.createdAt)}</span>
+        <span className="text-xs text-muted-foreground" title={timeAgo(backup.createdAt)}>
+          {formatWhen(backup.createdAt)}
+        </span>
         {backup.status === "succeeded" && (
           <ConfirmDialog
             trigger={
@@ -151,7 +175,9 @@ function RestoreRow({ restore }: { restore: RestoreJob }) {
         <StatusDot tone={jobTone(restore.status)} label={`restore ${restore.status}`} />
         {detail && <p className="mt-0.5 truncate text-xs text-muted-foreground">{detail}</p>}
       </div>
-      <span className="shrink-0 text-xs text-muted-foreground">{timeAgo(restore.createdAt)}</span>
+      <span className="shrink-0 text-xs text-muted-foreground" title={timeAgo(restore.createdAt)}>
+        {formatWhen(restore.createdAt)}
+      </span>
     </div>
   );
 }
@@ -164,12 +190,32 @@ function jobTone(status: string): Tone {
   return "blue";
 }
 
+// shortId gives an unlabeled backup a stable, human-readable identity from its UUID, so rows are
+// still distinguishable when the operator didn't type a name.
+function shortId(id: string): string {
+  return id ? `#${id.slice(0, 8)}` : "backup";
+}
+
 function formatBytes(bytes: bigint): string {
   const n = Number(bytes);
   if (n < 1024) return `${n} B`;
   if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
   if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
   return `${(n / 1024 ** 3).toFixed(1)} GB`;
+}
+
+// formatWhen renders an absolute date + clock time for a backup/restore, so the row shows WHEN it
+// happened (not only "5m ago"). The relative time stays available on hover (title).
+function formatWhen(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(date);
 }
 
 function timeAgo(iso: string): string {

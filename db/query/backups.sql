@@ -3,8 +3,8 @@
 -- the existing GetAgentServerByCredential / ListConfigForService queries.
 
 -- name: CreateBackup :one
-INSERT INTO backups (service_id, environment_id, project_id, workspace_id, server_id)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO backups (service_id, environment_id, project_id, workspace_id, server_id, label, trigger_source)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING *;
 
 -- name: GetBackup :one
