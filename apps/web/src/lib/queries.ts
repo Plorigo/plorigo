@@ -4,6 +4,7 @@ import {
   agentClient,
   authClient,
   configClient,
+  backupClient,
   deploymentClient,
   domainClient,
   environmentClient,
@@ -213,6 +214,26 @@ export function useDeploymentsByService(serviceId: string) {
       (await deploymentClient.listDeploymentsByService({ serviceId })).deployments,
     enabled: serviceId.length > 0 && !isPrototypeId(serviceId),
     refetchInterval: 5000,
+  });
+}
+
+// A backup is terminal once it has succeeded or failed; the panel stops polling then.
+export function isTerminalBackupStatus(status: string): boolean {
+  return status === "succeeded" || status === "failed";
+}
+
+// useBackupsByService lists a managed database service's backups (newest first), polling while any
+// is still in flight so status transitions appear live.
+export function useBackupsByService(serviceId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["backups", "service", serviceId],
+    queryFn: async () => (await backupClient.listBackupsByService({ serviceId })).backups,
+    enabled: enabled && serviceId.length > 0 && !isPrototypeId(serviceId),
+    refetchInterval: (query) => {
+      const rows = query.state.data;
+      const inFlight = rows?.some((b) => !isTerminalBackupStatus(b.status)) ?? false;
+      return inFlight ? 2000 : false;
+    },
   });
 }
 

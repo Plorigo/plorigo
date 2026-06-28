@@ -64,6 +64,24 @@ type AuditEvent struct {
 	CreatedAt   time.Time
 }
 
+type Backup struct {
+	ID            string
+	ServiceID     string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	Destination   string
+	ArtifactUri   string
+	SizeBytes     int64
+	Checksum      string
+	Status        string
+	Message       string
+	Error         string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 type ConfigEntry struct {
 	ID            string
 	Type          string
