@@ -7,6 +7,12 @@
 > Contributors & AI agents: start with [AGENTS.md](../AGENTS.md) — it routes you to the right
 > design doc for whatever you're working on.
 
+## Start here
+
+- [**Getting started (private alpha)**](./getting-started.md) — from nothing to a running app on a
+  server you control: what's supported today, the five-minute path, and the alpha's known limits.
+- [Troubleshooting](./troubleshooting.md) — common failures and where to look.
+
 ## Architecture & design
 
 The design contract for the platform (intended architecture — see each doc's status note):
@@ -29,12 +35,12 @@ The design contract for the platform (intended architecture — see each doc's s
 
 ## Planned user guides
 
+The [getting-started guide](./getting-started.md) covers the alpha flow today; these deeper guides
+are still being written:
+
 - Self-hosting with Docker Compose.
-- Connecting a server & installing the agent.
-- Deploying your first app.
-- Environment variables & secrets.
-- Backups & restore.
 - Upgrading.
+- Environment variables & secrets (reference).
 
 Want a doc that isn't here yet? [Open a documentation issue](https://github.com/Plorigo/plorigo/issues/new/choose)
 or start a [Discussion](https://github.com/Plorigo/plorigo/discussions).

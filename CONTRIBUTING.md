@@ -34,6 +34,9 @@ agree to uphold it. Report unacceptable behavior to **i.babirli@outlook.com**.
 
 ## Ways to contribute
 
+- **Try the alpha** — follow [Getting started](./docs/getting-started.md) to deploy an app on a
+  server you control, then tell us what broke. In early development, good bug reports are the single
+  most useful contribution.
 - **Report bugs** — use the [bug report form](https://github.com/Plorigo/plorigo/issues/new/choose). Include version, deployment method, OS, and logs.
 - **Suggest features** — open a [feature request](https://github.com/Plorigo/plorigo/issues/new/choose) or start a Discussion.
 - **Improve docs** — typos to whole guides; docs PRs are always welcome.
