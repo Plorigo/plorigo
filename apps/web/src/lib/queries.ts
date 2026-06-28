@@ -4,10 +4,12 @@ import {
   agentClient,
   authClient,
   configClient,
+  backupClient,
   deploymentClient,
   domainClient,
   environmentClient,
   projectClient,
+  readinessClient,
   serverClient,
   setupClient,
   serviceClient,
@@ -213,6 +215,60 @@ export function useDeploymentsByService(serviceId: string) {
       (await deploymentClient.listDeploymentsByService({ serviceId })).deployments,
     enabled: serviceId.length > 0 && !isPrototypeId(serviceId),
     refetchInterval: 5000,
+  });
+}
+
+// A backup is terminal once it has succeeded or failed; the panel stops polling then.
+export function isTerminalBackupStatus(status: string): boolean {
+  return status === "succeeded" || status === "failed";
+}
+
+// useBackupsByService lists a managed database service's backups (newest first), polling while any
+// is still in flight so status transitions appear live.
+export function useBackupsByService(serviceId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["backups", "service", serviceId],
+    queryFn: async () => (await backupClient.listBackupsByService({ serviceId })).backups,
+    enabled: enabled && serviceId.length > 0 && !isPrototypeId(serviceId),
+    refetchInterval: (query) => {
+      const rows = query.state.data;
+      const inFlight = rows?.some((b) => !isTerminalBackupStatus(b.status)) ?? false;
+      return inFlight ? 2000 : false;
+    },
+  });
+}
+
+// useServiceReadiness fetches the Production Readiness Doctor's checklist for a service: a
+// deterministic, on-demand verdict (ready | almost_ready | not_ready) plus per-check detail and
+// remediation. It refetches when deployment/config/server state may have changed (the service
+// page already polls deployments), so a short staleTime keeps it cheap without going stale.
+export function useServiceReadiness(serviceId: string) {
+  return useQuery({
+    queryKey: ["readiness", "service", serviceId],
+    queryFn: async () =>
+      (await readinessClient.getServiceReadiness({ serviceId })).checklist ?? null,
+    enabled: serviceId.length > 0 && !isPrototypeId(serviceId),
+    staleTime: 10_000,
+  });
+}
+
+// A restore is terminal once it has succeeded or failed.
+export function isTerminalRestoreStatus(status: string): boolean {
+  return status === "succeeded" || status === "failed";
+}
+
+// useRestoresByService lists a managed database service's restore jobs (newest first), polling
+// while any is in flight.
+export function useRestoresByService(serviceId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["restores", "service", serviceId],
+    queryFn: async () => (await backupClient.listRestoreJobsByService({ serviceId })).restores,
+    enabled: enabled && serviceId.length > 0 && !isPrototypeId(serviceId),
+    refetchInterval: (query) => {
+      const rows = query.state.data;
+      const inFlight = rows?.some((r) => !isTerminalRestoreStatus(r.status)) ?? false;
+      return inFlight ? 2000 : false;
+    },
   });
 }
 

@@ -67,6 +67,15 @@ const (
 	ActionDomainRead   Action = "domain.read"
 	ActionDomainVerify Action = "domain.verify"
 	ActionDomainDelete Action = "domain.delete"
+	// Backup actions cover creating a database backup for a managed Postgres service and reading
+	// backup status. The agent-facing Poll/Report RPCs authenticate by the agent credential and
+	// are not user-scoped, so they have no Action here. See docs/architecture/backups.md.
+	ActionBackupCreate Action = "backup.create"
+	ActionBackupRead   Action = "backup.read"
+	// Readiness covers reading the Production Readiness Doctor's deterministic checklist for a
+	// service or environment. It is informational and derives entirely from other modules'
+	// read-only state, so every role that can read services can read readiness.
+	ActionReadinessRead Action = "readiness.read"
 	// Server-setup actions govern the persistent SSH management credential created during
 	// dashboard-managed server setup. Opening an inbound SSH channel is an admin-tier
 	// capability, so running the channel (ActionServerSetupRun: provision + record use /

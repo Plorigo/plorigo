@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package agent.v1;
+
+// BackupService is the agent-facing dispatch gateway for database backups: a Plorigo server
+// agent calls it OUTBOUND to claim backup work and report progress, exactly like
+// agent.v1.DeployService. These RPCs are not authenticated by a user session — the agent proves
+// itself with its durable agent credential (the same one used for Heartbeat/PollDeployment),
+// validated in the backups service, which scopes work to the agent's own server. The
+// dashboard-facing side is controlplane.v1.BackupService. See docs/architecture/backups.md.
+//
+// The agent runs pg_dump INSIDE the managed Postgres container (found by its plorigo.service
+// label) and writes the dump to local disk on the server. Credentials are resolved and sent by
+// the control plane per job (mirroring how a deployment receives its env), so the agent never
+// inspects container env. A kind field carries "backup" today; restore is added in PLO-24.
+service BackupService {
+  // PollBackupJob atomically claims the next queued backup for this agent's server, if any.
+  // has_work is false when there is nothing to do.
+  rpc PollBackupJob(PollBackupJobRequest) returns (PollBackupJobResponse);
+
+  // ReportBackupJob records a status transition and the artifact metadata for a backup the
+  // agent is executing.
+  rpc ReportBackupJob(ReportBackupJobRequest) returns (ReportBackupJobResponse);
+
+  // PollRestoreJob atomically claims the next queued restore for this agent's server, if any.
+  // A restore reads a backup artifact from the server's disk and pipes it into the target
+  // database (psql) inside its container. has_work is false when there is nothing to do.
+  rpc PollRestoreJob(PollRestoreJobRequest) returns (PollRestoreJobResponse);
+
+  // ReportRestoreJob records a status transition for a restore the agent is executing.
+  rpc ReportRestoreJob(ReportRestoreJobRequest) returns (ReportRestoreJobResponse);
+}
+
+message PollBackupJobRequest {
+  string agent_id = 1;
+  string credential = 2;
+}
+
+message PollBackupJobResponse {
+  bool has_work = 1;
+  string backup_id = 2;
+  string kind = 3;       // "backup" (restore is added in PLO-24)
+  string service_id = 4; // the managed Postgres service; the container label target
+  string engine = 5;     // "postgres"
+  // Credentials resolved + sent by the control plane (the managed database's POSTGRES_* config),
+  // so the agent runs pg_dump without reading container env.
+  string pg_user = 6;
+  string pg_password = 7;
+  string pg_database = 8;
+}
+
+message ReportBackupJobRequest {
+  string agent_id = 1;
+  string credential = 2;
+  string backup_id = 3;
+  string status = 4;       // dumping|uploading|verifying|succeeded|failed
+  string artifact_uri = 5; // where the dump was written on the server (set once produced)
+  int64 size_bytes = 6;    // size of the artifact in bytes
+  string checksum = 7;     // sha256 of the artifact, for integrity
+  string message = 8;      // human-readable status line
+  string error = 9;        // failure detail (set when status == failed)
+}
+
+message ReportBackupJobResponse {}
+
+message PollRestoreJobRequest {
+  string agent_id = 1;
+  string credential = 2;
+}
+
+message PollRestoreJobResponse {
+  bool has_work = 1;
+  string restore_id = 2;
+  string service_id = 3;   // the target managed Postgres service (container label target)
+  string engine = 4;       // "postgres"
+  string pg_user = 5;
+  string pg_password = 6;
+  string pg_database = 7;
+  string artifact_uri = 8; // the source dump on the server's disk to restore from
+}
+
+message ReportRestoreJobRequest {
+  string agent_id = 1;
+  string credential = 2;
+  string restore_id = 3;
+  string status = 4;  // restoring|verifying|succeeded|failed
+  string message = 5;
+  string error = 6;
+}
+
+message ReportRestoreJobResponse {}

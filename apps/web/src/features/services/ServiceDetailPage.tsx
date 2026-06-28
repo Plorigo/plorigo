@@ -60,6 +60,8 @@ import { pickDefaultServer, serverStatusLabel } from "@/lib/serverSelection";
 import { statusTone } from "@/lib/status";
 import { useWorkspaceStore } from "@/store";
 import { deploymentRefLabel, deploymentTimeline } from "@/features/deployments/timeline";
+import { BackupsPanel } from "./BackupsPanel";
+import { ReadinessPanel } from "./ReadinessPanel";
 import { internalUrl, isPublic, sourceLabel } from "./serviceData";
 
 // ServiceDetailPage is the single service: its identity and live URL, where it deploys from,
@@ -143,8 +145,13 @@ export function ServiceDetailPage() {
 
       <CurrentDeploymentCard service={s} active={active} restorable={restorable} projectId={pid} />
 
-      {/* Connection — managed databases (template services) expose how to connect. */}
+      {/* Production Readiness Doctor — deterministic checks + what to fix before launching. */}
+      <ReadinessPanel serviceId={s.id} />
+
+      {/* Connection + backups — managed databases (template services) expose how to connect and
+          can be snapshotted with pg_dump. */}
       {s.sourceKind === "template" && <ConnectionPanel service={s} />}
+      {s.sourceKind === "template" && <BackupsPanel serviceId={s.id} />}
 
       <DomainsPanel service={s} />
 

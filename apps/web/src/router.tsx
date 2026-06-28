@@ -16,6 +16,7 @@ import { NewProjectPage } from "./features/projects/new/NewProjectPage";
 import { EnvironmentVariablesPage } from "./features/variables/EnvironmentVariablesPage";
 import { ServiceDetailPage } from "./features/services/ServiceDetailPage";
 import { SecurityPage } from "./features/security/SecurityPage";
+import { ServerDetailPage } from "./features/servers/ServerDetailPage";
 import { ServersPage } from "./features/servers/ServersPage";
 import { TeamPage } from "./features/team/TeamPage";
 import { ForgotPasswordPage } from "./pages/ForgotPasswordPage";
@@ -69,6 +70,11 @@ const projectDomainsRoute = createRoute({
   component: DomainsPage,
 });
 const serversRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/servers", component: ServersPage });
+const serverDetailRoute = createRoute({
+  getParentRoute: () => appLayoutRoute,
+  path: "/servers/$serverId",
+  component: ServerDetailPage,
+});
 const variablesRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/variables", component: EnvironmentVariablesPage });
 const projectVariablesRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
@@ -128,6 +134,7 @@ export const routeTree = rootRoute.addChildren([
     domainsRoute,
     projectDomainsRoute,
     serversRoute,
+    serverDetailRoute,
     variablesRoute,
     projectVariablesRoute,
     deploymentsRoute,
