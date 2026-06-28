@@ -17,8 +17,9 @@ The deployment loop works end to end for a focused set of sources:
   (**Node.js / Vite / Next.js**) — Plorigo detects it and **generates** a Dockerfile.
 - **Deploy a prebuilt image**.
 - **Add a managed Postgres database** (a one-click template service) and connect your app to it.
-- **Custom domains + automatic SSL** (via Caddy), **build & runtime logs**, a **deploy timeline**,
-  **health checks**, and **one-click rollback** to the last healthy version.
+- **Custom domains** (via Caddy — HTTP routing today; **automatic SSL is on the roadmap**),
+  **build & runtime logs**, a **deploy timeline**, **health checks**, and **one-click rollback** to
+  the last healthy version.
 - **Environment variables & secrets** per environment (secrets encrypted at rest, write-only).
 - **Server health dashboard** and a basic **Production Readiness Doctor** so you can tell whether
   a server and an app are safe to deploy — without SSH.
@@ -29,8 +30,8 @@ See the [Roadmap](../ROADMAP.md) for what's coming next.
 ## Prerequisites
 
 - A **server you control** that runs **Docker** — a cheap VPS, a bare-metal box, anything on
-  **Ubuntu 22.04 / 24.04 LTS** with ≥ 1 vCPU / 1 GiB RAM. Ports **80** and **443** should be
-  reachable for custom domains + SSL.
+  **Ubuntu 22.04 / 24.04 LTS** with ≥ 1 vCPU / 1 GiB RAM. Port **80** should be reachable for app
+  traffic and custom domains; **443** is reserved for the automatic SSL that's on the roadmap.
 - The **Plorigo control plane** running somewhere your server can reach. For the alpha you run it
   yourself locally — follow [development.md](./development.md) (Postgres + `make dev` + the
   dashboard). A one-command Docker Compose self-host is on the roadmap.
@@ -49,8 +50,9 @@ See the [Roadmap](../ROADMAP.md) for what's coming next.
    **Production Readiness Doctor** on the service page flags placeholder values and other gaps.
 5. **Deploy.** Watch the **deploy timeline** and **build/runtime logs**. If it fails, you get a
    **plain-English summary** of why (with the raw logs one click away).
-6. **Add a domain (optional).** Add a custom hostname, point the DNS record it shows you, and SSL
-   is issued automatically.
+6. **Add a domain (optional).** Add a custom hostname and point the DNS record it shows you; once it
+   verifies, Plorigo routes traffic to your app. **Domains are HTTP-only for now — automatic SSL is
+   on the roadmap.**
 7. **Roll back if needed.** Any previous healthy version is one click away — the current release
    keeps serving until the rollback passes its health check.
 
@@ -71,6 +73,8 @@ Being honest about what's *not* there yet:
   fresh one (persistent volumes are a later release).
 - **Backups** are **local-disk and manual** for now — no off-server (S3) destination or schedules
   yet; restore is a minimal smoke path.
+- **No automatic SSL yet.** Custom domains route over **HTTP**; HTTPS / automatic certificates are on
+  the roadmap.
 - **No preview environments** (per-branch / per-PR) yet, and **no auto-deploy on push** — click
   Redeploy to ship the latest commit.
 - **Teams** are basic; advanced roles, approvals, and the AI/MCP gateway are later phases.

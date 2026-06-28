@@ -55,7 +55,8 @@ deployments (and backups) as failed.
 ## A custom domain stays "pending"
 
 - Add the exact **DNS record** shown on the service's domain panel at your DNS provider, then click
-  **Verify**. SSL is issued automatically once the domain resolves to your server.
+  **Verify**. Once it resolves to your server, the domain goes **active** and serves over **HTTP**
+  (automatic SSL is on the roadmap).
 
 ## A managed database lost its data after a redeploy
 
