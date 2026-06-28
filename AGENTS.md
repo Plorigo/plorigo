@@ -60,6 +60,7 @@ public too. When writing or expanding documentation:
 | The **dashboard** (React/Vite/TanStack/Tailwind/shadcn, realtime UI) | [docs/architecture/dashboard.md](./docs/architecture/dashboard.md) |
 | **Auth** (login/registration, sessions, API tokens, RBAC) or the **authorization (policy) seam** | [docs/architecture/auth.md](./docs/architecture/auth.md) |
 | **Secrets, audit, permissions/approvals, or the AI/MCP gateway** | [docs/architecture/security.md](./docs/architecture/security.md) |
+| The **Production Readiness Doctor** (deterministic readiness checks for a service/environment) | [docs/architecture/readiness.md](./docs/architecture/readiness.md) |
 | **Database backups** (agent-driven `pg_dump`, the backup job model, destinations) | [docs/architecture/backups.md](./docs/architecture/backups.md) |
 | Coding style, commits, testing, or generated code | [docs/conventions.md](./docs/conventions.md) |
 | Reporting a vulnerability (process, not design) | [SECURITY.md](./SECURITY.md) |

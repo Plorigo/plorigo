@@ -17,6 +17,7 @@ const controlPlaneServices = [
   "ServerService",
   "ServerSetupService",
   "SourceService",
+  "ReadinessService",
   "AgentService",
 ];
 

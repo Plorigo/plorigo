@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// The Production Readiness Doctor: a deterministic, read-only checklist that tells a user
+// whether a service (or a whole environment) is safe to launch to production. Every check is
+// computed on demand from current platform state — it is never stored — and explains, in plain
+// English, what to fix next. v1 reads only configuration and deployment/server/domain STATE; it
+// does not scan source code or logs for secrets (that would be heuristic and non-deterministic).
+// See docs/architecture/readiness.md.
+
+// ReadinessCheck is one deterministic check over current state.
+message ReadinessCheck {
+  // category groups the check: "deployment" | "config" | "domain" | "server" | "backup".
+  string category = 1;
+  // severity ranks how much the check should block a production launch:
+  // "critical" (block by default) | "warning" (proceed with acknowledgement) | "info".
+  string severity = 2;
+  // state is the outcome: "pass" | "warn" | "fail" | "unknown".
+  string state = 3;
+  // title is a short label, e.g. "Latest deployment".
+  string title = 4;
+  // detail is a plain-English explanation of the current state.
+  string detail = 5;
+  // remediation is what to do next; empty when state is "pass".
+  string remediation = 6;
+}
+
+// ReadinessChecklist aggregates the checks into one verdict.
+message ReadinessChecklist {
+  // overall_level: "ready" | "almost_ready" | "not_ready". Derived deterministically: any
+  // critical check that fails => not_ready; else any check that warns => almost_ready; else ready.
+  string overall_level = 1;
+  repeated ReadinessCheck checks = 2;
+}
+
+message GetServiceReadinessRequest {
+  string service_id = 1;
+}
+
+message GetServiceReadinessResponse {
+  ReadinessChecklist checklist = 1;
+}
+
+message GetEnvironmentReadinessRequest {
+  string environment_id = 1;
+}
+
+message GetEnvironmentReadinessResponse {
+  ReadinessChecklist checklist = 1;
+}
+
+// ReadinessService answers readiness for a single service or a whole environment. Read-only and
+// policy-authorized (ActionReadinessRead), like the other read RPCs.
+service ReadinessService {
+  rpc GetServiceReadiness(GetServiceReadinessRequest) returns (GetServiceReadinessResponse);
+  rpc GetEnvironmentReadiness(GetEnvironmentReadinessRequest) returns (GetEnvironmentReadinessResponse);
+}
