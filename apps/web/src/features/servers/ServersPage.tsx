@@ -159,14 +159,21 @@ export function ServersPage() {
             );
             const trackedRun = server.id ? managedRuns[server.id] : undefined;
             return (
-              <Panel key={server.id ?? server.name} className="p-4">
+              <Panel
+                key={server.id ?? server.name}
+                className={cn(
+                  "relative p-4",
+                  server.id &&
+                    "cursor-pointer transition hover:-translate-y-0.5 hover:shadow-card-hover",
+                )}
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     {server.id ? (
                       <Link
                         to="/servers/$serverId"
                         params={{ serverId: server.id }}
-                        className="truncate text-sm font-semibold text-foreground hover:underline"
+                        className="truncate text-sm font-semibold text-foreground hover:underline before:absolute before:inset-0 before:rounded-xl focus-visible:outline-none focus-visible:before:ring-2 focus-visible:before:ring-ring"
                       >
                         {server.name}
                       </Link>
@@ -206,7 +213,7 @@ export function ServersPage() {
                   <span className="text-xs text-muted-foreground">{lastSeenLabel(server.lastSeen)}</span>
                 </div>
                 {server.id && (
-                  <div className="mt-3">
+                  <div className="relative z-10 mt-3">
                     <ServerCardActions
                       serverId={server.id}
                       serverName={server.name}
