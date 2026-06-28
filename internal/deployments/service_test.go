@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/plorigo/plorigo/internal/platform/authz"
@@ -45,7 +46,7 @@ type fakeStore struct {
 	credAgentID, credServerID string
 	credOK                    bool
 
-	env map[string]string
+	config []ConfigForDeploy
 
 	inserted    NewDeployment
 	insertedGit NewDeploymentFromGit
@@ -84,8 +85,8 @@ func (f *fakeStore) WorkspaceForProject(_ context.Context, _ string) (string, bo
 func (f *fakeStore) AgentServerByCredential(_ context.Context, _ []byte) (string, string, bool, error) {
 	return f.credAgentID, f.credServerID, f.credOK, nil
 }
-func (f *fakeStore) EnvVarsForService(_ context.Context, _ string) (map[string]string, error) {
-	return f.env, nil
+func (f *fakeStore) ConfigForService(_ context.Context, _ string) ([]ConfigForDeploy, error) {
+	return f.config, nil
 }
 func (f *fakeStore) ServiceForDeploy(_ context.Context, _ string) (ServiceForDeploy, bool, error) {
 	return f.svc, f.svcOK, nil
@@ -205,8 +206,18 @@ func authedCtx() context.Context {
 }
 
 func newSvc(store Store, authorizer authz.Authorizer, rec Recorder) *service {
-	return newService(fakeTx{}, store, authorizer, rec, slog.Default())
+	return newService(fakeTx{}, store, authorizer, rec, fakeOpener{}, slog.Default())
 }
+
+// fakeOpener returns the sealed bytes with a "sealed:" prefix stripped, mirroring fakeSealer
+// in the config module, so a deploy-time secret decrypts to a recognizable plaintext.
+type fakeOpener struct{}
+
+func (fakeOpener) Open(sealed []byte) ([]byte, error) {
+	return []byte(strings.TrimPrefix(string(sealed), "sealed:")), nil
+}
+
+func strptr(s string) *string { return &s }
 
 func wantKind(t *testing.T, err error, kind problem.Kind) {
 	t.Helper()
@@ -382,6 +393,100 @@ func TestCreateForService_RejectsPrivateGit(t *testing.T) {
 	}
 }
 
+func TestRollbackToDeployment_ImageReproducesArtifactAndLinks(t *testing.T) {
+	store := &fakeStore{
+		getOK: true,
+		getDep: Deployment{
+			ID: testDeployID, ServiceID: testServiceID, EnvironmentID: testEnvID,
+			ProjectID: testProjectID, WorkspaceID: testWorkspace, ServerID: testServerID,
+			ImageRef: "traefik/whoami:latest", ContainerPort: 80,
+			Status: StatusSuperseded, SourceKind: SourceImage,
+		},
+	}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, fakeAuthz{}, rec)
+
+	if _, err := svc.RollbackToDeployment(authedCtx(), testDeployID); err != nil {
+		t.Fatalf("rollback failed: %v", err)
+	}
+	if store.inserted.RolledBackFrom != testDeployID {
+		t.Errorf("rolled_back_from = %q, want target id %q", store.inserted.RolledBackFrom, testDeployID)
+	}
+	if store.inserted.ImageRef != "traefik/whoami:latest" || store.inserted.ContainerPort != 80 {
+		t.Errorf("inserted = %+v, want the target's image + port reproduced", store.inserted)
+	}
+	if store.inserted.ServiceID != testServiceID || store.inserted.ServerID != testServerID {
+		t.Errorf("inserted scope = %+v, want the same service + server", store.inserted)
+	}
+	if rec.action != "deployment.rollback" {
+		t.Errorf("audit action = %q, want deployment.rollback", rec.action)
+	}
+}
+
+func TestRollbackToDeployment_GitPinsToBuiltCommit(t *testing.T) {
+	store := &fakeStore{
+		getOK: true,
+		getDep: Deployment{
+			ID: testDeployID, ServiceID: testServiceID, EnvironmentID: testEnvID,
+			ProjectID: testProjectID, WorkspaceID: testWorkspace, ServerID: testServerID,
+			ContainerPort: 3000, Status: StatusRunning,
+			SourceKind: SourceGit, SourceAccess: "public",
+			CloneURL: "https://github.com/o/r.git", GitRef: "main", CommitSha: "deadbeefcafe",
+		},
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+
+	if _, err := svc.RollbackToDeployment(authedCtx(), testDeployID); err != nil {
+		t.Fatalf("rollback failed: %v", err)
+	}
+	g := store.insertedGit
+	if g.RolledBackFrom != testDeployID {
+		t.Errorf("rolled_back_from = %q, want %q", g.RolledBackFrom, testDeployID)
+	}
+	// Pin to the exact commit the target built, not its branch, so the rebuild is reproducible.
+	if g.GitRef != "deadbeefcafe" {
+		t.Errorf("git ref = %q, want the built commit", g.GitRef)
+	}
+	if g.CloneURL != "https://github.com/o/r.git" || g.SourceAccess != "public" || g.ContainerPort != 3000 {
+		t.Errorf("inserted git = %+v, want the target's repo/access/port reproduced", g)
+	}
+}
+
+func TestRollbackToDeployment_RejectsUnhealthyTarget(t *testing.T) {
+	store := &fakeStore{
+		getOK:  true,
+		getDep: Deployment{ID: testDeployID, WorkspaceID: testWorkspace, Status: StatusFailed, SourceKind: SourceImage, ImageRef: "x:latest"},
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+
+	_, err := svc.RollbackToDeployment(authedCtx(), testDeployID)
+	wantKind(t, err, problem.KindInvalidInput)
+	if store.inserted.ServiceID != "" || store.insertedGit.ServiceID != "" {
+		t.Error("rollback inserted a deployment for a non-healthy target")
+	}
+}
+
+func TestRollbackToDeployment_DeniedWritesNothing(t *testing.T) {
+	store := &fakeStore{
+		getOK:  true,
+		getDep: Deployment{ID: testDeployID, WorkspaceID: testWorkspace, Status: StatusRunning, SourceKind: SourceImage, ImageRef: "x:latest", ContainerPort: 80},
+	}
+	rec := &fakeRecorder{}
+	svc := newSvc(store, fakeAuthz{err: problem.PermissionDenied("nope")}, rec)
+
+	_, err := svc.RollbackToDeployment(authedCtx(), testDeployID)
+	wantKind(t, err, problem.KindPermissionDenied)
+	if store.inserted.ServiceID != "" || rec.called {
+		t.Error("denied rollback wrote a deployment or an audit row")
+	}
+}
+
+func TestRollbackToDeployment_NotFound(t *testing.T) {
+	svc := newSvc(&fakeStore{getOK: false}, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.RollbackToDeployment(authedCtx(), testDeployID)
+	wantKind(t, err, problem.KindNotFound)
+}
+
 func TestEnqueueFirstDeployment_InsertsWithinTx(t *testing.T) {
 	store := &fakeStore{svc: imageService(), svcOK: true}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
@@ -409,8 +514,15 @@ func TestPollDeployment_ClaimsJobWithServiceLabelAndNetwork(t *testing.T) {
 		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
 		claimDep: Deployment{ID: testDeployID, ServiceID: testServiceID, EnvironmentID: testEnvID, ImageRef: "img:latest", ContainerPort: 8080},
 		claimOK:  true,
-		env:      map[string]string{"FOO": "bar"},
-		svc:      ServiceForDeploy{Slug: "api", Visibility: "private"}, svcOK: true,
+		config: []ConfigForDeploy{
+			// Environment-shared defaults; the service-level FOO overrides the env-shared one.
+			{Type: "variable", Scope: "environment", Key: "FOO", Value: strptr("env-default")},
+			{Type: "variable", Scope: "environment", Key: "SHARED", Value: strptr("from-env")},
+			{Type: "variable", Scope: "service", Key: "FOO", Value: strptr("bar")},
+			// A secret is decrypted at deploy time (fakeOpener strips the "sealed:" prefix).
+			{Type: "secret", Scope: "service", Key: "TOKEN", Ciphertext: []byte("sealed:s3cr3t")},
+		},
+		svc: ServiceForDeploy{Slug: "api", Visibility: "private"}, svcOK: true,
 	}
 	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
 
@@ -422,8 +534,19 @@ func TestPollDeployment_ClaimsJobWithServiceLabelAndNetwork(t *testing.T) {
 		t.Errorf("claimed = %+v, want the queued job", claimed)
 	}
 	// The app label is the SERVICE id (route + container key), not the environment id.
-	if claimed.AppLabel != testServiceID || claimed.Env["FOO"] != "bar" {
-		t.Errorf("claimed = %+v, want env + service app label", claimed)
+	if claimed.AppLabel != testServiceID {
+		t.Errorf("claimed = %+v, want the service app label", claimed)
+	}
+	// Service-level overrides environment-shared on a key collision; env-only keys pass
+	// through; secrets are decrypted into plaintext.
+	if claimed.Env["FOO"] != "bar" {
+		t.Errorf("FOO = %q, want service-level to override env-shared (bar)", claimed.Env["FOO"])
+	}
+	if claimed.Env["SHARED"] != "from-env" {
+		t.Errorf("SHARED = %q, want env-shared default", claimed.Env["SHARED"])
+	}
+	if claimed.Env["TOKEN"] != "s3cr3t" {
+		t.Errorf("TOKEN = %q, want decrypted secret plaintext", claimed.Env["TOKEN"])
 	}
 	if claimed.NetworkName != "plorigo-"+testEnvID || claimed.NetworkAlias != "api" || claimed.Visibility != "private" {
 		t.Errorf("claimed = %+v, want per-env network + slug alias + visibility", claimed)

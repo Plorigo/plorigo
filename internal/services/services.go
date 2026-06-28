@@ -117,6 +117,30 @@ type Result struct {
 	DeploymentID string
 }
 
+// DatabaseInput provisions a managed database service from a built-in template. The image and
+// port are control-plane-chosen (TemplateID selects which). The caller names the service, picks
+// where to run it, and may override the database name, the username, and the password — each is
+// optional and falls back to the template default (the password is generated when blank).
+type DatabaseInput struct {
+	EnvironmentID string
+	Name          string
+	TemplateID    string // "postgres"
+	DatabaseName  string // optional; defaults to the template's database
+	Username      string // optional; defaults to the template's user
+	Password      string // optional; a strong password is generated when blank
+	ServerID      string
+	DeployNow     bool
+}
+
+// DatabaseResult is what CreateDatabase returns: the new (private) service, its first
+// deployment id when DeployNow enqueued one, and the connection URI assembled from the
+// generated credentials (returned so the dashboard can surface it).
+type DatabaseResult struct {
+	Service       Service
+	DeploymentID  string
+	ConnectionURI string
+}
+
 // DetectInput previews how a PUBLIC repo would build. Branch is optional (empty = default).
 type DetectInput struct {
 	RepoURL string
@@ -144,6 +168,7 @@ type Detection struct {
 // Servicer, not Service, because the domain entity is Service.)
 type Servicer interface {
 	CreateService(ctx context.Context, in CreateInput) (Result, error)
+	CreateDatabase(ctx context.Context, in DatabaseInput) (DatabaseResult, error)
 	GetService(ctx context.Context, id string) (Service, error)
 	ListByEnvironment(ctx context.Context, environmentID string) ([]Service, error)
 	ListByProject(ctx context.Context, projectID string) ([]Service, error)

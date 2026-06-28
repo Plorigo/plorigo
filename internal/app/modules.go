@@ -7,18 +7,18 @@ import (
 	"github.com/plorigo/plorigo/internal/agents"
 	"github.com/plorigo/plorigo/internal/audit"
 	"github.com/plorigo/plorigo/internal/auth"
+	"github.com/plorigo/plorigo/internal/config"
 	"github.com/plorigo/plorigo/internal/deployments"
 	"github.com/plorigo/plorigo/internal/domains"
 	"github.com/plorigo/plorigo/internal/environments"
-	"github.com/plorigo/plorigo/internal/envvars"
 	"github.com/plorigo/plorigo/internal/membership"
 	"github.com/plorigo/plorigo/internal/platform/crypto"
 	"github.com/plorigo/plorigo/internal/platform/github"
 	"github.com/plorigo/plorigo/internal/platform/mailer"
 	"github.com/plorigo/plorigo/internal/policy"
 	"github.com/plorigo/plorigo/internal/projects"
-	"github.com/plorigo/plorigo/internal/secrets"
 	"github.com/plorigo/plorigo/internal/servers"
+	"github.com/plorigo/plorigo/internal/serversetup"
 	"github.com/plorigo/plorigo/internal/services"
 	"github.com/plorigo/plorigo/internal/sources"
 )
@@ -56,23 +56,19 @@ func (a *App) buildModules() error {
 		Log:    a.log,
 	})
 
-	// env vars are non-secret, per-environment config; like environments they
-	// authorize/audit against the workspace resolved through environment -> project.
-	a.envvars = envvars.New(envvars.Deps{
-		DB:     a.db,
-		Audit:  auditSvc,
-		Policy: policySvc,
-		Log:    a.log,
-	})
-
-	// secrets are the encrypted, write-only counterpart to env vars: same
-	// environment-scoping, but values are sealed at rest by the crypto box (keyed by
-	// APP_MASTER_KEY). A bad master key fails here, before the server starts.
+	// The crypto box seals secret values at rest (AES-256-GCM, keyed by APP_MASTER_KEY) and
+	// opens them at deploy time. A bad master key fails here, before the server starts. It is
+	// reused by config (seal), deployments (open), and sources/services (OAuth token sealing).
 	box, err := crypto.NewBox(a.cfg.MasterKey)
 	if err != nil {
 		return err
 	}
-	a.secrets = secrets.New(secrets.Deps{
+
+	// config is unified configuration: variables (plaintext, readable) and secrets
+	// (encrypted, write-only) at service or environment scope. It authorizes/audits against
+	// the workspace resolved through the service or the environment's project, and seals
+	// secret values with the crypto box.
+	a.config = config.New(config.Deps{
 		DB:     a.db,
 		Audit:  auditSvc,
 		Policy: policySvc,
@@ -89,6 +85,19 @@ func (a *App) buildModules() error {
 		Log:    a.log,
 	})
 
+	// serversetup owns the persistent SSH management credential for a server (the
+	// dashboard-managed setup/repair channel). The private key is sealed at rest by the
+	// same crypto box as secrets (reused here) and is write-only; the module governs its
+	// lifecycle (provision/rotate/revoke), authorized/audited against the server's
+	// workspace. The actual SSH bootstrap runner is built on top of this later.
+	a.serversetup = serversetup.New(serversetup.Deps{
+		DB:     a.db,
+		Audit:  auditSvc,
+		Policy: policySvc,
+		Crypto: box,
+		Log:    a.log,
+	})
+
 	// agents are the control-plane side of the server agent: registration tokens,
 	// keys, and liveness. Server-scoped — the owning workspace is resolved from the
 	// server, then authorized/audited like servers. PublicURL + Dev shape the install
@@ -102,6 +111,22 @@ func (a *App) buildModules() error {
 		Log:       a.log,
 	})
 
+	// serversetup owns the dashboard-managed SSH setup run AND the persistent management
+	// credential it provisions. The private key is sealed by the same crypto box as secrets;
+	// the run drives the shared installer over SSH (via its own dialer) and waits on the agent
+	// through an adapter over the agents module (so serversetup never imports it). Built after
+	// agents because it depends on them.
+	a.serversetup = serversetup.New(serversetup.Deps{
+		DB:        a.db,
+		Audit:     auditSvc,
+		Policy:    policySvc,
+		Crypto:    box,
+		Log:       a.log,
+		Dialer:    serversetup.NewSSHDialer(),
+		Agents:    agentSetupAdapter{agents: a.agents.Service(), now: time.Now},
+		PublicURL: a.cfg.PublicURL,
+	})
+
 	// deployments record an attempt to run an image in an environment on a server and
 	// dispatch it to that server's agent. Environment-scoped like env vars (workspace
 	// resolved through environment -> project); also serves the agent-facing
@@ -110,6 +135,9 @@ func (a *App) buildModules() error {
 		DB:     a.db,
 		Audit:  auditSvc,
 		Policy: policySvc,
+		// Decrypts environment/service secrets at deploy time so their plaintext can be
+		// injected into the container (the same box that config seals them with).
+		Crypto: box,
 		Log:    a.log,
 	})
 
@@ -155,6 +183,7 @@ func (a *App) buildModules() error {
 		Crypto:   box,
 		GitHub:   github.NewClient(github.Config{}),
 		Enqueuer: a.deployments.Service(),
+		Config:   a.config.Service(),
 		Log:      a.log,
 	})
 

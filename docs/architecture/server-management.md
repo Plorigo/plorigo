@@ -61,8 +61,11 @@ The SSH channel is used for exactly two things:
    its systemd unit, and start it. This reuses the same installer the one-line path runs
    (`scripts/install-agent.sh`), which already prepares a bare Ubuntu LTS box (Docker, Caddy,
    directories, the systemd unit, and verification); the dashboard path drives it over SSH and
-   adds the non-root `plorigo` management user. (The managed-setup flow itself is a later step —
-   see [ROADMAP.md](../../ROADMAP.md).)
+   adds the non-root `plorigo` management user. The managed-setup **run** is implemented in
+   `internal/serversetup` (`ServerSetupService.StartSetup`): an asynchronous, audited job that
+   SSHes in, verifies the OS, drives the installer, provisions the `plorigo` user + sealed key,
+   and waits for the agent's first heartbeat, streaming redacted step status. The dashboard UI
+   that drives it is a later step — see [ROADMAP.md](../../ROADMAP.md).
 2. **Manage / repair** an existing server: re-run prerequisites, restart or recover a stuck
    agent, or rotate the management key.
 
@@ -243,10 +246,18 @@ status to the dashboard, plus management RPCs to **rotate**, **revoke**, and **i
 
 ### Security review — residual risk
 
-Bare-server preparation has shipped in the one-line installer (`scripts/install-agent.sh`); the
-implementation work that still follows this model — storing the management credential and running
-setup over SSH (see [ROADMAP.md](../../ROADMAP.md)) — carries the risk that remains. Each of the
-following must get **explicit security review** before it ships:
+Bare-server preparation has shipped in the one-line installer (`scripts/install-agent.sh`), and
+encrypted storage of the management credential — sealed private key, fingerprint, last-used,
+rotation and revocation state, with workspace-scoped authorization and an audit record for every
+provision, use, rotation, revocation, and failed auth — has shipped in the `internal/serversetup`
+module (write-only: no RPC returns the private key). The **bootstrap run over SSH** has now
+shipped too (`ServerSetupService.StartSetup`): it connects with the one-time bootstrap
+credential (held in memory only, never stored), pins the host key on first connect (TOFU,
+refusing a later mismatch), drives the installer, installs the `plorigo` `authorized_keys`
+entry and a scoped sudoers drop-in, and audits each step. What still follows this model —
+**repair flows** and removing the `authorized_keys` entry on revoke over SSH — carries the
+risk that remains. Each of the following has, or must get, **explicit security review** before
+it ships:
 
 - **The installer's package sources** — Docker and Caddy are installed from their official apt
   repositories with pinned, `signed-by=` keyrings under `/etc/apt/keyrings`; the repo and key URLs
