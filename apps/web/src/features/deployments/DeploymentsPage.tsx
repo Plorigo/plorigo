@@ -143,8 +143,11 @@ function DeploymentsDemo() {
       </div>
 
       <FailureSummary
-        headline="Queue Worker failed to start on staging — the health check never passed."
-        suggestion="The container exited before binding its port. This usually means a missing environment variable or a crash on boot. Check REDIS_URL, then redeploy — the previous release is still serving."
+        headline="Queue Worker didn't become healthy on staging"
+        explanation="The container started but never accepted connections on its port within the health-check window."
+        fix="Check REDIS_URL and that the worker binds its port, then redeploy. The previous release keeps serving."
+        failedPhase="Health check"
+        logStreamLabel="runtime"
         logs={[
           "14:21:03  worker   Error: connect ECONNREFUSED 127.0.0.1:6379",
           "14:21:03  worker   at TCPConnectWrap.afterConnect [as oncomplete]",
