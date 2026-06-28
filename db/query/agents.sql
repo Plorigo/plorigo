@@ -39,17 +39,25 @@ RETURNING id, server_id, workspace_id, agent_version, docker_available, docker_v
 -- the agent when the hash matches.
 -- name: HeartbeatAgent :one
 UPDATE agents
-SET last_seen_at     = now(),
-    agent_version    = $2,
-    docker_available = $3,
-    docker_version   = $4,
-    os               = $5,
-    arch             = $6
+SET last_seen_at        = now(),
+    agent_version       = $2,
+    docker_available    = $3,
+    docker_version      = $4,
+    os                  = $5,
+    arch                = $6,
+    caddy_available     = $7,
+    caddy_running       = $8,
+    caddy_version       = $9,
+    disk_total_bytes    = $10,
+    disk_free_bytes     = $11,
+    mem_total_bytes     = $12,
+    mem_available_bytes = $13,
+    cpu_count           = $14
 WHERE credential_hash = $1
-RETURNING id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, last_seen_at, created_at;
+RETURNING id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, caddy_available, caddy_running, caddy_version, disk_total_bytes, disk_free_bytes, mem_total_bytes, mem_available_bytes, cpu_count, last_seen_at, created_at;
 
 -- name: ListAgentsByWorkspace :many
-SELECT id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, last_seen_at, created_at
+SELECT id, server_id, workspace_id, agent_version, docker_available, docker_version, os, arch, caddy_available, caddy_running, caddy_version, disk_total_bytes, disk_free_bytes, mem_total_bytes, mem_available_bytes, cpu_count, last_seen_at, created_at
 FROM agents
 WHERE workspace_id = $1
 ORDER BY created_at DESC;

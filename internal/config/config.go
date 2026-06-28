@@ -16,6 +16,8 @@ package config
 import (
 	"context"
 	"time"
+
+	"github.com/plorigo/plorigo/internal/platform/database"
 )
 
 // Type is whether an entry's value is readable plaintext or an encrypted secret.
@@ -82,4 +84,11 @@ type Service interface {
 	// across the service's environment.
 	ListForService(ctx context.Context, serviceID string) ([]Entry, error)
 	Delete(ctx context.Context, in DeleteInput) error
+	// SetWithinTx writes service-scoped configuration VARIABLES inside the CALLER's
+	// transaction, for the services module provisioning a managed service's generated
+	// config (e.g. a database's credentials) so the config and the service row commit
+	// together. It performs NO authorization (the caller has already authorized the service
+	// create) and logs nothing (values may be credentials). Keys are validated and values
+	// bounded just as Set does.
+	SetWithinTx(ctx context.Context, tx database.Tx, serviceID string, vars map[string]string) error
 }

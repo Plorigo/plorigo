@@ -219,6 +219,16 @@ The installer is covered at three levels:
   plorigo-agent` is `active`, the server flips **online** in the dashboard, and a **re-run is
   idempotent** (rotates the token, stays online). Record the exact images/commands in the PR.
 
+### Fresh-VPS → first-app release gate
+
+The full release gate — a bare VPS reaching a **reachable app** through *both* the manual and the
+dashboard-managed SSH paths — is the manual procedure in
+[docs/verification/fresh-vps-e2e.md](./verification/fresh-vps-e2e.md), driven by
+`make e2e-fresh-vps` (`scripts/e2e-fresh-vps.sh`). It needs two real VPSes and a publicly-reachable
+control plane, so it is **not** in CI; only its driver logic and secret redaction are
+(`internal/app/e2e_fresh_vps_shim_test.go`, in `make test`). Run `E2E_DRYRUN=1 make e2e-fresh-vps`
+to print the plan, then record the run in the gating PR.
+
 ### Releasing the agent
 
 Prebuilt agent binaries are published as **GitHub Release assets** so the one-line installer can

@@ -104,6 +104,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) error {
 
 	client := agentv1connect.NewAgentServiceClient(http.DefaultClient, opts.ControlPlaneURL)
 	deployClient := agentv1connect.NewDeployServiceClient(http.DefaultClient, opts.ControlPlaneURL)
+	backupClient := agentv1connect.NewBackupServiceClient(http.DefaultClient, opts.ControlPlaneURL)
 
 	st, err := loadState(opts.DataDir)
 	if err != nil {
@@ -132,11 +133,13 @@ func Run(ctx context.Context, out io.Writer, opts Options) error {
 	// failed with a clear message, rather than going down.
 	dk, derr := newDockerClient()
 	var runtime deploymentRuntime
-	var prober dockerProber // left nil when the client can't be built, so health reports Docker unavailable
+	var backupRT backupRuntime // nil when Docker can't be built, so backups report Docker unavailable
+	var prober dockerProber    // left nil when the client can't be built, so health reports Docker unavailable
 	if derr != nil {
 		fmt.Fprintf(out, "warning: Docker is unavailable; deployments will be reported as failed: %v\n", derr)
 	} else {
 		runtime = dk
+		backupRT = dk
 		prober = dk
 	}
 	defer dk.close()
@@ -149,15 +152,19 @@ func Run(ctx context.Context, out io.Writer, opts Options) error {
 	// context ends, so if any returns, cancel the siblings and wait for all to unwind.
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	errc := make(chan error, 4)
+	errc := make(chan error, 5)
 	go func() { errc <- heartbeatLoop(loopCtx, out, client, ident, prober, opts) }()
 	go func() { errc <- deployLoop(loopCtx, out, deployClient, ident, runtime, router, opts.PollInterval) }()
 	go func() { errc <- runtimeLogLoop(loopCtx, out, deployClient, ident, runtime, defaultRuntimeLogInterval) }()
 	go func() {
 		errc <- routeSyncLoop(loopCtx, out, deployClient, ident, runtime, router, defaultRouteSyncInterval)
 	}()
+	go func() {
+		errc <- backupLoop(loopCtx, out, backupClient, ident, backupRT, opts.DataDir, defaultBackupPollInterval)
+	}()
 	first := <-errc
 	cancel()
+	<-errc
 	<-errc
 	<-errc
 	<-errc
@@ -201,15 +208,23 @@ func heartbeatLoop(ctx context.Context, out io.Writer, client agentv1connect.Age
 	reregisterTried := false
 	for {
 		st := ident.get()
-		facts := collectHealth(ctx, prober)
+		facts := collectHealth(ctx, prober, opts)
 		resp, err := client.Heartbeat(ctx, connect.NewRequest(&agentv1.HeartbeatRequest{
-			AgentId:         st.AgentID,
-			Credential:      st.Credential,
-			AgentVersion:    Version,
-			DockerAvailable: facts.DockerAvailable,
-			DockerVersion:   facts.DockerVersion,
-			Os:              facts.OS,
-			Arch:            facts.Arch,
+			AgentId:           st.AgentID,
+			Credential:        st.Credential,
+			AgentVersion:      Version,
+			DockerAvailable:   facts.DockerAvailable,
+			DockerVersion:     facts.DockerVersion,
+			Os:                facts.OS,
+			Arch:              facts.Arch,
+			CaddyAvailable:    facts.CaddyAvailable,
+			CaddyRunning:      facts.CaddyRunning,
+			CaddyVersion:      facts.CaddyVersion,
+			DiskTotalBytes:    facts.diskTotalBytes,
+			DiskFreeBytes:     facts.diskFreeBytes,
+			MemTotalBytes:     facts.memTotalBytes,
+			MemAvailableBytes: facts.memAvailableBytes,
+			CpuCount:          uint32(facts.CPUCount),
 		}))
 		if err != nil {
 			if ctx.Err() != nil {

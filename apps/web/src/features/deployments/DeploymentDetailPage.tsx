@@ -1,24 +1,55 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
-import { Link, useParams } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ConnectError } from "@connectrpc/connect";
+import { Link, useNavigate, useParams } from "@tanstack/react-router";
+import { ArrowLeft, RotateCcw } from "lucide-react";
+import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { FailureSummary } from "@/components/FailureSummary";
 import { Timeline } from "@/components/Timeline";
-import { Badge, EmptyState, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
+import { Badge, Button, EmptyState, Panel, PanelHeader, Skeleton, StatusDot } from "@/components/ui";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { DeploymentEvent } from "@/gen/controlplane/v1/deployments_pb";
+import { deploymentClient } from "@/lib/clients";
 import { useEffectiveProjectId } from "@/lib/projectScope";
 import { isTerminalDeploymentStatus, useDeployment, useDeploymentEvents } from "@/lib/queries";
 import { statusTone } from "@/lib/status";
+import { classifyFailure } from "./failure";
 import { deploymentRefLabel, deploymentTimeline, shortRepoUrl } from "./timeline";
 
 export function DeploymentDetailPage() {
   const { deploymentId } = useParams({ strict: false }) as { deploymentId?: string };
   const id = deploymentId ?? "";
   const projectId = useEffectiveProjectId();
+  const navigate = useNavigate();
+  const [rollingBack, setRollingBack] = useState(false);
   const dep = useDeployment(id);
   const live = !dep.data || !isTerminalDeploymentStatus(dep.data.status);
   const events = useDeploymentEvents(id, live);
+  const logsRef = useRef<HTMLDivElement>(null);
+  // The log tab is controlled so the failure summary can switch the user straight to the
+  // stream that explains the failure; null = follow defaultLogTab.
+  const [logTab, setLogTab] = useState<string | null>(null);
+
+  // Rolling back reproduces this deployment's artifact as a new deployment that goes through
+  // the normal health-check/route-switch flow, so the current running release stays up until
+  // the rollback is healthy. Navigate to the new deployment to watch it.
+  async function rollback() {
+    setRollingBack(true);
+    try {
+      const { deployment } = await deploymentClient.rollbackDeployment({ targetDeploymentId: id });
+      if (!deployment) throw new Error("the rollback deployment was not created");
+      toast.success("Rolling back to this version");
+      if (projectId) {
+        void navigate({ to: "/projects/$projectId/deployments/$deploymentId", params: { projectId, deploymentId: deployment.id } });
+      } else {
+        void navigate({ to: "/deployments/$deploymentId", params: { deploymentId: deployment.id } });
+      }
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not start the rollback");
+      setRollingBack(false);
+    }
+  }
 
   if (dep.isLoading && !dep.data) {
     return (
@@ -47,12 +78,23 @@ export function DeploymentDetailPage() {
   // distinction, so they fall back into the build view.
   const buildLogs = allLogs.filter((e) => e.stream === "build" || e.stream === "");
   const runtimeLogs = allLogs.filter((e) => e.stream === "runtime");
-  const failedBecauseCaddy = /caddy/i.test(d.message);
-  // On failure, show the tail of whichever stream is relevant: a container/health failure
-  // has runtime output; a build-phase failure has only build output.
-  const failureTail = (runtimeLogs.length > 0 ? runtimeLogs : buildLogs).slice(-6).map((l) => l.message);
+  // Classify a failure into a plain-English summary + the log stream that explains it (see
+  // ./failure). failedPhase names the timeline step that failed, so the summary ties back to it.
+  const failure = d.status === "failed" ? classifyFailure(d.message, d.sourceKind) : null;
+  const failedPhase = steps.find((s) => s.status === "failed")?.label;
+  // Show the tail of the stream the failure points to, falling back to whichever has output.
+  const failureStreamLogs = failure?.stream === "runtime" ? runtimeLogs : buildLogs;
+  const failureTail = (failureStreamLogs.length > 0 ? failureStreamLogs : runtimeLogs.length > 0 ? runtimeLogs : buildLogs)
+    .slice(-6)
+    .map((l) => l.message);
   // Default to runtime logs once the app is up; otherwise watch the build/deploy output.
   const defaultLogTab = d.status === "running" || d.status === "superseded" ? "runtime" : "build";
+
+  // viewFailureLogs jumps to the log stream that explains the failure and scrolls it into view.
+  function viewFailureLogs() {
+    if (failure) setLogTab(failure.stream);
+    logsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   return (
     <div className="space-y-6">
@@ -66,18 +108,33 @@ export function DeploymentDetailPage() {
           </div>
           <p className="mt-1.5 text-sm text-muted-foreground">Deployment {d.id.slice(0, 8)}</p>
         </div>
+        {/* A superseded deployment is a previous healthy version, so it can be rolled back to. */}
+        {d.status === "superseded" && (
+          <ConfirmDialog
+            trigger={
+              <Button size="sm" variant="secondary" disabled={rollingBack} className="shrink-0">
+                <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                {rollingBack ? "Rolling back…" : "Roll back to this version"}
+              </Button>
+            }
+            title="Roll back to this version?"
+            description="This redeploys this version's exact build as a new deployment. It goes live only after it passes its health check."
+            recovery="Your current running release stays up until the rollback is healthy, and every version remains in the deployment history."
+            confirmLabel="Roll back"
+            onConfirm={rollback}
+          />
+        )}
       </div>
 
-      {d.status === "failed" && (
+      {failure && (
         <FailureSummary
-          headline={d.message || "The deployment failed."}
-          suggestion={
-            failedBecauseCaddy
-              ? "The app built and started, but the agent could not update Caddy. Install Caddy on the server or set the agent's Caddy binary path, then deploy again — any previous running release is kept."
-              : isGit
-                ? "The build or container did not succeed. Check that the repo has a Dockerfile at its root and that the app listens on the container port you set, then deploy again — any previous running release is kept."
-                : "The container did not reach a healthy state or Caddy could not route traffic. Check the image reference, app port, and Caddy service, then deploy again — any previous running release is kept."
-          }
+          headline={failure.headline}
+          explanation={failure.explanation}
+          fix={failure.fix}
+          failedPhase={failedPhase}
+          rawMessage={d.message && d.message !== failure.explanation ? d.message : undefined}
+          logStreamLabel={failure.stream}
+          onViewLogs={viewFailureLogs}
           logs={failureTail}
         />
       )}
@@ -86,7 +143,7 @@ export function DeploymentDetailPage() {
         <Panel>
           <PanelHeader
             title="Timeline"
-            description={isGit ? "Clone → build → start → route → running." : "Pull → start → health check → route → running."}
+            description={isGit ? "Clone → build → start → health check → route → running." : "Pull → start → health check → route → running."}
           />
           <div className="p-5">
             <Timeline steps={steps} />
@@ -97,6 +154,7 @@ export function DeploymentDetailPage() {
           <PanelHeader title="Details" />
           <div className="space-y-3 p-4 text-sm">
             <Row label="Status" value={<Badge tone={statusTone(d.status)}>{d.status}</Badge>} />
+            {d.rolledBackFrom && <Row label="Rolled back from" value={<DeploymentRef id={d.rolledBackFrom} projectId={projectId} />} />}
             <Row
               label="Host port"
               value={
@@ -153,8 +211,8 @@ export function DeploymentDetailPage() {
 
       <Panel>
         <PanelHeader title="Logs" description="Build and runtime output, streamed from the deploy agent." />
-        <div className="p-4">
-          <Tabs defaultValue={defaultLogTab}>
+        <div className="p-4" ref={logsRef}>
+          <Tabs value={logTab ?? defaultLogTab} onValueChange={setLogTab}>
             <TabsList>
               <TabsTrigger value="build">Build{buildLogs.length > 0 ? ` (${buildLogs.length})` : ""}</TabsTrigger>
               <TabsTrigger value="runtime">Runtime{runtimeLogs.length > 0 ? ` (${runtimeLogs.length})` : ""}</TabsTrigger>
@@ -259,6 +317,24 @@ function formatLogTime(iso: string): string {
   return [date.getHours(), date.getMinutes(), date.getSeconds()]
     .map((part) => String(part).padStart(2, "0"))
     .join(":");
+}
+
+// DeploymentRef links to another deployment's detail page, project-scoped when we are in a
+// project context. Used to point a rollback back at the version it restored.
+function DeploymentRef({ id, projectId }: { id: string; projectId: string }) {
+  const className = "font-mono text-blue-400 hover:text-blue-300 hover:underline";
+  if (projectId) {
+    return (
+      <Link to="/projects/$projectId/deployments/$deploymentId" params={{ projectId, deploymentId: id }} className={className}>
+        {id.slice(0, 8)}
+      </Link>
+    );
+  }
+  return (
+    <Link to="/deployments/$deploymentId" params={{ deploymentId: id }} className={className}>
+      {id.slice(0, 8)}
+    </Link>
+  );
 }
 
 function Row({ label, value }: { label: string; value: ReactNode }) {

@@ -46,6 +46,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionDomainRead:           true,
 		authz.ActionDomainVerify:         true,
 		authz.ActionDomainDelete:         true,
+		authz.ActionBackupCreate:         true,
+		authz.ActionBackupRead:           true,
+		authz.ActionReadinessRead:        true,
 		authz.ActionServerSetupRun:       true,
 		authz.ActionServerSetupKeyRotate: true,
 		authz.ActionServerSetupKeyRevoke: true,
@@ -81,6 +84,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionDomainRead:           true,
 		authz.ActionDomainVerify:         true,
 		authz.ActionDomainDelete:         true,
+		authz.ActionBackupCreate:         true,
+		authz.ActionBackupRead:           true,
+		authz.ActionReadinessRead:        true,
 		authz.ActionServerSetupRun:       true,
 		authz.ActionServerSetupKeyRotate: true,
 		authz.ActionServerSetupKeyRevoke: true,
@@ -112,6 +118,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionDomainRead:        true,
 		authz.ActionDomainVerify:      true,
 		authz.ActionDomainDelete:      true,
+		authz.ActionBackupCreate:      true,
+		authz.ActionBackupRead:        true,
+		authz.ActionReadinessRead:     true,
 		// A member can connect a server via the self-serve install, but managed SSH setup
 		// (provisioning/rotating/revoking the inbound credential) is admin-tier; a member may
 		// still see the non-secret credential metadata.
@@ -134,6 +143,10 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionServiceRead: true,
 		// A viewer may see custom domain status and DNS instructions but not mutate or verify.
 		authz.ActionDomainRead: true,
+		// A viewer may see backup status but not create backups.
+		authz.ActionBackupRead: true,
+		// A viewer may read the readiness checklist (informational, read-only).
+		authz.ActionReadinessRead: true,
 		// A viewer may see the SSH management credential's non-secret metadata (fingerprint,
 		// timestamps, state) but never run setup, rotate, or revoke.
 		authz.ActionServerSetupKeyRead: true,

@@ -44,6 +44,27 @@ func (h *handler) CreateService(ctx context.Context, req *connect.Request[contro
 	}), nil
 }
 
+func (h *handler) CreateDatabaseService(ctx context.Context, req *connect.Request[controlplanev1.CreateDatabaseServiceRequest]) (*connect.Response[controlplanev1.CreateDatabaseServiceResponse], error) {
+	res, err := h.svc.CreateDatabase(ctx, DatabaseInput{
+		EnvironmentID: req.Msg.GetEnvironmentId(),
+		Name:          req.Msg.GetName(),
+		TemplateID:    req.Msg.GetTemplateId(),
+		DatabaseName:  req.Msg.GetDatabaseName(),
+		Username:      req.Msg.GetUsername(),
+		Password:      req.Msg.GetPassword(),
+		ServerID:      req.Msg.GetServerId(),
+		DeployNow:     req.Msg.GetDeployNow(),
+	})
+	if err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&controlplanev1.CreateDatabaseServiceResponse{
+		Service:       toProto(res.Service),
+		DeploymentId:  res.DeploymentID,
+		ConnectionUri: res.ConnectionURI,
+	}), nil
+}
+
 func (h *handler) GetService(ctx context.Context, req *connect.Request[controlplanev1.GetServiceRequest]) (*connect.Response[controlplanev1.GetServiceResponse], error) {
 	svc, err := h.svc.GetService(ctx, req.Msg.GetId())
 	if err != nil {

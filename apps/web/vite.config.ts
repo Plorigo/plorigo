@@ -11,12 +11,14 @@ const controlPlaneServices = [
   "ProjectService",
   "EnvironmentService",
   "ServiceService",
+  "BackupService",
   "DeploymentService",
   "DomainService",
   "ConfigService",
   "ServerService",
   "ServerSetupService",
   "SourceService",
+  "ReadinessService",
   "AgentService",
 ];
 

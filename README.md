@@ -101,8 +101,14 @@ plorigo/
 
 ## Getting started
 
-> 🚧 Installation and self-hosting instructions are coming as the deployment loop lands.
-> Watch the [roadmap](./ROADMAP.md). Want to help build it? See [CONTRIBUTING.md](./CONTRIBUTING.md).
+Plorigo is in a **private alpha** — the deployment loop works end to end for a focused set of
+sources. The [**Getting started guide**](./docs/getting-started.md) takes you from nothing to a
+running app on a server you control, and is honest about the alpha's limits; if something breaks,
+the [troubleshooting guide](./docs/troubleshooting.md) is the place to look.
+
+> 🚧 A one-command Docker Compose self-host is on the way. For now you run the control plane
+> yourself — see [development.md](./docs/development.md). Watch the [roadmap](./ROADMAP.md), and
+> see [CONTRIBUTING.md](./CONTRIBUTING.md) to help build it.
 
 ## License & open core
 

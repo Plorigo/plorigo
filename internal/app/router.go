@@ -30,6 +30,8 @@ func (a *App) router() http.Handler {
 	mux.Handle(a.domains.Route(ic))
 	mux.Handle(a.sources.Route(ic))
 	mux.Handle(a.services.Route(ic))
+	mux.Handle(a.backups.Route(ic))
+	mux.Handle(a.readiness.Route(ic))
 
 	// GitHub OAuth is a browser redirect flow, not ConnectRPC: these endpoints set a
 	// state cookie and 302, so they are plain HTTP handlers (outside the interceptor)
@@ -40,6 +42,7 @@ func (a *App) router() http.Handler {
 	// services validate the registration token / agent credential in the request body.
 	mux.Handle(a.agents.AgentRoute(ic))
 	mux.Handle(a.deployments.AgentRoute(ic))
+	mux.Handle(a.backups.AgentRoute(ic))
 
 	// Dashboard / SPA fallback.
 	mux.Handle("/", web.Handler())

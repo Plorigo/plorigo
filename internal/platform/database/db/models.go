@@ -9,18 +9,26 @@ import (
 )
 
 type Agent struct {
-	ID              string
-	ServerID        string
-	WorkspaceID     string
-	PublicKey       []byte
-	CredentialHash  []byte
-	AgentVersion    string
-	LastSeenAt      *time.Time
-	CreatedAt       time.Time
-	DockerAvailable *bool
-	DockerVersion   string
-	Os              string
-	Arch            string
+	ID                string
+	ServerID          string
+	WorkspaceID       string
+	PublicKey         []byte
+	CredentialHash    []byte
+	AgentVersion      string
+	LastSeenAt        *time.Time
+	CreatedAt         time.Time
+	DockerAvailable   *bool
+	DockerVersion     string
+	Os                string
+	Arch              string
+	CaddyAvailable    *bool
+	CaddyRunning      bool
+	CaddyVersion      string
+	DiskTotalBytes    int64
+	DiskFreeBytes     int64
+	MemTotalBytes     int64
+	MemAvailableBytes int64
+	CpuCount          int32
 }
 
 type AgentRegistrationToken struct {
@@ -56,6 +64,26 @@ type AuditEvent struct {
 	CreatedAt   time.Time
 }
 
+type Backup struct {
+	ID            string
+	ServiceID     string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	Destination   string
+	ArtifactUri   string
+	SizeBytes     int64
+	Checksum      string
+	Status        string
+	Message       string
+	Error         string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	Label         string
+	TriggerSource string
+}
+
 type ConfigEntry struct {
 	ID            string
 	Type          string
@@ -70,27 +98,28 @@ type ConfigEntry struct {
 }
 
 type Deployment struct {
-	ID            string
-	EnvironmentID string
-	ProjectID     string
-	WorkspaceID   string
-	ServerID      string
-	ImageRef      string
-	ContainerPort int32
-	HostPort      int32
-	ContainerID   string
-	Status        string
-	Message       string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	SourceKind    string
-	SourceAccess  string
-	CloneUrl      string
-	GitRef        string
-	CommitSha     string
-	BuiltImageRef string
-	RouteUrl      string
-	ServiceID     string
+	ID             string
+	EnvironmentID  string
+	ProjectID      string
+	WorkspaceID    string
+	ServerID       string
+	ImageRef       string
+	ContainerPort  int32
+	HostPort       int32
+	ContainerID    string
+	Status         string
+	Message        string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	SourceKind     string
+	SourceAccess   string
+	CloneUrl       string
+	GitRef         string
+	CommitSha      string
+	BuiltImageRef  string
+	RouteUrl       string
+	ServiceID      string
+	RolledBackFrom *string
 }
 
 type DeploymentEvent struct {
@@ -145,6 +174,22 @@ type Project struct {
 	Name        string
 	Slug        string
 	CreatedAt   time.Time
+}
+
+type RestoreJob struct {
+	ID            string
+	BackupID      string
+	ServiceID     string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	ArtifactUri   string
+	Status        string
+	Message       string
+	Error         string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type Server struct {

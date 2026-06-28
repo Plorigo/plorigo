@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/plorigo/plorigo/internal/platform/authz"
@@ -110,6 +111,38 @@ func (s *service) Set(ctx context.Context, in SetInput) (Entry, error) {
 	// Log the key + metadata, never a value (variable values can be sensitive too).
 	s.log.Info("config set", "id", saved.ID, "type", saved.Type, "scope", saved.Scope, "key", saved.Key, "workspace_id", workspaceID, "actor", caller.UserID)
 	return saved, nil
+}
+
+// SetWithinTx upserts service-scoped configuration variables inside the caller's transaction.
+// It is used by the services module when provisioning a managed service (e.g. a database) so
+// the generated credentials and the service row commit atomically. It performs NO
+// authorization or audit of its own — the caller has already authorized and audits the
+// service create. Keys are validated and values bounded just as Set does; the entries are
+// written as plaintext variables (so siblings and the dashboard can read them back) and
+// nothing is logged, since these values may be credentials.
+func (s *service) SetWithinTx(ctx context.Context, tx database.Tx, serviceID string, vars map[string]string) error {
+	if _, err := id.Parse(serviceID); err != nil {
+		return problem.InvalidInput("a valid service_id is required")
+	}
+	keys := make([]string, 0, len(vars))
+	for k := range vars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys) // deterministic write order regardless of map iteration
+	for _, raw := range keys {
+		key, err := validateKey(raw)
+		if err != nil {
+			return err
+		}
+		if len(vars[raw]) > maxValueLen {
+			return problem.InvalidInput("value must be at most %d bytes", maxValueLen)
+		}
+		value := vars[raw]
+		if _, err := s.store.UpsertServiceConfig(ctx, tx, TypeVariable, serviceID, key, &value, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *service) ListForService(ctx context.Context, serviceID string) ([]Entry, error) {

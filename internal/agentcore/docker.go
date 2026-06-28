@@ -336,6 +336,111 @@ func (d *dockerClient) listManagedRoutes(ctx context.Context) ([]managedRoute, e
 	return out, nil
 }
 
+// findRunningByService returns the id of a running managed container for the given service (its
+// plorigo.service label), if one is running on this host. Used by the backup loop to locate the
+// managed Postgres container to dump.
+func (d *dockerClient) findRunningByService(ctx context.Context, serviceID string) (string, bool, error) {
+	list, err := d.cli.ContainerList(ctx, client.ContainerListOptions{
+		All:     false,
+		Filters: client.Filters{}.Add("label", labelService+"="+serviceID),
+	})
+	if err != nil {
+		return "", false, err
+	}
+	if len(list.Items) == 0 {
+		return "", false, nil
+	}
+	return list.Items[0].ID, true, nil
+}
+
+// execPgDump runs pg_dump INSIDE the managed Postgres container and streams the SQL dump to dst.
+// The connection credentials are supplied by the control plane per job; PGPASSWORD is passed via
+// the exec environment (not the arg list, so it never shows up in `ps`). The command is fixed —
+// only the validated user/database identifiers vary — so there is no caller-controlled shell. A
+// non-zero exit code surfaces the container's stderr as the error.
+func (d *dockerClient) execPgDump(ctx context.Context, containerID, user, password, database string, dst io.Writer) error {
+	created, err := d.cli.ExecCreate(ctx, containerID, client.ExecCreateOptions{
+		Cmd:          []string{"pg_dump", "--no-owner", "--no-privileges", "-U", user, "-d", database},
+		Env:          []string{"PGPASSWORD=" + password},
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return err
+	}
+	attach, err := d.cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
+	if err != nil {
+		return err
+	}
+	defer attach.Close()
+	// Non-TTY exec multiplexes stdout (the dump) and stderr (diagnostics); demux them.
+	var stderr strings.Builder
+	if _, err := stdcopy.StdCopy(dst, &stderr, attach.Reader); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	inspect, err := d.cli.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
+	if err != nil {
+		return err
+	}
+	if inspect.ExitCode != 0 {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return errors.New(msg)
+		}
+		return fmt.Errorf("pg_dump exited with code %d", inspect.ExitCode)
+	}
+	return nil
+}
+
+// execPsqlRestore pipes a SQL dump (src) into psql INSIDE the target Postgres container, restoring
+// the database. psql runs with ON_ERROR_STOP=1 so a bad dump fails loudly instead of applying
+// partially. As with execPgDump, credentials come from the control plane and PGPASSWORD is passed
+// via the exec environment, not the arg list. stdin is streamed in a goroutine while stdout/stderr
+// are read concurrently, so a chatty restore can't deadlock on a full pipe.
+func (d *dockerClient) execPsqlRestore(ctx context.Context, containerID, user, password, database string, src io.Reader) error {
+	created, err := d.cli.ExecCreate(ctx, containerID, client.ExecCreateOptions{
+		Cmd:          []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database},
+		Env:          []string{"PGPASSWORD=" + password},
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return err
+	}
+	attach, err := d.cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
+	if err != nil {
+		return err
+	}
+	defer attach.Close()
+
+	writeErr := make(chan error, 1)
+	go func() {
+		_, e := io.Copy(attach.Conn, src)
+		// Half-close stdin so psql sees EOF and finishes; the read side stays open for output.
+		_ = attach.CloseWrite()
+		writeErr <- e
+	}()
+	var stderr strings.Builder
+	_, demuxErr := stdcopy.StdCopy(io.Discard, &stderr, attach.Reader)
+	if e := <-writeErr; e != nil {
+		return e
+	}
+	if demuxErr != nil && !errors.Is(demuxErr, io.EOF) {
+		return demuxErr
+	}
+	inspect, err := d.cli.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
+	if err != nil {
+		return err
+	}
+	if inspect.ExitCode != 0 {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return errors.New(msg)
+		}
+		return fmt.Errorf("psql exited with code %d", inspect.ExitCode)
+	}
+	return nil
+}
+
 func firstPublishedTCPPort(ports []container.PortSummary) int32 {
 	var chosenPrivate, chosenPublic uint16
 	for _, p := range ports {
