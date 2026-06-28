@@ -168,8 +168,7 @@ export function ServiceDetailPage() {
                 <TableRow>
                   <TableHead>Deployment</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Host port</TableHead>
-                  <TableHead>Created</TableHead>
+                  <TableHead className="text-right">Created</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -185,14 +184,16 @@ export function ServiceDetailPage() {
                     }
                   >
                     <TableCell>
-                      <p className="truncate font-mono text-sm font-medium text-foreground">{deploymentRefLabel(d)}</p>
-                      <p className="text-xs text-muted-foreground">{d.id.slice(0, 8)}</p>
+                      <div className="flex items-center gap-2">
+                        <span className="truncate font-mono text-sm font-medium text-foreground">{deploymentRefLabel(d)}</span>
+                        {d.id === active?.id && <Badge tone="green">Current</Badge>}
+                      </div>
+                      <p className="mt-0.5 truncate text-xs text-muted-foreground">{deploymentSubline(d)}</p>
                     </TableCell>
                     <TableCell>
                       <StatusDot tone={statusTone(d.status)} label={d.status} />
                     </TableCell>
-                    <TableCell className="font-mono text-muted-foreground">{d.hostPort > 0 ? `:${d.hostPort}` : "—"}</TableCell>
-                    <TableCell className="text-muted-foreground">{timeAgo(d.createdAt)}</TableCell>
+                    <TableCell className="text-right text-muted-foreground">{timeAgo(d.createdAt)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -783,6 +784,16 @@ function ConnField({ label, value, onCopy }: { label: string; value: string; onC
       </button>
     </div>
   );
+}
+
+// deploymentSubline is the deployments-list secondary line: branch · short commit for a git
+// deployment, falling back to the short id (also used for image deployments).
+function deploymentSubline(d: Deployment): string {
+  if (d.sourceKind === "git") {
+    const parts = [d.gitRef, d.commitSha ? d.commitSha.slice(0, 7) : ""].filter(Boolean);
+    if (parts.length > 0) return parts.join(" · ");
+  }
+  return d.id.slice(0, 8);
 }
 
 // timeAgo renders a short relative time for an RFC 3339 timestamp.
