@@ -17,6 +17,7 @@ import (
 	"github.com/plorigo/plorigo/internal/platform/mailer"
 	"github.com/plorigo/plorigo/internal/policy"
 	"github.com/plorigo/plorigo/internal/projects"
+	"github.com/plorigo/plorigo/internal/readiness"
 	"github.com/plorigo/plorigo/internal/servers"
 	"github.com/plorigo/plorigo/internal/serversetup"
 	"github.com/plorigo/plorigo/internal/services"
@@ -215,6 +216,22 @@ func (a *App) buildModules() error {
 		// only edge auth → projects, used to create the new user's first workspace.
 		Workspace: a.projects.Service(),
 		Log:       a.log,
+	})
+
+	// The Production Readiness Doctor reads (never writes) state from services, config, domains,
+	// deployments, and agents through consumer-defined ports (the readiness*Reader adapters), so
+	// it is built last — after every module it reads from. Backups is nil until that module
+	// exists; the backup check degrades to "not available yet". Server readiness is derived the
+	// same way the dashboard derives it (time.Now + Dev relaxes the Linux-only host check).
+	a.readiness = readiness.New(readiness.Deps{
+		Services:    readinessServiceReader{services: a.services.Service()},
+		Config:      readinessConfigReader{config: a.config.Service()},
+		Domains:     readinessDomainReader{domains: a.domains.Service()},
+		Deployments: readinessDeploymentReader{deployments: a.deployments.Service()},
+		Servers:     readinessServerReader{agents: a.agents.Service(), now: time.Now, dev: a.cfg.Dev},
+		Backups:     nil,
+		Policy:      policySvc,
+		Log:         a.log,
 	})
 
 	return nil
