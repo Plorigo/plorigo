@@ -143,4 +143,8 @@ Any change that broadens what an unprivileged user or AI agent can do gets extra
 5. Add a `module-<module>` depguard block in `.golangci.yml`.
 6. Construct it and wire collaborators in `internal/app/modules.go`; mount `Route()` in
    `internal/app/router.go`.
-7. `make generate && make test && make lint` all green.
+7. Wire the dashboard: create the typed client in `apps/web/src/lib/clients.ts`, and add
+   the service to the `controlPlaneServices` array in `apps/web/vite.config.ts` so the dev
+   proxy forwards `/controlplane.v1.<Service>/*` to the control plane. Miss the proxy entry
+   and the call 404s in dev, surfacing as `[unimplemented] HTTP 404`.
+8. `make generate && make test && make lint` all green.
