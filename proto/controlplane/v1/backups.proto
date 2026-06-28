@@ -48,10 +48,47 @@ message ListBackupsByServiceResponse {
   repeated Backup backups = 1;
 }
 
+// A RestoreJob restores a succeeded backup back into its database service. It is the proof that a
+// backup is usable — a backup is only valuable if restore works (see docs/architecture/backups.md).
+message RestoreJob {
+  string id = 1;
+  string backup_id = 2;
+  string service_id = 3;
+  string environment_id = 4;
+  string project_id = 5;
+  string workspace_id = 6;
+  string server_id = 7;
+  string status = 8; // queued|assigned|restoring|verifying|succeeded|failed
+  string message = 9;
+  string error = 10;
+  string created_at = 11; // RFC 3339
+  string updated_at = 12; // RFC 3339
+}
+
+message RestoreBackupRequest {
+  string backup_id = 1;
+}
+
+message RestoreBackupResponse {
+  RestoreJob restore = 1;
+}
+
+message ListRestoreJobsByServiceRequest {
+  string service_id = 1;
+}
+
+message ListRestoreJobsByServiceResponse {
+  repeated RestoreJob restores = 1;
+}
+
 // BackupService creates and reports backups for managed database services. CreateBackup is
 // policy-authorized (ActionBackupCreate); reads require ActionBackupRead.
 service BackupService {
   rpc CreateBackup(CreateBackupRequest) returns (CreateBackupResponse);
   rpc GetBackup(GetBackupRequest) returns (GetBackupResponse);
   rpc ListBackupsByService(ListBackupsByServiceRequest) returns (ListBackupsByServiceResponse);
+  // RestoreBackup restores a succeeded backup into its database service. Authorized with
+  // ActionBackupCreate (it mutates database data, so it is a create-tier action).
+  rpc RestoreBackup(RestoreBackupRequest) returns (RestoreBackupResponse);
+  rpc ListRestoreJobsByService(ListRestoreJobsByServiceRequest) returns (ListRestoreJobsByServiceResponse);
 }

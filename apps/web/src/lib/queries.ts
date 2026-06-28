@@ -237,6 +237,26 @@ export function useBackupsByService(serviceId: string, enabled: boolean) {
   });
 }
 
+// A restore is terminal once it has succeeded or failed.
+export function isTerminalRestoreStatus(status: string): boolean {
+  return status === "succeeded" || status === "failed";
+}
+
+// useRestoresByService lists a managed database service's restore jobs (newest first), polling
+// while any is in flight.
+export function useRestoresByService(serviceId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["restores", "service", serviceId],
+    queryFn: async () => (await backupClient.listRestoreJobsByService({ serviceId })).restores,
+    enabled: enabled && serviceId.length > 0 && !isPrototypeId(serviceId),
+    refetchInterval: (query) => {
+      const rows = query.state.data;
+      const inFlight = rows?.some((r) => !isTerminalRestoreStatus(r.status)) ?? false;
+      return inFlight ? 2000 : false;
+    },
+  });
+}
+
 export function useDomainsByService(serviceId: string) {
   return useQuery({
     queryKey: ["domains", "service", serviceId],

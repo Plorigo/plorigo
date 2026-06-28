@@ -151,6 +151,87 @@ func (s *postgresStore) DBCredentialsForService(ctx context.Context, serviceID s
 	return c, nil
 }
 
+func (s *postgresStore) InsertRestore(ctx context.Context, tx database.Tx, r NewRestore) (RestoreJob, error) {
+	row, err := db.New(tx).CreateRestoreJob(ctx, db.CreateRestoreJobParams{
+		BackupID:      r.BackupID,
+		ServiceID:     r.ServiceID,
+		EnvironmentID: r.EnvironmentID,
+		ProjectID:     r.ProjectID,
+		WorkspaceID:   r.WorkspaceID,
+		ServerID:      r.ServerID,
+		ArtifactUri:   r.ArtifactURI,
+	})
+	if err != nil {
+		return RestoreJob{}, err
+	}
+	return restoreFromRow(row), nil
+}
+
+func (s *postgresStore) GetRestore(ctx context.Context, id string) (RestoreJob, bool, error) {
+	row, err := db.New(s.pool).GetRestoreJob(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RestoreJob{}, false, nil
+		}
+		return RestoreJob{}, false, err
+	}
+	return restoreFromRow(row), true, nil
+}
+
+func (s *postgresStore) ListRestoresByService(ctx context.Context, serviceID string) ([]RestoreJob, error) {
+	rows, err := db.New(s.pool).ListRestoreJobsByService(ctx, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RestoreJob, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, restoreFromRow(r))
+	}
+	return out, nil
+}
+
+func (s *postgresStore) ClaimNextRestoreForServer(ctx context.Context, tx database.Tx, serverID string) (RestoreJob, bool, error) {
+	row, err := db.New(tx).ClaimNextRestoreForServer(ctx, serverID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return RestoreJob{}, false, nil
+		}
+		return RestoreJob{}, false, err
+	}
+	return restoreFromRow(row), true, nil
+}
+
+func (s *postgresStore) UpdateRestoreStatus(ctx context.Context, tx database.Tx, u RestoreStatusUpdate) (RestoreJob, error) {
+	row, err := db.New(tx).UpdateRestoreStatus(ctx, db.UpdateRestoreStatusParams{
+		Status:  u.Status,
+		Message: u.Message,
+		Error:   u.Error,
+		ID:      u.RestoreID,
+	})
+	if err != nil {
+		return RestoreJob{}, err
+	}
+	return restoreFromRow(row), nil
+}
+
+func restoreFromRow(r db.RestoreJob) RestoreJob {
+	return RestoreJob{
+		ID:            r.ID,
+		BackupID:      r.BackupID,
+		ServiceID:     r.ServiceID,
+		EnvironmentID: r.EnvironmentID,
+		ProjectID:     r.ProjectID,
+		WorkspaceID:   r.WorkspaceID,
+		ServerID:      r.ServerID,
+		ArtifactURI:   r.ArtifactUri,
+		Status:        r.Status,
+		Message:       r.Message,
+		Error:         r.Error,
+		CreatedAt:     r.CreatedAt,
+		UpdatedAt:     r.UpdatedAt,
+	}
+}
+
 func backupFromRow(r db.Backup) Backup {
 	return Backup{
 		ID:            r.ID,

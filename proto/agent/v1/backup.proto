@@ -21,6 +21,14 @@ service BackupService {
   // ReportBackupJob records a status transition and the artifact metadata for a backup the
   // agent is executing.
   rpc ReportBackupJob(ReportBackupJobRequest) returns (ReportBackupJobResponse);
+
+  // PollRestoreJob atomically claims the next queued restore for this agent's server, if any.
+  // A restore reads a backup artifact from the server's disk and pipes it into the target
+  // database (psql) inside its container. has_work is false when there is nothing to do.
+  rpc PollRestoreJob(PollRestoreJobRequest) returns (PollRestoreJobResponse);
+
+  // ReportRestoreJob records a status transition for a restore the agent is executing.
+  rpc ReportRestoreJob(ReportRestoreJobRequest) returns (ReportRestoreJobResponse);
 }
 
 message PollBackupJobRequest {
@@ -54,3 +62,30 @@ message ReportBackupJobRequest {
 }
 
 message ReportBackupJobResponse {}
+
+message PollRestoreJobRequest {
+  string agent_id = 1;
+  string credential = 2;
+}
+
+message PollRestoreJobResponse {
+  bool has_work = 1;
+  string restore_id = 2;
+  string service_id = 3;   // the target managed Postgres service (container label target)
+  string engine = 4;       // "postgres"
+  string pg_user = 5;
+  string pg_password = 6;
+  string pg_database = 7;
+  string artifact_uri = 8; // the source dump on the server's disk to restore from
+}
+
+message ReportRestoreJobRequest {
+  string agent_id = 1;
+  string credential = 2;
+  string restore_id = 3;
+  string status = 4;  // restoring|verifying|succeeded|failed
+  string message = 5;
+  string error = 6;
+}
+
+message ReportRestoreJobResponse {}

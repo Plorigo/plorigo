@@ -23,6 +23,19 @@ It reuses the deployment job model exactly (see [deployment-engine.md](./deploym
 4. The agent reports each transition (`dumping → verifying → succeeded`, or `failed` with a reason)
    via `ReportBackupJob`. The dashboard shows status and failures per service.
 
+## Restore
+
+A backup is only valuable if it can be restored. `RestoreBackup(backup_id)` mirrors the same
+job model on a `restore_jobs` table: it requires a **succeeded** backup whose database is still
+running **on the same server** (the artifact lives on that server's disk), records a `queued`
+restore (with an audit row), and the agent claims it via `PollRestoreJob`. The agent reads the
+backup artifact and pipes it into `psql` (with `ON_ERROR_STOP=1`, so a bad dump fails loudly
+instead of half-applying) inside the target container, reporting `restoring → succeeded`/`failed`.
+The dashboard offers a guarded "Restore" action on a succeeded backup and shows restore status.
+
+The agent runs **both** backups and restores from its single backup poll loop (one loop, two
+queues), beside the deploy/heartbeat loops.
+
 ## Credentials & the trust model
 
 The agent does **not** read the container's environment to get the database password. As with a
@@ -49,6 +62,6 @@ slice. The data model (`backups.destination` / `artifact_uri`) already accommoda
 
 - S3-compatible remote destination + encrypt-before-upload.
 - Scheduled/automatic backups and retention policy.
-- Restore (PLO-24 adds a restore job + a `make e2e-backup` controlled test path).
-- A live-VPS sign-off (the `pg_dump`/restore path is exercised against real Docker locally; a
-  fresh-VPS run is tracked like the other infra sign-offs).
+- A live-VPS sign-off (the `pg_dump`/`psql` round-trip is exercised against real Docker locally via
+  `make e2e-backup` — see [../verification/backup-restore-e2e.md](../verification/backup-restore-e2e.md);
+  a fresh-VPS run is tracked like the other infra sign-offs).

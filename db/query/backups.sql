@@ -58,3 +58,39 @@ SELECT server_id FROM deployments
 WHERE service_id = $1 AND status = 'running'
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- --- restore_jobs ---
+
+-- name: CreateRestoreJob :one
+INSERT INTO restore_jobs (backup_id, service_id, environment_id, project_id, workspace_id, server_id, artifact_uri)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING *;
+
+-- name: GetRestoreJob :one
+SELECT * FROM restore_jobs WHERE id = $1;
+
+-- name: ListRestoreJobsByService :many
+SELECT * FROM restore_jobs WHERE service_id = $1 ORDER BY created_at DESC;
+
+-- ClaimNextRestoreForServer atomically claims the oldest queued restore for a server (cf.
+-- ClaimNextBackupForServer).
+-- name: ClaimNextRestoreForServer :one
+UPDATE restore_jobs
+SET status = 'assigned', updated_at = now()
+WHERE id = (
+    SELECT r.id FROM restore_jobs r
+    WHERE r.server_id = $1 AND r.status = 'queued'
+    ORDER BY r.created_at
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+)
+RETURNING *;
+
+-- name: UpdateRestoreStatus :one
+UPDATE restore_jobs
+SET status = sqlc.arg(status),
+    message = CASE WHEN sqlc.arg(message)::text <> '' THEN sqlc.arg(message)::text ELSE message END,
+    error = CASE WHEN sqlc.arg(error)::text <> '' THEN sqlc.arg(error)::text ELSE error END,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
