@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { ConnectError } from "@connectrpc/connect";
 import { useQueryClient } from "@tanstack/react-query";
-import { Container, Cpu, Server } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { CircleCheck, Container, Cpu, Server, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/PageHeader";
@@ -26,28 +27,8 @@ import { useWorkspaceStore } from "@/store";
 import { ConnectServerDialog } from "./connect/ConnectServerDialog";
 import { InstallCommandBlock } from "./connect/InstallCommand";
 import { ServerCardActions } from "./ServerCardActions";
+import { dockerFactsLabel, fleetSummary, lastSeenLabel, toServerRow, type ServerRow } from "./serverData";
 import { SetupStatusBadge } from "./SetupStatusBadge";
-
-interface ServerRow {
-  id?: string; // absent on demo fixtures; per-server actions render only when present
-  name: string;
-  region: string;
-  cpu: string;
-  memory: string;
-  disk: string;
-  status: string;
-  // Deployment readiness derived by the control plane (ready | degraded | unavailable),
-  // its plain-English reason, and the raw compatibility facts behind it.
-  readiness?: string;
-  readinessReason?: string;
-  dockerVersion?: string;
-  caddyVersion?: string;
-  caddyRunning?: boolean; // undefined when the agent doesn't report extended facts
-  os?: string;
-  arch?: string;
-  version?: string;
-  lastSeen?: string;
-}
 
 interface InstallCommandResult {
   serverName: string;
@@ -76,39 +57,11 @@ export function ServersPage() {
   const [managedRuns, setManagedRuns] = useState<Record<string, string>>({});
 
   const agentByServer = new Map((agents.data ?? []).map((a) => [a.serverId, a]));
-  const liveRows: ServerRow[] = (servers.data ?? []).map((server) => {
-    const agent = agentByServer.get(server.id);
-    const base = { id: server.id, name: server.name, region: "Workspace server" };
-    if (!agent) {
-      return { ...base, cpu: "not reported", memory: "not reported", disk: "not reported", status: "no agent" };
-    }
-    // cpuCount > 0 marks an agent that reports the extended host facts (PLO-95); older
-    // agents leave them zeroed, which we render as "not reported" rather than "0".
-    const ext = agent.cpuCount > 0;
-    return {
-      ...base,
-      cpu: ext ? `${agent.cpuCount} vCPU` : "not reported",
-      memory:
-        ext && agent.memTotalBytes > 0n
-          ? fmtUsed(agent.memTotalBytes - agent.memAvailableBytes, agent.memTotalBytes)
-          : "not reported",
-      disk:
-        ext && agent.diskTotalBytes > 0n
-          ? fmtUsed(agent.diskTotalBytes - agent.diskFreeBytes, agent.diskTotalBytes)
-          : "not reported",
-      status: agent.status,
-      readiness: agent.readiness,
-      readinessReason: agent.readinessReason,
-      dockerVersion: agent.dockerVersion,
-      caddyVersion: ext ? agent.caddyVersion : undefined,
-      caddyRunning: ext ? agent.caddyRunning : undefined,
-      os: agent.os,
-      arch: agent.arch,
-      version: agent.agentVersion,
-      lastSeen: agent.lastSeenAt,
-    };
-  });
+  const liveRows: ServerRow[] = (servers.data ?? []).map((server) =>
+    toServerRow(server, agentByServer.get(server.id)),
+  );
   const rows: ServerRow[] = liveRows.length > 0 ? liveRows : demo ? serverHealth : [];
+  const summary = fleetSummary(rows);
 
   // Mint a FRESH one-time token for an existing server and show its install command.
   // Tokens are single-use and shown once, so this is how you recover a command you
@@ -193,6 +146,10 @@ export function ServersPage() {
       )}
 
       {!loading && !error && rows.length > 0 && (
+        <FleetBanner summary={summary} />
+      )}
+
+      {!loading && !error && rows.length > 0 && (
         <div className="grid gap-4 lg:grid-cols-3">
           {rows.map((server) => {
             const agentBadge = (
@@ -202,10 +159,27 @@ export function ServersPage() {
             );
             const trackedRun = server.id ? managedRuns[server.id] : undefined;
             return (
-              <Panel key={server.id ?? server.name} className="p-4">
+              <Panel
+                key={server.id ?? server.name}
+                className={cn(
+                  "relative p-4",
+                  server.id &&
+                    "cursor-pointer transition hover:-translate-y-0.5 hover:shadow-card-hover",
+                )}
+              >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-foreground">{server.name}</p>
+                    {server.id ? (
+                      <Link
+                        to="/servers/$serverId"
+                        params={{ serverId: server.id }}
+                        className="truncate text-sm font-semibold text-foreground hover:underline before:absolute before:inset-0 before:rounded-xl focus-visible:outline-none focus-visible:before:ring-2 focus-visible:before:ring-ring"
+                      >
+                        {server.name}
+                      </Link>
+                    ) : (
+                      <p className="truncate text-sm font-semibold text-foreground">{server.name}</p>
+                    )}
                     <p className="mt-1 truncate text-xs text-muted-foreground">{server.region}</p>
                   </div>
                   {trackedRun ? <SetupStatusBadge runId={trackedRun} fallback={agentBadge} /> : agentBadge}
@@ -239,7 +213,7 @@ export function ServersPage() {
                   <span className="text-xs text-muted-foreground">{lastSeenLabel(server.lastSeen)}</span>
                 </div>
                 {server.id && (
-                  <div className="mt-3">
+                  <div className="relative z-10 mt-3">
                     <ServerCardActions
                       serverId={server.id}
                       serverName={server.name}
@@ -288,39 +262,33 @@ function InstallCommandDialog({
   );
 }
 
-// dockerFactsLabel renders the raw compatibility facts behind a server's readiness, so the
-// detail is one glance away (progressive disclosure). Shown only for health-reporting
-// agents (those that set os); "Docker unavailable" when the daemon isn't reachable, plus the
-// Caddy reverse-proxy state when the agent reports it (PLO-95).
-function dockerFactsLabel(server: ServerRow): string {
-  const docker = server.dockerVersion ? `Docker ${server.dockerVersion}` : "Docker unavailable";
-  let caddy = "";
-  if (server.caddyVersion) {
-    caddy = `Caddy ${server.caddyVersion}${server.caddyRunning === false ? " (not running)" : ""}`;
-  } else if (server.caddyRunning === false) {
-    caddy = "Caddy not running";
-  }
-  const host = server.os ? `${server.os}${server.arch ? `/${server.arch}` : ""}` : "";
-  return [docker, caddy, host].filter(Boolean).join(" · ");
-}
-
-// fmtUsed renders a "used / total GiB" label whose embedded fraction drives the meter bar
-// (see percentFromLabel) — a fuller bar means more of the resource is in use.
-function fmtUsed(usedBytes: bigint, totalBytes: bigint): string {
-  const gib = (b: bigint) => (Number(b) / 1024 ** 3).toFixed(1);
-  return `${gib(usedBytes)} / ${gib(totalBytes)} GiB`;
-}
-
-// lastSeenLabel renders a short relative time for an agent's last heartbeat.
-function lastSeenLabel(iso?: string): string {
-  if (!iso) return "never seen";
-  const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (secs < 60) return `${secs}s ago`;
-  const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return new Date(iso).toLocaleDateString();
+// FleetBanner leads the list with a one-glance health verdict so warnings are impossible to
+// miss: green when every server is ready, amber when one or more need attention. The raw
+// per-server detail stays in the cards (and the server detail page) below.
+function FleetBanner({ summary }: { summary: ReturnType<typeof fleetSummary> }) {
+  const ok = summary.attention === 0;
+  const plural = (n: number) => (n === 1 ? "server" : "servers");
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-md border px-3 py-2.5 text-sm leading-6",
+        intentSoft[ok ? "success" : "warning"],
+      )}
+    >
+      {ok ? (
+        <CircleCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+      ) : (
+        <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden="true" />
+      )}
+      <span>
+        {ok
+          ? `All ${summary.total} ${plural(summary.total)} ready to deploy${
+              summary.online < summary.total ? ` · ${summary.online} online` : ""
+            }.`
+          : `${summary.attention} of ${summary.total} ${plural(summary.total)} need attention — open a server to see why.`}
+      </span>
+    </div>
+  );
 }
 
 function ResourceMeter({ label, value, intent }: { label: string; value: string; intent: Intent }) {
