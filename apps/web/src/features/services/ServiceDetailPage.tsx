@@ -44,7 +44,7 @@ import { ConfigType } from "@/gen/controlplane/v1/config_pb";
 import type { Deployment } from "@/gen/controlplane/v1/deployments_pb";
 import type { Domain } from "@/gen/controlplane/v1/domains_pb";
 import type { Service } from "@/gen/controlplane/v1/services_pb";
-import { deploymentClient, domainClient } from "@/lib/clients";
+import { deploymentClient, domainClient, serviceClient } from "@/lib/clients";
 import {
   isTerminalDeploymentStatus,
   useAgents,
@@ -201,6 +201,8 @@ export function ServiceDetailPage() {
           </div>
         )}
       </Panel>
+
+      <ServiceSettingsPanel service={s} projectId={pid} />
     </div>
   );
 }
@@ -783,6 +785,107 @@ function ConnField({ label, value, onCopy }: { label: string; value: string; onC
         <Copy className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
       </button>
     </div>
+  );
+}
+
+// ServiceSettingsPanel exposes the service-level controls that, until now, had RPCs but no UI:
+// flip visibility between public and private, and delete the service. Both are reversible-aware —
+// the visibility change is one click back, and the delete confirms first (it is not).
+function ServiceSettingsPanel({ service, projectId }: { service: Service; projectId: string }) {
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const publicSvc = isPublic(service);
+  const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function setVisibility(next: "public" | "private") {
+    setBusy(true);
+    try {
+      await serviceClient.updateServiceVisibility({ id: service.id, visibility: next });
+      await queryClient.invalidateQueries({ queryKey: ["service", service.id] });
+      toast.success(next === "public" ? "Service is now public" : "Service is now private");
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not change the visibility");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDelete() {
+    setDeleting(true);
+    try {
+      await serviceClient.deleteService({ id: service.id });
+      toast.success(`Deleted ${service.name}`);
+      // Leave before the open service query refetches and 404s the page.
+      if (projectId) {
+        void navigate({ to: "/projects/$projectId", params: { projectId } });
+        await queryClient.invalidateQueries({ queryKey: ["services", "project", projectId] });
+      } else {
+        void navigate({ to: "/projects" });
+      }
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not delete the service");
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <Panel>
+      <PanelHeader title="Settings" description="Control how this service is exposed, or remove it." />
+      <div className="divide-y divide-border">
+        <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-foreground">Visibility</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              {publicSvc
+                ? "Public — served on its generated domain and any custom domains."
+                : "Private — internal only, reachable by sibling services."}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge tone={publicSvc ? "green" : "purple"}>{publicSvc ? "public" : "private"}</Badge>
+            {publicSvc ? (
+              <ConfirmDialog
+                trigger={
+                  <Button size="sm" variant="secondary" disabled={busy}>
+                    {busy ? "Saving…" : "Make private"}
+                  </Button>
+                }
+                title="Make this service private?"
+                description="It stops serving on its public URL and becomes reachable only by sibling services on the internal network."
+                recovery="You can switch it back to public at any time."
+                confirmLabel="Make private"
+                onConfirm={() => setVisibility("private")}
+              />
+            ) : (
+              <Button size="sm" variant="secondary" disabled={busy} onClick={() => setVisibility("public")}>
+                {busy ? "Saving…" : "Make public"}
+              </Button>
+            )}
+          </div>
+        </div>
+        <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-foreground">Delete service</p>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              Permanently remove this service and its deployment history. This cannot be undone.
+            </p>
+          </div>
+          <ConfirmDialog
+            trigger={
+              <Button size="sm" variant="danger" disabled={deleting} className="shrink-0">
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                {deleting ? "Deleting…" : "Delete service"}
+              </Button>
+            }
+            title={`Delete ${service.name}?`}
+            description="This permanently removes the service and its deployment history. Its running container is torn down on the next reconcile."
+            confirmLabel="Delete service"
+            onConfirm={onDelete}
+          />
+        </div>
+      </div>
+    </Panel>
   );
 }
 
