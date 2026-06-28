@@ -67,6 +67,10 @@ const (
 	ActionDomainRead   Action = "domain.read"
 	ActionDomainVerify Action = "domain.verify"
 	ActionDomainDelete Action = "domain.delete"
+	// Readiness covers reading the Production Readiness Doctor's deterministic checklist for a
+	// service or environment. It is informational and derives entirely from other modules'
+	// read-only state, so every role that can read services can read readiness.
+	ActionReadinessRead Action = "readiness.read"
 	// Server-setup actions govern the persistent SSH management credential created during
 	// dashboard-managed server setup. Opening an inbound SSH channel is an admin-tier
 	// capability, so running the channel (ActionServerSetupRun: provision + record use /

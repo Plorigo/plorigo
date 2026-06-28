@@ -8,6 +8,7 @@ import {
   domainClient,
   environmentClient,
   projectClient,
+  readinessClient,
   serverClient,
   setupClient,
   serviceClient,
@@ -213,6 +214,20 @@ export function useDeploymentsByService(serviceId: string) {
       (await deploymentClient.listDeploymentsByService({ serviceId })).deployments,
     enabled: serviceId.length > 0 && !isPrototypeId(serviceId),
     refetchInterval: 5000,
+  });
+}
+
+// useServiceReadiness fetches the Production Readiness Doctor's checklist for a service: a
+// deterministic, on-demand verdict (ready | almost_ready | not_ready) plus per-check detail and
+// remediation. It refetches when deployment/config/server state may have changed (the service
+// page already polls deployments), so a short staleTime keeps it cheap without going stale.
+export function useServiceReadiness(serviceId: string) {
+  return useQuery({
+    queryKey: ["readiness", "service", serviceId],
+    queryFn: async () =>
+      (await readinessClient.getServiceReadiness({ serviceId })).checklist ?? null,
+    enabled: serviceId.length > 0 && !isPrototypeId(serviceId),
+    staleTime: 10_000,
   });
 }
 
