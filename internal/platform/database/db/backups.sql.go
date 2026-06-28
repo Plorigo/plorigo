@@ -19,7 +19,7 @@ WHERE id = (
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
-RETURNING id, service_id, environment_id, project_id, workspace_id, server_id, destination, artifact_uri, size_bytes, checksum, status, message, error, created_at, updated_at
+RETURNING id, service_id, environment_id, project_id, workspace_id, server_id, destination, artifact_uri, size_bytes, checksum, status, message, error, created_at, updated_at, label, trigger_source
 `
 
 // ClaimNextBackupForServer atomically claims the oldest queued backup for a server, flipping it
@@ -43,6 +43,44 @@ func (q *Queries) ClaimNextBackupForServer(ctx context.Context, serverID string)
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Label,
+		&i.TriggerSource,
+	)
+	return i, err
+}
+
+const claimNextRestoreForServer = `-- name: ClaimNextRestoreForServer :one
+UPDATE restore_jobs
+SET status = 'assigned', updated_at = now()
+WHERE id = (
+    SELECT r.id FROM restore_jobs r
+    WHERE r.server_id = $1 AND r.status = 'queued'
+    ORDER BY r.created_at
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+)
+RETURNING id, backup_id, service_id, environment_id, project_id, workspace_id, server_id, artifact_uri, status, message, error, created_at, updated_at
+`
+
+// ClaimNextRestoreForServer atomically claims the oldest queued restore for a server (cf.
+// ClaimNextBackupForServer).
+func (q *Queries) ClaimNextRestoreForServer(ctx context.Context, serverID string) (RestoreJob, error) {
+	row := q.db.QueryRow(ctx, claimNextRestoreForServer, serverID)
+	var i RestoreJob
+	err := row.Scan(
+		&i.ID,
+		&i.BackupID,
+		&i.ServiceID,
+		&i.EnvironmentID,
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.ServerID,
+		&i.ArtifactUri,
+		&i.Status,
+		&i.Message,
+		&i.Error,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -60,9 +98,9 @@ func (q *Queries) CountBackupsForService(ctx context.Context, serviceID string) 
 
 const createBackup = `-- name: CreateBackup :one
 
-INSERT INTO backups (service_id, environment_id, project_id, workspace_id, server_id)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, service_id, environment_id, project_id, workspace_id, server_id, destination, artifact_uri, size_bytes, checksum, status, message, error, created_at, updated_at
+INSERT INTO backups (service_id, environment_id, project_id, workspace_id, server_id, label, trigger_source)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, service_id, environment_id, project_id, workspace_id, server_id, destination, artifact_uri, size_bytes, checksum, status, message, error, created_at, updated_at, label, trigger_source
 `
 
 type CreateBackupParams struct {
@@ -71,6 +109,8 @@ type CreateBackupParams struct {
 	ProjectID     string
 	WorkspaceID   string
 	ServerID      string
+	Label         string
+	TriggerSource string
 }
 
 // Queries for the backups module (internal/backups). The agent claim mirrors the deployment
@@ -83,6 +123,8 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (Bac
 		arg.ProjectID,
 		arg.WorkspaceID,
 		arg.ServerID,
+		arg.Label,
+		arg.TriggerSource,
 	)
 	var i Backup
 	err := row.Scan(
@@ -101,12 +143,61 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (Bac
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Label,
+		&i.TriggerSource,
+	)
+	return i, err
+}
+
+const createRestoreJob = `-- name: CreateRestoreJob :one
+
+INSERT INTO restore_jobs (backup_id, service_id, environment_id, project_id, workspace_id, server_id, artifact_uri)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, backup_id, service_id, environment_id, project_id, workspace_id, server_id, artifact_uri, status, message, error, created_at, updated_at
+`
+
+type CreateRestoreJobParams struct {
+	BackupID      string
+	ServiceID     string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	ArtifactUri   string
+}
+
+// --- restore_jobs ---
+func (q *Queries) CreateRestoreJob(ctx context.Context, arg CreateRestoreJobParams) (RestoreJob, error) {
+	row := q.db.QueryRow(ctx, createRestoreJob,
+		arg.BackupID,
+		arg.ServiceID,
+		arg.EnvironmentID,
+		arg.ProjectID,
+		arg.WorkspaceID,
+		arg.ServerID,
+		arg.ArtifactUri,
+	)
+	var i RestoreJob
+	err := row.Scan(
+		&i.ID,
+		&i.BackupID,
+		&i.ServiceID,
+		&i.EnvironmentID,
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.ServerID,
+		&i.ArtifactUri,
+		&i.Status,
+		&i.Message,
+		&i.Error,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const getBackup = `-- name: GetBackup :one
-SELECT id, service_id, environment_id, project_id, workspace_id, server_id, destination, artifact_uri, size_bytes, checksum, status, message, error, created_at, updated_at FROM backups WHERE id = $1
+SELECT id, service_id, environment_id, project_id, workspace_id, server_id, destination, artifact_uri, size_bytes, checksum, status, message, error, created_at, updated_at, label, trigger_source FROM backups WHERE id = $1
 `
 
 func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
@@ -128,6 +219,8 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 		&i.Error,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Label,
+		&i.TriggerSource,
 	)
 	return i, err
 }
@@ -181,8 +274,33 @@ func (q *Queries) GetLatestRunningServerForService(ctx context.Context, serviceI
 	return server_id, err
 }
 
+const getRestoreJob = `-- name: GetRestoreJob :one
+SELECT id, backup_id, service_id, environment_id, project_id, workspace_id, server_id, artifact_uri, status, message, error, created_at, updated_at FROM restore_jobs WHERE id = $1
+`
+
+func (q *Queries) GetRestoreJob(ctx context.Context, id string) (RestoreJob, error) {
+	row := q.db.QueryRow(ctx, getRestoreJob, id)
+	var i RestoreJob
+	err := row.Scan(
+		&i.ID,
+		&i.BackupID,
+		&i.ServiceID,
+		&i.EnvironmentID,
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.ServerID,
+		&i.ArtifactUri,
+		&i.Status,
+		&i.Message,
+		&i.Error,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listBackupsByService = `-- name: ListBackupsByService :many
-SELECT id, service_id, environment_id, project_id, workspace_id, server_id, destination, artifact_uri, size_bytes, checksum, status, message, error, created_at, updated_at FROM backups WHERE service_id = $1 ORDER BY created_at DESC
+SELECT id, service_id, environment_id, project_id, workspace_id, server_id, destination, artifact_uri, size_bytes, checksum, status, message, error, created_at, updated_at, label, trigger_source FROM backups WHERE service_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListBackupsByService(ctx context.Context, serviceID string) ([]Backup, error) {
@@ -210,6 +328,46 @@ func (q *Queries) ListBackupsByService(ctx context.Context, serviceID string) ([
 			&i.Error,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Label,
+			&i.TriggerSource,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRestoreJobsByService = `-- name: ListRestoreJobsByService :many
+SELECT id, backup_id, service_id, environment_id, project_id, workspace_id, server_id, artifact_uri, status, message, error, created_at, updated_at FROM restore_jobs WHERE service_id = $1 ORDER BY created_at DESC
+`
+
+func (q *Queries) ListRestoreJobsByService(ctx context.Context, serviceID string) ([]RestoreJob, error) {
+	rows, err := q.db.Query(ctx, listRestoreJobsByService, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []RestoreJob{}
+	for rows.Next() {
+		var i RestoreJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.BackupID,
+			&i.ServiceID,
+			&i.EnvironmentID,
+			&i.ProjectID,
+			&i.WorkspaceID,
+			&i.ServerID,
+			&i.ArtifactUri,
+			&i.Status,
+			&i.Message,
+			&i.Error,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -231,7 +389,7 @@ SET status = $1,
     checksum = CASE WHEN $6::text <> '' THEN $6::text ELSE checksum END,
     updated_at = now()
 WHERE id = $7
-RETURNING id, service_id, environment_id, project_id, workspace_id, server_id, destination, artifact_uri, size_bytes, checksum, status, message, error, created_at, updated_at
+RETURNING id, service_id, environment_id, project_id, workspace_id, server_id, destination, artifact_uri, size_bytes, checksum, status, message, error, created_at, updated_at, label, trigger_source
 `
 
 type UpdateBackupStatusParams struct {
@@ -268,6 +426,51 @@ func (q *Queries) UpdateBackupStatus(ctx context.Context, arg UpdateBackupStatus
 		&i.ArtifactUri,
 		&i.SizeBytes,
 		&i.Checksum,
+		&i.Status,
+		&i.Message,
+		&i.Error,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Label,
+		&i.TriggerSource,
+	)
+	return i, err
+}
+
+const updateRestoreStatus = `-- name: UpdateRestoreStatus :one
+UPDATE restore_jobs
+SET status = $1,
+    message = CASE WHEN $2::text <> '' THEN $2::text ELSE message END,
+    error = CASE WHEN $3::text <> '' THEN $3::text ELSE error END,
+    updated_at = now()
+WHERE id = $4
+RETURNING id, backup_id, service_id, environment_id, project_id, workspace_id, server_id, artifact_uri, status, message, error, created_at, updated_at
+`
+
+type UpdateRestoreStatusParams struct {
+	Status  string
+	Message string
+	Error   string
+	ID      string
+}
+
+func (q *Queries) UpdateRestoreStatus(ctx context.Context, arg UpdateRestoreStatusParams) (RestoreJob, error) {
+	row := q.db.QueryRow(ctx, updateRestoreStatus,
+		arg.Status,
+		arg.Message,
+		arg.Error,
+		arg.ID,
+	)
+	var i RestoreJob
+	err := row.Scan(
+		&i.ID,
+		&i.BackupID,
+		&i.ServiceID,
+		&i.EnvironmentID,
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.ServerID,
+		&i.ArtifactUri,
 		&i.Status,
 		&i.Message,
 		&i.Error,

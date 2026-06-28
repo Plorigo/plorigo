@@ -391,6 +391,56 @@ func (d *dockerClient) execPgDump(ctx context.Context, containerID, user, passwo
 	return nil
 }
 
+// execPsqlRestore pipes a SQL dump (src) into psql INSIDE the target Postgres container, restoring
+// the database. psql runs with ON_ERROR_STOP=1 so a bad dump fails loudly instead of applying
+// partially. As with execPgDump, credentials come from the control plane and PGPASSWORD is passed
+// via the exec environment, not the arg list. stdin is streamed in a goroutine while stdout/stderr
+// are read concurrently, so a chatty restore can't deadlock on a full pipe.
+func (d *dockerClient) execPsqlRestore(ctx context.Context, containerID, user, password, database string, src io.Reader) error {
+	created, err := d.cli.ExecCreate(ctx, containerID, client.ExecCreateOptions{
+		Cmd:          []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", user, "-d", database},
+		Env:          []string{"PGPASSWORD=" + password},
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		return err
+	}
+	attach, err := d.cli.ExecAttach(ctx, created.ID, client.ExecAttachOptions{})
+	if err != nil {
+		return err
+	}
+	defer attach.Close()
+
+	writeErr := make(chan error, 1)
+	go func() {
+		_, e := io.Copy(attach.Conn, src)
+		// Half-close stdin so psql sees EOF and finishes; the read side stays open for output.
+		_ = attach.CloseWrite()
+		writeErr <- e
+	}()
+	var stderr strings.Builder
+	_, demuxErr := stdcopy.StdCopy(io.Discard, &stderr, attach.Reader)
+	if e := <-writeErr; e != nil {
+		return e
+	}
+	if demuxErr != nil && !errors.Is(demuxErr, io.EOF) {
+		return demuxErr
+	}
+	inspect, err := d.cli.ExecInspect(ctx, created.ID, client.ExecInspectOptions{})
+	if err != nil {
+		return err
+	}
+	if inspect.ExitCode != 0 {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return errors.New(msg)
+		}
+		return fmt.Errorf("psql exited with code %d", inspect.ExitCode)
+	}
+	return nil
+}
+
 func firstPublishedTCPPort(ports []container.PortSummary) int32 {
 	var chosenPrivate, chosenPublic uint16
 	for _, p := range ports {

@@ -80,6 +80,8 @@ type Backup struct {
 	Error         string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	Label         string
+	TriggerSource string
 }
 
 type ConfigEntry struct {
@@ -172,6 +174,22 @@ type Project struct {
 	Name        string
 	Slug        string
 	CreatedAt   time.Time
+}
+
+type RestoreJob struct {
+	ID            string
+	BackupID      string
+	ServiceID     string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	ArtifactUri   string
+	Status        string
+	Message       string
+	Error         string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
 }
 
 type Server struct {

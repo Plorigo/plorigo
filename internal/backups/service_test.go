@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/plorigo/plorigo/internal/platform/authz"
@@ -16,6 +17,7 @@ const (
 	testServiceID = "11111111-1111-1111-1111-111111111111"
 	testBackupID  = "22222222-2222-2222-2222-222222222222"
 	testServerID  = "33333333-3333-3333-3333-333333333333"
+	testRestoreID = "44444444-4444-4444-4444-444444444444"
 	testCred      = "agent-credential"
 )
 
@@ -34,12 +36,19 @@ type fakeStore struct {
 	agentServer   string
 	agentOK       bool
 
-	inserted Backup
-	updated  StatusUpdate
+	restoreClaim   RestoreJob
+	restoreClaimOK bool
+	restoreGet     RestoreJob
+	restoreGetOK   bool
+
+	inserted        Backup
+	updated         StatusUpdate
+	insertedRestore NewRestore
+	updatedRestore  RestoreStatusUpdate
 }
 
 func (f *fakeStore) InsertBackup(_ context.Context, _ database.Tx, b NewBackup) (Backup, error) {
-	f.inserted = Backup{ID: testBackupID, ServiceID: b.ServiceID, WorkspaceID: b.WorkspaceID, ServerID: b.ServerID, Status: StatusQueued}
+	f.inserted = Backup{ID: testBackupID, ServiceID: b.ServiceID, WorkspaceID: b.WorkspaceID, ServerID: b.ServerID, Status: StatusQueued, Label: b.Label, TriggerSource: b.TriggerSource}
 	return f.inserted, nil
 }
 func (f *fakeStore) GetBackup(context.Context, string) (Backup, bool, error) {
@@ -66,6 +75,23 @@ func (f *fakeStore) AgentServerByCredential(context.Context, []byte) (string, st
 }
 func (f *fakeStore) DBCredentialsForService(context.Context, string) (DBCredentials, error) {
 	return f.creds, nil
+}
+func (f *fakeStore) InsertRestore(_ context.Context, _ database.Tx, r NewRestore) (RestoreJob, error) {
+	f.insertedRestore = r
+	return RestoreJob{ID: "restore-1", BackupID: r.BackupID, ServiceID: r.ServiceID, ServerID: r.ServerID, Status: RestoreStatusQueued}, nil
+}
+func (f *fakeStore) GetRestore(context.Context, string) (RestoreJob, bool, error) {
+	return f.restoreGet, f.restoreGetOK, nil
+}
+func (f *fakeStore) ListRestoresByService(context.Context, string) ([]RestoreJob, error) {
+	return []RestoreJob{f.restoreGet}, nil
+}
+func (f *fakeStore) ClaimNextRestoreForServer(context.Context, database.Tx, string) (RestoreJob, bool, error) {
+	return f.restoreClaim, f.restoreClaimOK, nil
+}
+func (f *fakeStore) UpdateRestoreStatus(_ context.Context, _ database.Tx, u RestoreStatusUpdate) (RestoreJob, error) {
+	f.updatedRestore = u
+	return RestoreJob{ID: u.RestoreID, Status: u.Status}, nil
 }
 
 type fakeTx struct{}
@@ -102,15 +128,28 @@ func postgresTarget() ServiceTarget {
 func TestCreateBackup_Success(t *testing.T) {
 	store := &fakeStore{target: postgresTarget(), targetOK: true, runningServer: testServerID, running: true}
 	rec := &fakeRecorder{}
-	b, err := newSvc(store, allowAll{}, rec).CreateBackup(context.Background(), testServiceID)
+	b, err := newSvc(store, allowAll{}, rec).CreateBackup(context.Background(), testServiceID, "  nightly  ")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if b.ServerID != testServerID || b.Status != StatusQueued {
 		t.Errorf("backup = %+v, want queued on the running server", b)
 	}
+	// The label is trimmed and persisted, and a dashboard-initiated backup is triggered manually —
+	// the identifying info the row carries.
+	if store.inserted.Label != "nightly" || store.inserted.TriggerSource != TriggerManual {
+		t.Errorf("inserted = %+v, want label %q trigger %q", store.inserted, "nightly", TriggerManual)
+	}
 	if rec.calls != 1 {
 		t.Errorf("audit calls = %d, want 1 (create must be audited)", rec.calls)
+	}
+}
+
+func TestCreateBackup_RejectsOverlongLabel(t *testing.T) {
+	store := &fakeStore{target: postgresTarget(), targetOK: true, runningServer: testServerID, running: true}
+	long := strings.Repeat("x", maxLabelLen+1)
+	if _, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID, long); err == nil {
+		t.Fatal("expected an error for a label longer than the limit")
 	}
 }
 
@@ -119,7 +158,7 @@ func TestCreateBackup_RejectsNonDatabaseService(t *testing.T) {
 	target.SourceKind = "git"
 	target.TemplateID = ""
 	store := &fakeStore{target: target, targetOK: true, running: true, runningServer: testServerID}
-	_, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID)
+	_, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID, "")
 	if err == nil {
 		t.Fatal("expected an error backing up a non-database service")
 	}
@@ -127,7 +166,7 @@ func TestCreateBackup_RejectsNonDatabaseService(t *testing.T) {
 
 func TestCreateBackup_RequiresRunningDatabase(t *testing.T) {
 	store := &fakeStore{target: postgresTarget(), targetOK: true, running: false}
-	_, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID)
+	_, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID, "")
 	if err == nil {
 		t.Fatal("expected an error backing up a database that isn't running")
 	}
@@ -135,14 +174,14 @@ func TestCreateBackup_RequiresRunningDatabase(t *testing.T) {
 
 func TestCreateBackup_Unauthorized(t *testing.T) {
 	store := &fakeStore{target: postgresTarget(), targetOK: true, runningServer: testServerID, running: true}
-	if _, err := newSvc(store, denyAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID); err == nil {
+	if _, err := newSvc(store, denyAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID, ""); err == nil {
 		t.Fatal("expected a permission error")
 	}
 }
 
 func TestCreateBackup_NotFound(t *testing.T) {
 	store := &fakeStore{targetOK: false}
-	if _, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID); err == nil {
+	if _, err := newSvc(store, allowAll{}, &fakeRecorder{}).CreateBackup(context.Background(), testServiceID, ""); err == nil {
 		t.Fatal("expected a not-found error for a missing service")
 	}
 }
@@ -219,6 +258,86 @@ func TestReportBackupJob_RejectsBadStatus(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected an error for a non-agent-reportable status")
+	}
+}
+
+func succeededBackup() Backup {
+	return Backup{ID: testBackupID, ServiceID: testServiceID, WorkspaceID: "ws", EnvironmentID: "env", ProjectID: "proj", ServerID: testServerID, Status: StatusSucceeded, ArtifactURI: "/data/x.sql"}
+}
+
+func TestRestoreBackup_Success(t *testing.T) {
+	store := &fakeStore{get: succeededBackup(), getOK: true, runningServer: testServerID, running: true}
+	rec := &fakeRecorder{}
+	r, err := newSvc(store, allowAll{}, rec).RestoreBackup(context.Background(), testBackupID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if r.Status != RestoreStatusQueued || store.insertedRestore.ArtifactURI != "/data/x.sql" {
+		t.Errorf("restore = %+v, inserted = %+v, want queued carrying the source artifact", r, store.insertedRestore)
+	}
+	if rec.calls != 1 {
+		t.Errorf("audit calls = %d, want 1", rec.calls)
+	}
+}
+
+func TestRestoreBackup_RejectsUnsucceededBackup(t *testing.T) {
+	b := succeededBackup()
+	b.Status = StatusDumping
+	store := &fakeStore{get: b, getOK: true, runningServer: testServerID, running: true}
+	if _, err := newSvc(store, allowAll{}, &fakeRecorder{}).RestoreBackup(context.Background(), testBackupID); err == nil {
+		t.Fatal("expected an error restoring a backup that hasn't succeeded")
+	}
+}
+
+func TestRestoreBackup_RejectsDifferentServer(t *testing.T) {
+	store := &fakeStore{get: succeededBackup(), getOK: true, runningServer: "another-server", running: true}
+	if _, err := newSvc(store, allowAll{}, &fakeRecorder{}).RestoreBackup(context.Background(), testBackupID); err == nil {
+		t.Fatal("expected an error when the database runs on a different server than the backup")
+	}
+}
+
+func TestRestoreBackup_RequiresRunningDatabase(t *testing.T) {
+	store := &fakeStore{get: succeededBackup(), getOK: true, running: false}
+	if _, err := newSvc(store, allowAll{}, &fakeRecorder{}).RestoreBackup(context.Background(), testBackupID); err == nil {
+		t.Fatal("expected an error restoring into a database that isn't running")
+	}
+}
+
+func TestPollRestoreJob_ClaimsAndResolves(t *testing.T) {
+	store := &fakeStore{
+		agentServer: testServerID, agentOK: true,
+		restoreClaim: RestoreJob{ID: "restore-1", ServiceID: testServiceID, ArtifactURI: "/data/x.sql"}, restoreClaimOK: true,
+		creds: DBCredentials{User: "plorigo", Password: "secret", Database: "app"},
+	}
+	out, err := newSvc(store, allowAll{}, &fakeRecorder{}).PollRestoreJob(context.Background(), PollInput{Credential: testCred})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !out.HasWork || out.RestoreID != "restore-1" || out.ArtifactURI != "/data/x.sql" || out.PgDatabase != "app" {
+		t.Errorf("claimed restore = %+v, want work with creds + artifact", out)
+	}
+}
+
+func TestReportRestoreJob_OwnershipEnforced(t *testing.T) {
+	store := &fakeStore{agentServer: testServerID, agentOK: true, restoreGet: RestoreJob{ID: testRestoreID, ServerID: "another"}, restoreGetOK: true}
+	err := newSvc(store, allowAll{}, &fakeRecorder{}).ReportRestoreJob(context.Background(), ReportRestoreInput{
+		Credential: testCred, RestoreID: testRestoreID, Status: RestoreStatusSucceeded,
+	})
+	if err == nil {
+		t.Fatal("expected a permission error when the agent doesn't own the restore")
+	}
+}
+
+func TestReportRestoreJob_UpdatesStatus(t *testing.T) {
+	store := &fakeStore{agentServer: testServerID, agentOK: true, restoreGet: RestoreJob{ID: testRestoreID, ServerID: testServerID}, restoreGetOK: true}
+	err := newSvc(store, allowAll{}, &fakeRecorder{}).ReportRestoreJob(context.Background(), ReportRestoreInput{
+		Credential: testCred, RestoreID: testRestoreID, Status: RestoreStatusSucceeded, Message: "done",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if store.updatedRestore.Status != RestoreStatusSucceeded {
+		t.Errorf("update = %+v, want succeeded", store.updatedRestore)
 	}
 }
 

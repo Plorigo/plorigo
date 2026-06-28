@@ -22,8 +22,30 @@ const (
 	StatusFailed    = "failed"
 )
 
+// Restore status vocabulary (restore_jobs), mirrored in the agent and the DB CHECK constraint
+// (00026_restore_jobs.sql). queued/assigned are control-plane states; the rest are agent-reported.
+const (
+	RestoreStatusQueued    = "queued"
+	RestoreStatusAssigned  = "assigned"
+	RestoreStatusRestoring = "restoring"
+	RestoreStatusVerifying = "verifying"
+	RestoreStatusSucceeded = "succeeded"
+	RestoreStatusFailed    = "failed"
+)
+
 // DestinationLocal is the MVP artifact destination: the server's own disk.
 const DestinationLocal = "local"
+
+// Trigger sources for a backup: who started it. A dashboard-initiated backup is always "manual";
+// scheduled backups are a later slice (see docs/architecture/backups.md). Mirrored in the DB CHECK
+// constraint (00027_backup_label_trigger.sql).
+const (
+	TriggerManual    = "manual"
+	TriggerScheduled = "scheduled"
+)
+
+// maxLabelLen bounds an operator-typed backup label, so it stays a short identifier.
+const maxLabelLen = 80
 
 // Engine + kind + template identifiers shared with the agent protocol.
 const (
@@ -48,6 +70,8 @@ type Backup struct {
 	Status        string
 	Message       string
 	Error         string
+	Label         string // optional operator-typed name, to tell backups apart
+	TriggerSource string // "manual" (dashboard) or "scheduled" (later slice)
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
@@ -64,10 +88,50 @@ type Claimed struct {
 	PgDatabase string
 }
 
+// RestoreJob is one attempt to restore a succeeded backup back into its database service.
+type RestoreJob struct {
+	ID            string
+	BackupID      string
+	ServiceID     string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	ArtifactURI   string
+	Status        string
+	Message       string
+	Error         string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// ClaimedRestore is a restore job handed to the agent, with the resolved target credentials and
+// the source artifact to read from the server's disk.
+type ClaimedRestore struct {
+	HasWork     bool
+	RestoreID   string
+	ServiceID   string
+	Engine      string
+	PgUser      string
+	PgPassword  string
+	PgDatabase  string
+	ArtifactURI string
+}
+
 // PollInput is an agent's poll for the next backup job, authenticated by its credential.
 type PollInput struct {
 	AgentID    string
 	Credential string
+}
+
+// ReportRestoreInput is an agent's reported transition for a restore it is executing.
+type ReportRestoreInput struct {
+	AgentID    string
+	Credential string
+	RestoreID  string
+	Status     string
+	Message    string
+	Error      string
 }
 
 // ReportInput is an agent's reported transition for a backup it is executing.
@@ -86,10 +150,14 @@ type ReportInput struct {
 // Service is the backups module surface: the dashboard-facing create/read methods plus the
 // agent-facing gateway (credential-authenticated, not policy-authorized).
 type Service interface {
-	CreateBackup(ctx context.Context, serviceID string) (Backup, error)
+	CreateBackup(ctx context.Context, serviceID, label string) (Backup, error)
 	GetBackup(ctx context.Context, backupID string) (Backup, error)
 	ListByService(ctx context.Context, serviceID string) ([]Backup, error)
+	RestoreBackup(ctx context.Context, backupID string) (RestoreJob, error)
+	ListRestoresByService(ctx context.Context, serviceID string) ([]RestoreJob, error)
 
 	PollBackupJob(ctx context.Context, in PollInput) (Claimed, error)
 	ReportBackupJob(ctx context.Context, in ReportInput) error
+	PollRestoreJob(ctx context.Context, in PollInput) (ClaimedRestore, error)
+	ReportRestoreJob(ctx context.Context, in ReportRestoreInput) error
 }

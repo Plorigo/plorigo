@@ -43,8 +43,10 @@ var publicProcedures = map[string]bool{
 	"/agent.v1.DeployService/ReportRouteSync":  true,
 	// The backup gateway: the agent claims and reports database backup jobs, authenticated by
 	// its durable agent credential (validated in the backups service), not a session.
-	"/agent.v1.BackupService/PollBackupJob":   true,
-	"/agent.v1.BackupService/ReportBackupJob": true,
+	"/agent.v1.BackupService/PollBackupJob":    true,
+	"/agent.v1.BackupService/ReportBackupJob":  true,
+	"/agent.v1.BackupService/PollRestoreJob":   true,
+	"/agent.v1.BackupService/ReportRestoreJob": true,
 }
 
 // authInterceptor resolves the caller's principal from the request, applies a CSRF

@@ -31,6 +31,33 @@ type Store interface {
 	// DBCredentialsForService resolves the managed database's POSTGRES_* connection credentials
 	// from the service's configuration (plaintext variables written at provision time).
 	DBCredentialsForService(ctx context.Context, serviceID string) (DBCredentials, error)
+
+	// Restore jobs.
+	InsertRestore(ctx context.Context, tx database.Tx, r NewRestore) (RestoreJob, error)
+	GetRestore(ctx context.Context, id string) (RestoreJob, bool, error)
+	ListRestoresByService(ctx context.Context, serviceID string) ([]RestoreJob, error)
+	ClaimNextRestoreForServer(ctx context.Context, tx database.Tx, serverID string) (RestoreJob, bool, error)
+	UpdateRestoreStatus(ctx context.Context, tx database.Tx, u RestoreStatusUpdate) (RestoreJob, error)
+}
+
+// NewRestore is the data to insert a queued restore. artifact_uri is copied from the source
+// backup so the agent's claim is self-contained.
+type NewRestore struct {
+	BackupID      string
+	ServiceID     string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	ArtifactURI   string
+}
+
+// RestoreStatusUpdate is an agent's reported transition for a restore.
+type RestoreStatusUpdate struct {
+	RestoreID string
+	Status    string
+	Message   string
+	Error     string
 }
 
 // ServiceTarget is the database service a backup targets.
@@ -58,6 +85,8 @@ type NewBackup struct {
 	ProjectID     string
 	WorkspaceID   string
 	ServerID      string
+	Label         string // optional operator-typed name
+	TriggerSource string // "manual" or "scheduled"
 }
 
 // StatusUpdate is an agent's reported transition for a backup. A zero/empty artifact_uri /
