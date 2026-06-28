@@ -7,6 +7,7 @@ import (
 	"github.com/plorigo/plorigo/internal/agents"
 	"github.com/plorigo/plorigo/internal/audit"
 	"github.com/plorigo/plorigo/internal/auth"
+	"github.com/plorigo/plorigo/internal/backups"
 	"github.com/plorigo/plorigo/internal/config"
 	"github.com/plorigo/plorigo/internal/deployments"
 	"github.com/plorigo/plorigo/internal/domains"
@@ -186,6 +187,16 @@ func (a *App) buildModules() error {
 		Enqueuer: a.deployments.Service(),
 		Config:   a.config.Service(),
 		Log:      a.log,
+	})
+
+	// Backups capture a managed Postgres service's data via the database's server agent. It needs
+	// no Crypto (managed-DB credentials are plaintext config variables, not sealed secrets) and
+	// resolves the target service + running server through sibling reads in its own postgres.go.
+	a.backups = backups.New(backups.Deps{
+		DB:     a.db,
+		Audit:  auditSvc,
+		Policy: policySvc,
+		Log:    a.log,
 	})
 
 	mailerSvc := mailer.New(mailer.Config{

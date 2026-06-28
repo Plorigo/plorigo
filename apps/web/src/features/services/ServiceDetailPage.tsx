@@ -60,6 +60,7 @@ import { pickDefaultServer, serverStatusLabel } from "@/lib/serverSelection";
 import { statusTone } from "@/lib/status";
 import { useWorkspaceStore } from "@/store";
 import { deploymentRefLabel, deploymentTimeline } from "@/features/deployments/timeline";
+import { BackupsPanel } from "./BackupsPanel";
 import { ReadinessPanel } from "./ReadinessPanel";
 import { internalUrl, isPublic, sourceLabel } from "./serviceData";
 
@@ -147,8 +148,10 @@ export function ServiceDetailPage() {
       {/* Production Readiness Doctor — deterministic checks + what to fix before launching. */}
       <ReadinessPanel serviceId={s.id} />
 
-      {/* Connection — managed databases (template services) expose how to connect. */}
+      {/* Connection + backups — managed databases (template services) expose how to connect and
+          can be snapshotted with pg_dump. */}
       {s.sourceKind === "template" && <ConnectionPanel service={s} />}
+      {s.sourceKind === "template" && <BackupsPanel serviceId={s.id} />}
 
       <DomainsPanel service={s} />
 

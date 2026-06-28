@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package controlplane.v1;
+
+// The dashboard-facing backups API. A Backup is one attempt to capture a managed Postgres
+// database service's data with pg_dump, run by the database's server agent and stored on the
+// server (local disk for the MVP; an S3-compatible destination is a later slice). The agent-facing
+// side is agent.v1.BackupService. See docs/architecture/backups.md.
+message Backup {
+  string id = 1;
+  string service_id = 2;
+  string environment_id = 3;
+  string project_id = 4;
+  string workspace_id = 5;
+  string server_id = 6;
+  string destination = 7;  // "local" (S3 later)
+  string artifact_uri = 8; // where the dump lives on the server
+  int64 size_bytes = 9;
+  string checksum = 10;    // sha256 of the artifact
+  string status = 11;      // queued|assigned|dumping|uploading|verifying|succeeded|failed
+  string message = 12;
+  string error = 13;
+  string created_at = 14;  // RFC 3339
+  string updated_at = 15;  // RFC 3339
+}
+
+message CreateBackupRequest {
+  string service_id = 1;
+}
+
+message CreateBackupResponse {
+  Backup backup = 1;
+}
+
+message GetBackupRequest {
+  string id = 1;
+}
+
+message GetBackupResponse {
+  Backup backup = 1;
+}
+
+message ListBackupsByServiceRequest {
+  string service_id = 1;
+}
+
+message ListBackupsByServiceResponse {
+  repeated Backup backups = 1;
+}
+
+// BackupService creates and reports backups for managed database services. CreateBackup is
+// policy-authorized (ActionBackupCreate); reads require ActionBackupRead.
+service BackupService {
+  rpc CreateBackup(CreateBackupRequest) returns (CreateBackupResponse);
+  rpc GetBackup(GetBackupRequest) returns (GetBackupResponse);
+  rpc ListBackupsByService(ListBackupsByServiceRequest) returns (ListBackupsByServiceResponse);
+}

@@ -2,6 +2,7 @@ import { createClient } from "@connectrpc/connect";
 
 import { AgentService } from "../gen/controlplane/v1/agents_pb";
 import { AuthService } from "../gen/controlplane/v1/auth_pb";
+import { BackupService } from "../gen/controlplane/v1/backups_pb";
 import { ConfigService } from "../gen/controlplane/v1/config_pb";
 import { DeploymentService } from "../gen/controlplane/v1/deployments_pb";
 import { DomainService } from "../gen/controlplane/v1/domains_pb";
@@ -18,6 +19,7 @@ import { transport } from "./connect";
 // Generated, typed ConnectRPC clients shared across the app.
 export const agentClient = createClient(AgentService, transport);
 export const authClient = createClient(AuthService, transport);
+export const backupClient = createClient(BackupService, transport);
 export const configClient = createClient(ConfigService, transport);
 export const deploymentClient = createClient(DeploymentService, transport);
 export const domainClient = createClient(DomainService, transport);
