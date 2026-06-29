@@ -232,6 +232,13 @@ configurable TTL (`PLORIGO_PREVIEW_TTL_HOURS`, default 72h; `0` disables it). Th
 system action — not policy-authorized, audited with a `preview-expiry` actor — and idempotent
 (a torn-down preview leaves `running`, so a later sweep skips it).
 
+**Password protection.** A preview URL can require a **password** (basic auth) so a not-yet-public
+preview isn't world-reachable. The control plane **bcrypt-hashes** the password at create time and
+stores only the hash (never the plaintext); the username is validated to a safe charset. The hash +
+username travel to the agent in the deploy job and are stamped as container labels, so the agent
+renders a `basic_auth` block on the preview's Caddy route (and rebuilds it from Docker truth on the
+route-sync loop). Production routes and unprotected previews render no `basic_auth`.
+
 > [!NOTE]
 > **What's built so far.** Previews are created **manually** (dashboard or RPC) **and
 > automatically from PR webhooks** (above), for **public** git services; they are **torn down on
