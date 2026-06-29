@@ -293,6 +293,15 @@ type Service interface {
 	TeardownPreview(ctx context.Context, deploymentID string) (TeardownJob, error)
 	ListTeardownsByService(ctx context.Context, serviceID string) ([]TeardownJob, error)
 
+	// CreatePreviewForPR and TeardownPreviewForPR are the webhook-driven seam (phase 4):
+	// create/refresh or remove a PR preview by service + PR number, resolving the server and the
+	// preview internally. They are triggered by a VERIFIED GitHub webhook (no user session), so —
+	// like EnqueueFirstDeployment — they are NOT policy-authorized; the webhook's signature check +
+	// installation→workspace→service mapping is the gate. Public git only; TeardownPreviewForPR is
+	// an idempotent no-op when no active preview exists.
+	CreatePreviewForPR(ctx context.Context, serviceID string, prNumber int32) (deploymentID string, err error)
+	TeardownPreviewForPR(ctx context.Context, serviceID string, prNumber int32) error
+
 	// Agent gateway (credential-authenticated, NOT policy-authorized — like Heartbeat).
 	PollDeployment(ctx context.Context, in PollInput) (Claimed, error)
 	ReportDeployment(ctx context.Context, in ReportInput) error

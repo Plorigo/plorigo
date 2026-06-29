@@ -82,6 +82,12 @@ type fakeStore struct {
 	teardownStatusUpdates []TeardownStatusUpdate
 	tornDownRouteKey      string
 	tornDownServerID      string
+
+	// Webhook seam.
+	latestServerID  string
+	latestServerOK  bool
+	activePreview   Deployment
+	activePreviewOK bool
 }
 
 func (f *fakeStore) WorkspaceAndProjectForEnvironment(_ context.Context, _ string) (string, string, bool, error) {
@@ -251,6 +257,12 @@ func (f *fakeStore) MarkPreviewTornDown(_ context.Context, _ database.Tx, routeK
 	f.tornDownRouteKey = routeKey
 	f.tornDownServerID = serverID
 	return nil
+}
+func (f *fakeStore) LatestServerForService(_ context.Context, _ string) (string, bool, error) {
+	return f.latestServerID, f.latestServerOK, nil
+}
+func (f *fakeStore) LatestActivePreviewByRouteKey(_ context.Context, _, _ string) (Deployment, bool, error) {
+	return f.activePreview, f.activePreviewOK, nil
 }
 
 type fakeRecorder struct {

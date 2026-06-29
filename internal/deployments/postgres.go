@@ -462,6 +462,28 @@ func (s *postgresStore) MarkPreviewTornDown(ctx context.Context, tx database.Tx,
 	return db.New(tx).MarkPreviewTornDown(ctx, db.MarkPreviewTornDownParams{RouteKey: routeKey, ServerID: serverID})
 }
 
+func (s *postgresStore) LatestServerForService(ctx context.Context, serviceID string) (string, bool, error) {
+	serverID, err := db.New(s.pool).GetLatestServerForService(ctx, serviceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return serverID, true, nil
+}
+
+func (s *postgresStore) LatestActivePreviewByRouteKey(ctx context.Context, serviceID, routeKey string) (Deployment, bool, error) {
+	row, err := db.New(s.pool).GetLatestActivePreviewByRouteKey(ctx, db.GetLatestActivePreviewByRouteKeyParams{ServiceID: serviceID, RouteKey: routeKey})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Deployment{}, false, nil
+		}
+		return Deployment{}, false, err
+	}
+	return deploymentFromRow(row), true, nil
+}
+
 func teardownFromRow(r db.TeardownJob) TeardownJob {
 	return TeardownJob{
 		ID:            r.ID,

@@ -165,3 +165,22 @@ RETURNING *;
 UPDATE deployments
 SET status = 'torndown', updated_at = now()
 WHERE route_key = $1 AND server_id = $2 AND status NOT IN ('failed', 'superseded', 'torndown');
+
+-- GetLatestServerForService returns the server of the service's most recent deployment (any
+-- status), so a webhook-driven PR preview deploys onto the same server production uses. ErrNoRows
+-- when the service has never deployed.
+-- name: GetLatestServerForService :one
+SELECT server_id FROM deployments
+WHERE service_id = $1
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- GetLatestActivePreviewByRouteKey returns the most recent NOT-yet-torndown preview deployment for
+-- a route_key, so a webhook PR-close can enqueue a teardown against it. ErrNoRows when there is no
+-- active preview (already torn down, or never created) — the caller treats that as an idempotent
+-- no-op.
+-- name: GetLatestActivePreviewByRouteKey :one
+SELECT * FROM deployments
+WHERE service_id = $1 AND route_key = $2 AND kind = 'preview' AND status <> 'torndown'
+ORDER BY created_at DESC
+LIMIT 1;
