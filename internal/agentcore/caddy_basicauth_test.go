@@ -30,6 +30,42 @@ func TestCaddyRender_BasicAuthForProtectedPreview(t *testing.T) {
 	}
 }
 
+func TestCaddyRender_UsesRouteHostForPreview(t *testing.T) {
+	m := testCaddyManager(t)
+	got, err := m.render([]managedRoute{{
+		ServiceID:    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		DeploymentID: "dep",
+		ContainerID:  "c",
+		HostPort:     3001,
+		RouteHost:    "my-app-pr-7-abc123",
+	}})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(got, "my-app-pr-7-abc123.") {
+		t.Fatalf("rendered config should serve the pretty RouteHost:\n%s", got)
+	}
+	if strings.Contains(got, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.") {
+		t.Fatalf("a preview must not route on the UUID service-id host:\n%s", got)
+	}
+}
+
+func TestCaddyRender_FallsBackToServiceIDHost(t *testing.T) {
+	m := testCaddyManager(t)
+	got, err := m.render([]managedRoute{{
+		ServiceID:    "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+		DeploymentID: "dep",
+		ContainerID:  "c",
+		HostPort:     3001,
+	}})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(got, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.") {
+		t.Fatalf("production (no RouteHost) must route on the service-id host:\n%s", got)
+	}
+}
+
 func TestCaddyRender_NoBasicAuthWhenUnset(t *testing.T) {
 	m := testCaddyManager(t)
 	got, err := m.render([]managedRoute{{

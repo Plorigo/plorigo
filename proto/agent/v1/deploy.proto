@@ -65,6 +65,11 @@ message PollDeploymentResponse {
   // basic_auth_user + that hash on the preview's route. Empty for production and unprotected previews.
   string basic_auth_user = 14;
   string basic_auth_hash = 15;
+  // The DNS label for the PUBLIC route host, distinct from app_label (which keys the
+  // container-replacement group + teardown). For a PREVIEW this is a human-readable label
+  // ({slug}-pr-{n}-{hash}) so the URL reads nicely; empty for production, where the agent uses
+  // app_label (the service id) for the host exactly as before.
+  string route_host = 16;
 }
 
 message ReportDeploymentRequest {

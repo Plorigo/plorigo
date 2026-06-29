@@ -28,6 +28,9 @@ const (
 	// the Caddy route (with auth) from Docker truth. The hash is bcrypt — never the plaintext.
 	labelBasicAuthUser = "plorigo.basicauth.user"
 	labelBasicAuthHash = "plorigo.basicauth.hash"
+	// The pretty public host label for a preview route (empty for production), so the route's host
+	// survives a rebuild from Docker truth.
+	labelRouteHost = "plorigo.routehost"
 )
 
 const (
@@ -92,6 +95,8 @@ type runInput struct {
 	// Optional basic-auth for a protected preview route (bcrypt hash; both empty otherwise).
 	basicAuthUser string
 	basicAuthHash string
+	// routeHost is the pretty public host label for a preview (empty for production).
+	routeHost string
 }
 
 // pull pulls imageRef, surfacing distinct progress status lines through emit. It returns
@@ -205,6 +210,9 @@ func containerLabels(in runInput) map[string]string {
 	if in.basicAuthUser != "" && in.basicAuthHash != "" {
 		labels[labelBasicAuthUser] = in.basicAuthUser
 		labels[labelBasicAuthHash] = in.basicAuthHash
+	}
+	if in.routeHost != "" {
+		labels[labelRouteHost] = in.routeHost
 	}
 	return labels
 }
@@ -390,6 +398,7 @@ func (d *dockerClient) listManagedRoutes(ctx context.Context) ([]managedRoute, e
 			HostPort:      hostPort,
 			BasicAuthUser: c.Labels[labelBasicAuthUser],
 			BasicAuthHash: c.Labels[labelBasicAuthHash],
+			RouteHost:     c.Labels[labelRouteHost],
 		})
 	}
 	return out, nil

@@ -219,6 +219,11 @@ type Claimed struct {
 	// (never plaintext); empty for production and unprotected previews.
 	BasicAuthUser string
 	BasicAuthHash string
+
+	// RouteHost is a human-readable DNS label for a PREVIEW's public route host
+	// ({slug}-pr-{n}-{hash}), distinct from AppLabel (the route_key, which keys replacement +
+	// teardown). Empty for production, where the agent derives the host from AppLabel as before.
+	RouteHost string
 }
 
 // ReportInput is an agent's progress update for a deployment it is executing.
