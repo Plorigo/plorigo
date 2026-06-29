@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/rsa"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -52,6 +54,13 @@ type Config struct {
 	APIBaseURL   string // default https://api.github.com
 	OAuthBaseURL string // default https://github.com
 	HTTPClient   *http.Client
+
+	// GitHub App credentials (optional). When both are set the client can act as the App: mint a
+	// short-lived RS256 app JWT and exchange it for per-installation access tokens (see app.go).
+	// AppPrivateKeyPEM is a PKCS#1 or PKCS#8 RSA private key in PEM form; it is parsed lazily on
+	// first use. Neither is ever returned by an RPC or logged.
+	AppID            string
+	AppPrivateKeyPEM string
 }
 
 // Client talks to GitHub. It is safe for concurrent use.
@@ -59,6 +68,16 @@ type Client struct {
 	apiBaseURL   string
 	oauthBaseURL string
 	http         *http.Client
+
+	// GitHub App: the app id, the raw private-key PEM (parsed lazily + cached in appKey), and a
+	// per-installation token cache. instMu guards instTokens.
+	appID      string
+	appKeyPEM  string
+	appKeyOnce sync.Once
+	appKey     *rsa.PrivateKey
+	appKeyErr  error
+	instMu     sync.Mutex
+	instTokens map[string]instToken
 }
 
 // NewClient builds a Client, filling defaults for any zero Config field.
@@ -71,6 +90,8 @@ func NewClient(cfg Config) *Client {
 		apiBaseURL:   strings.TrimRight(cmp.Or(cfg.APIBaseURL, defaultAPIBaseURL), "/"),
 		oauthBaseURL: strings.TrimRight(cmp.Or(cfg.OAuthBaseURL, defaultOAuthBaseURL), "/"),
 		http:         httpClient,
+		appID:        cfg.AppID,
+		appKeyPEM:    cfg.AppPrivateKeyPEM,
 	}
 }
 
