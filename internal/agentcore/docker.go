@@ -148,6 +148,44 @@ func (d *dockerClient) removeContainer(ctx context.Context, containerID string, 
 	return nil
 }
 
+// removeByService stops and removes every container (running or stopped) stamped with the given
+// plorigo.service label — the teardown of a preview, which is keyed by its route_key. It returns
+// how many it removed, so an already-gone preview (0 removed) is reported as an idempotent success.
+func (d *dockerClient) removeByService(ctx context.Context, appLabel string, emit func(string)) (int, error) {
+	list, err := d.cli.ContainerList(ctx, client.ContainerListOptions{
+		All:     true,
+		Filters: client.Filters{}.Add("label", labelService+"="+appLabel),
+	})
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, c := range list.Items {
+		emit("removing preview container " + shortID(c.ID))
+		_, _ = d.cli.ContainerStop(ctx, c.ID, client.ContainerStopOptions{})
+		if _, err := d.cli.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+// removeNetwork removes a preview's isolated Docker network by name, best-effort: a network that is
+// already gone, or still has an endpoint, is not an error the teardown should fail on (the agent
+// reconciles Caddy and removes the container regardless). The production per-environment network is
+// never passed here — only a preview's own plorigo-preview-{route_key} network.
+func (d *dockerClient) removeNetwork(ctx context.Context, name string) error {
+	if name == "" {
+		return nil
+	}
+	if _, err := d.cli.NetworkInspect(ctx, name, client.NetworkInspectOptions{}); err != nil {
+		return nil // already gone
+	}
+	_, err := d.cli.NetworkRemove(ctx, name, client.NetworkRemoveOptions{})
+	return err
+}
+
 // run creates and starts the container and returns its id and host port. A PUBLIC service
 // publishes containerPort to an ephemeral host port (so Caddy can route it), discovered and
 // returned; a PRIVATE service publishes nothing and returns host port 0 (it is reached only
