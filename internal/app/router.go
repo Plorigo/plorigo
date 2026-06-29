@@ -43,6 +43,9 @@ func (a *App) router() http.Handler {
 	// 302), like the OAuth flow. See github_app.go and docs/architecture/security.md.
 	mux.Handle("GET /api/github/app/install", a.githubAppInstallHandler())
 	mux.Handle("GET /api/github/app/setup", a.githubAppSetupHandler())
+	// Inbound GitHub App webhooks: the handler verifies the HMAC signature over the raw body before
+	// acting, so it is plain HTTP (outside the auth interceptor). See github_webhook.go.
+	mux.Handle("POST /api/github/webhook", a.githubWebhookHandler())
 	// The agent gateways: agent.v1 procedures are public (see auth_interceptor.go); the
 	// services validate the registration token / agent credential in the request body.
 	mux.Handle(a.agents.AgentRoute(ic))

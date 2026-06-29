@@ -25,6 +25,7 @@ import (
 	"github.com/plorigo/plorigo/internal/serversetup"
 	"github.com/plorigo/plorigo/internal/services"
 	"github.com/plorigo/plorigo/internal/sources"
+	"github.com/plorigo/plorigo/internal/webhooks"
 )
 
 // App is the assembled control plane.
@@ -48,6 +49,7 @@ type App struct {
 	services     *services.Module
 	backups      *backups.Module
 	readiness    *readiness.Module
+	webhooks     *webhooks.Module
 }
 
 // New validates config, opens the DB pool, builds modules, and prepares the server.
