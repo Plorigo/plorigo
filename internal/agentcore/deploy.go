@@ -206,6 +206,8 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 		public:        public,
 		networkName:   job.GetNetworkName(),
 		networkAlias:  job.GetNetworkAlias(),
+		basicAuthUser: job.GetBasicAuthUser(),
+		basicAuthHash: job.GetBasicAuthHash(),
 	})
 	if err != nil {
 		// Capture the container's own output BEFORE cleanup removes it: the usual cause here is
@@ -247,10 +249,12 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 			return
 		}
 		routes = routesForDeployment(routes, managedRoute{
-			ServiceID:    appLabel,
-			DeploymentID: depID,
-			ContainerID:  containerID,
-			HostPort:     hostPort,
+			ServiceID:     appLabel,
+			DeploymentID:  depID,
+			ContainerID:   containerID,
+			HostPort:      hostPort,
+			BasicAuthUser: job.GetBasicAuthUser(),
+			BasicAuthHash: job.GetBasicAuthHash(),
 		})
 		if logs, err := router.apply(ctx, routes); err != nil {
 			if len(logs) == 0 {

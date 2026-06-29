@@ -24,6 +24,10 @@ const (
 	labelManaged    = "plorigo.managed"
 	labelService    = "plorigo.service"
 	labelDeployment = "plorigo.deployment"
+	// Basic-auth for a protected preview route, stamped on the container so the agent can rebuild
+	// the Caddy route (with auth) from Docker truth. The hash is bcrypt — never the plaintext.
+	labelBasicAuthUser = "plorigo.basicauth.user"
+	labelBasicAuthHash = "plorigo.basicauth.hash"
 )
 
 const (
@@ -85,6 +89,9 @@ type runInput struct {
 	public        bool
 	networkName   string
 	networkAlias  string
+	// Optional basic-auth for a protected preview route (bcrypt hash; both empty otherwise).
+	basicAuthUser string
+	basicAuthHash string
 }
 
 // pull pulls imageRef, surfacing distinct progress status lines through emit. It returns
@@ -186,6 +193,22 @@ func (d *dockerClient) removeNetwork(ctx context.Context, name string) error {
 	return err
 }
 
+// containerLabels builds the Plorigo labels stamped on a managed container, including the optional
+// basic-auth labels for a protected preview — so listManagedRoutes can rebuild the Caddy route
+// (with its auth) from Docker truth after a restart or for the route-sync loop.
+func containerLabels(in runInput) map[string]string {
+	labels := map[string]string{
+		labelManaged:    "true",
+		labelService:    in.appLabel,
+		labelDeployment: in.deploymentID,
+	}
+	if in.basicAuthUser != "" && in.basicAuthHash != "" {
+		labels[labelBasicAuthUser] = in.basicAuthUser
+		labels[labelBasicAuthHash] = in.basicAuthHash
+	}
+	return labels
+}
+
 // run creates and starts the container and returns its id and host port. A PUBLIC service
 // publishes containerPort to an ephemeral host port (so Caddy can route it), discovered and
 // returned; a PRIVATE service publishes nothing and returns host port 0 (it is reached only
@@ -227,11 +250,7 @@ func (d *dockerClient) run(ctx context.Context, in runInput) (string, int32, err
 			Image:        in.imageRef,
 			Env:          in.env,
 			ExposedPorts: network.PortSet{port: struct{}{}},
-			Labels: map[string]string{
-				labelManaged:    "true",
-				labelService:    in.appLabel,
-				labelDeployment: in.deploymentID,
-			},
+			Labels:       containerLabels(in),
 		},
 		HostConfig:       hostConfig,
 		NetworkingConfig: netConfig,
@@ -365,10 +384,12 @@ func (d *dockerClient) listManagedRoutes(ctx context.Context) ([]managedRoute, e
 			continue
 		}
 		out = append(out, managedRoute{
-			ServiceID:    serviceID,
-			DeploymentID: depID,
-			ContainerID:  c.ID,
-			HostPort:     hostPort,
+			ServiceID:     serviceID,
+			DeploymentID:  depID,
+			ContainerID:   c.ID,
+			HostPort:      hostPort,
+			BasicAuthUser: c.Labels[labelBasicAuthUser],
+			BasicAuthHash: c.Labels[labelBasicAuthHash],
 		})
 	}
 	return out, nil
