@@ -294,6 +294,22 @@ type SshManagementKey struct {
 	UpdatedAt        time.Time
 }
 
+type TeardownJob struct {
+	ID            string
+	DeploymentID  string
+	ServiceID     string
+	RouteKey      string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	Status        string
+	Message       string
+	Error         string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
 type User struct {
 	ID            string
 	Email         string

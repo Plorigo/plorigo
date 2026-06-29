@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package agent.v1;
+
+// TeardownService is the agent-facing dispatch gateway for PREVIEW teardown: a Plorigo server
+// agent calls it OUTBOUND to claim teardown work and report progress, exactly like
+// agent.v1.DeployService and agent.v1.BackupService. These RPCs are not authenticated by a user
+// session — the agent proves itself with its durable agent credential (the same one used for
+// Heartbeat/PollDeployment), validated in the deployments service, which scopes work to the
+// agent's own server. The dashboard-facing trigger is controlplane.v1.DeploymentService.
+// TeardownPreview.
+//
+// On a teardown the agent stops + removes the preview's container (found by its
+// plorigo.service={route_key} label) and reconciles Caddy from Docker truth, so the route drops
+// automatically. It is idempotent — an already-gone container is success. See
+// docs/architecture/deployment-engine.md.
+service TeardownService {
+  // PollTeardownJob atomically claims the next queued teardown for this agent's server, if any.
+  // has_work is false when there is nothing to do.
+  rpc PollTeardownJob(PollTeardownJobRequest) returns (PollTeardownJobResponse);
+
+  // ReportTeardownJob records a status transition for a teardown the agent is executing.
+  rpc ReportTeardownJob(ReportTeardownJobRequest) returns (ReportTeardownJobResponse);
+}
+
+message PollTeardownJobRequest {
+  string agent_id = 1;
+  string credential = 2;
+}
+
+message PollTeardownJobResponse {
+  bool has_work = 1;
+  string teardown_id = 2;
+  string route_key = 3;    // the preview's container label + Caddy route key (plorigo.service)
+  string network_name = 4; // the preview's isolated Docker network to remove (best-effort cleanup)
+}
+
+message ReportTeardownJobRequest {
+  string agent_id = 1;
+  string credential = 2;
+  string teardown_id = 3;
+  string status = 4;  // stopping|removing|succeeded|failed
+  string message = 5; // human-readable status line
+  string error = 6;   // failure detail (set when status == failed)
+}
+
+message ReportTeardownJobResponse {}

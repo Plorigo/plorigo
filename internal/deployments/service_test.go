@@ -23,6 +23,8 @@ const (
 	testAgentID   = "55555555-5555-5555-5555-555555555555"
 	otherServerID = "66666666-6666-6666-6666-666666666666"
 	testWorkspace = "ws-1"
+
+	testTeardownID = "77777777-7777-7777-7777-777777777777"
 )
 
 type fakeStore struct {
@@ -70,6 +72,16 @@ type fakeStore struct {
 	routeSyncStatus  string
 	routeSyncMessage string
 	routeSyncHosts   []string
+
+	// Teardown jobs.
+	insertedTeardown      NewTeardownJob
+	getTeardown           TeardownJob
+	getTeardownOK         bool
+	claimTeardown         TeardownJob
+	claimTeardownOK       bool
+	teardownStatusUpdates []TeardownStatusUpdate
+	tornDownRouteKey      string
+	tornDownServerID      string
 }
 
 func (f *fakeStore) WorkspaceAndProjectForEnvironment(_ context.Context, _ string) (string, string, bool, error) {
@@ -203,6 +215,41 @@ func (f *fakeStore) MarkDomainsRouteSync(_ context.Context, _ database.Tx, _ str
 	f.routeSyncHosts = append([]string(nil), hostnames...)
 	f.routeSyncStatus = status
 	f.routeSyncMessage = message
+	return nil
+}
+func (f *fakeStore) InsertTeardownJob(_ context.Context, _ database.Tx, t NewTeardownJob) (TeardownJob, error) {
+	f.insertedTeardown = t
+	if f.insertErr != nil {
+		return TeardownJob{}, f.insertErr
+	}
+	return TeardownJob{
+		ID:            testTeardownID,
+		DeploymentID:  t.DeploymentID,
+		ServiceID:     t.ServiceID,
+		RouteKey:      t.RouteKey,
+		EnvironmentID: t.EnvironmentID,
+		ProjectID:     t.ProjectID,
+		WorkspaceID:   t.WorkspaceID,
+		ServerID:      t.ServerID,
+		Status:        TeardownStatusQueued,
+	}, nil
+}
+func (f *fakeStore) GetTeardownJob(_ context.Context, _ string) (TeardownJob, bool, error) {
+	return f.getTeardown, f.getTeardownOK, nil
+}
+func (f *fakeStore) ListTeardownsByService(_ context.Context, _ string) ([]TeardownJob, error) {
+	return nil, nil
+}
+func (f *fakeStore) ClaimNextTeardownForServer(_ context.Context, _ database.Tx, _ string) (TeardownJob, bool, error) {
+	return f.claimTeardown, f.claimTeardownOK, nil
+}
+func (f *fakeStore) UpdateTeardownStatus(_ context.Context, _ database.Tx, u TeardownStatusUpdate) (TeardownJob, error) {
+	f.teardownStatusUpdates = append(f.teardownStatusUpdates, u)
+	return TeardownJob{ID: u.TeardownID, Status: u.Status}, nil
+}
+func (f *fakeStore) MarkPreviewTornDown(_ context.Context, _ database.Tx, routeKey, serverID string) error {
+	f.tornDownRouteKey = routeKey
+	f.tornDownServerID = serverID
 	return nil
 }
 

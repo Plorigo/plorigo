@@ -95,6 +95,47 @@ message CreatePreviewDeploymentResponse {
   Deployment deployment = 1;
 }
 
+// A TeardownJob tracks the on-demand removal of a PREVIEW deployment: the agent on the preview's
+// server stops + removes the preview's container and drops its Caddy route. The control plane
+// records it 'queued'; that server's agent claims it and reports progress. route_key identifies the
+// preview being removed (its container-replacement group + route). See deployment-engine.md.
+message TeardownJob {
+  string id = 1;
+  string deployment_id = 2; // the preview deployment the user removed
+  string service_id = 3;
+  string route_key = 4;
+  string environment_id = 5;
+  string project_id = 6;
+  string workspace_id = 7;
+  string server_id = 8;
+  string status = 9; // queued|assigned|stopping|removing|succeeded|failed
+  string message = 10;
+  string error = 11;
+  string created_at = 12; // RFC 3339
+  string updated_at = 13; // RFC 3339
+}
+
+// TeardownPreview removes a preview deployment on demand: it enqueues a job for the preview's
+// server agent to stop + remove the preview's container and drop its Caddy route. The target must
+// be a PREVIEW deployment (kind = "preview"); a production deployment cannot be torn down this way.
+// Idempotent — tearing down an already-removed preview succeeds. Other previews and production are
+// untouched (the teardown is scoped to the preview's own route_key).
+message TeardownPreviewRequest {
+  string deployment_id = 1; // a preview deployment of the preview to remove
+}
+
+message TeardownPreviewResponse {
+  TeardownJob teardown = 1;
+}
+
+message ListTeardownJobsByServiceRequest {
+  string service_id = 1;
+}
+
+message ListTeardownJobsByServiceResponse {
+  repeated TeardownJob teardowns = 1;
+}
+
 message ListDeploymentsByServiceRequest {
   string service_id = 1;
 }
@@ -167,6 +208,8 @@ message ListDeploymentEventsResponse {
 service DeploymentService {
   rpc CreateDeploymentForService(CreateDeploymentForServiceRequest) returns (CreateDeploymentForServiceResponse);
   rpc CreatePreviewDeployment(CreatePreviewDeploymentRequest) returns (CreatePreviewDeploymentResponse);
+  rpc TeardownPreview(TeardownPreviewRequest) returns (TeardownPreviewResponse);
+  rpc ListTeardownJobsByService(ListTeardownJobsByServiceRequest) returns (ListTeardownJobsByServiceResponse);
   rpc RollbackDeployment(RollbackDeploymentRequest) returns (RollbackDeploymentResponse);
   rpc GetDeployment(GetDeploymentRequest) returns (GetDeploymentResponse);
   rpc ListDeploymentsByService(ListDeploymentsByServiceRequest) returns (ListDeploymentsByServiceResponse);

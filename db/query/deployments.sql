@@ -115,3 +115,53 @@ RETURNING *;
 SELECT * FROM deployment_events
 WHERE deployment_id = $1 AND seq > $2
 ORDER BY seq;
+
+-- --- teardown_jobs ---
+
+-- CreateTeardownJob records a queued teardown of a preview deployment. route_key is the preview's
+-- container-replacement / Caddy route key (the agent matches plorigo.service={route_key}); the rest
+-- are denormalized from the preview's deployment row so the claim is self-contained.
+-- name: CreateTeardownJob :one
+INSERT INTO teardown_jobs (deployment_id, service_id, route_key, environment_id, project_id, workspace_id, server_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING *;
+
+-- name: GetTeardownJob :one
+SELECT * FROM teardown_jobs WHERE id = $1;
+
+-- name: ListTeardownJobsByService :many
+SELECT * FROM teardown_jobs WHERE service_id = $1 ORDER BY created_at DESC;
+
+-- ClaimNextTeardownForServer atomically claims the oldest queued teardown for a server (cf.
+-- ClaimNextDeploymentForServer / ClaimNextRestoreForServer).
+-- name: ClaimNextTeardownForServer :one
+UPDATE teardown_jobs
+SET status = 'assigned', updated_at = now()
+WHERE id = (
+    SELECT t.id FROM teardown_jobs t
+    WHERE t.server_id = $1 AND t.status = 'queued'
+    ORDER BY t.created_at
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+)
+RETURNING *;
+
+-- UpdateTeardownStatus records a status transition; a zero/empty message or error never clobbers a
+-- value already set.
+-- name: UpdateTeardownStatus :one
+UPDATE teardown_jobs
+SET status = sqlc.arg(status),
+    message = CASE WHEN sqlc.arg(message)::text <> '' THEN sqlc.arg(message)::text ELSE message END,
+    error = CASE WHEN sqlc.arg(error)::text <> '' THEN sqlc.arg(error)::text ELSE error END,
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- MarkPreviewTornDown moves a torn-down preview's still-active deployment rows (same route_key on
+-- the server) to the terminal 'torndown' status, so the dashboard stops showing the preview as
+-- running once its container and route are gone. Failed/superseded/already-torndown rows are left
+-- as they are.
+-- name: MarkPreviewTornDown :exec
+UPDATE deployments
+SET status = 'torndown', updated_at = now()
+WHERE route_key = $1 AND server_id = $2 AND status NOT IN ('failed', 'superseded', 'torndown');

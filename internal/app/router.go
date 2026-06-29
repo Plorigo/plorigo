@@ -42,6 +42,7 @@ func (a *App) router() http.Handler {
 	// services validate the registration token / agent credential in the request body.
 	mux.Handle(a.agents.AgentRoute(ic))
 	mux.Handle(a.deployments.AgentRoute(ic))
+	mux.Handle(a.deployments.TeardownAgentRoute(ic))
 	mux.Handle(a.backups.AgentRoute(ic))
 
 	// Dashboard / SPA fallback.

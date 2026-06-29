@@ -287,9 +287,18 @@ type Service interface {
 	// deployment id.
 	EnqueueFirstDeployment(ctx context.Context, tx database.Tx, serviceID, serverID string) (string, error)
 
+	// TeardownPreview enqueues the removal of a preview deployment — stop + remove its container
+	// and drop its Caddy route — on the preview's server. The target must be a preview deployment
+	// (kind = "preview"); production deployments are never torn down this way. Idempotent.
+	TeardownPreview(ctx context.Context, deploymentID string) (TeardownJob, error)
+	ListTeardownsByService(ctx context.Context, serviceID string) ([]TeardownJob, error)
+
 	// Agent gateway (credential-authenticated, NOT policy-authorized — like Heartbeat).
 	PollDeployment(ctx context.Context, in PollInput) (Claimed, error)
 	ReportDeployment(ctx context.Context, in ReportInput) error
 	SyncRoutes(ctx context.Context, in SyncRoutesInput) ([]RouteOverride, error)
 	ReportRouteSync(ctx context.Context, in ReportRouteSyncInput) error
+	// Agent gateway for preview teardown (credential-authenticated).
+	PollTeardownJob(ctx context.Context, in PollInput) (ClaimedTeardown, error)
+	ReportTeardownJob(ctx context.Context, in ReportTeardownInput) error
 }
