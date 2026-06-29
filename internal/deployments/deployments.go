@@ -139,6 +139,18 @@ type CreateForServiceInput struct {
 	GitRef        string
 }
 
+// CreatePreviewInput is what the dashboard supplies to create a PREVIEW deployment of an
+// existing git service. Exactly one of Branch or PRNumber identifies what to build; a PRNumber
+// is resolved to its head ref and the PR is linked back via the deployment's pr_url.
+// ContainerPort is an optional override (0 = the service's configured port).
+type CreatePreviewInput struct {
+	ServiceID     string
+	ServerID      string
+	Branch        string
+	PRNumber      int32
+	ContainerPort int32
+}
+
 // ServiceForDeploy is a service's source + routing facts, resolved when enqueuing a deploy.
 // It is read from the services table (a sibling-table read modules.md Rule 2 permits).
 type ServiceForDeploy struct {
@@ -250,6 +262,11 @@ type ReportRouteSyncInput struct {
 // controlplane.v1.DeploymentService and the agent-facing agent.v1.DeployService.
 type Service interface {
 	CreateForService(ctx context.Context, in CreateForServiceInput) (Deployment, error)
+	// CreatePreview enqueues a preview deployment of an existing git service — a build of a
+	// branch or a pull request's head ref — that runs alongside production with its own
+	// route_key (isolated URL + network) and never supersedes production. Public git services
+	// only in this slice.
+	CreatePreview(ctx context.Context, in CreatePreviewInput) (Deployment, error)
 	// RollbackToDeployment enqueues a new deployment that reproduces a previous healthy
 	// deployment's artifact (same image, or same repo pinned to the built commit) on the
 	// same service and server, linked back via rolled_back_from. The target must be running

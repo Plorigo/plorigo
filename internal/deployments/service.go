@@ -3,12 +3,16 @@ package deployments
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/plorigo/plorigo/internal/platform/authz"
 	"github.com/plorigo/plorigo/internal/platform/database"
+	"github.com/plorigo/plorigo/internal/platform/github"
 	"github.com/plorigo/plorigo/internal/platform/id"
 	"github.com/plorigo/plorigo/internal/platform/principal"
 	"github.com/plorigo/plorigo/internal/platform/problem"
@@ -32,11 +36,12 @@ type service struct {
 	authorizer authz.Authorizer
 	audit      Recorder
 	opener     Opener
+	gh         GitHubClient
 	log        *slog.Logger
 }
 
-func newService(tx TxRunner, store Store, authorizer authz.Authorizer, audit Recorder, opener Opener, log *slog.Logger) *service {
-	return &service{tx: tx, store: store, authorizer: authorizer, audit: audit, opener: opener, log: log}
+func newService(tx TxRunner, store Store, authorizer authz.Authorizer, audit Recorder, opener Opener, gh GitHubClient, log *slog.Logger) *service {
+	return &service{tx: tx, store: store, authorizer: authorizer, audit: audit, opener: opener, gh: gh, log: log}
 }
 
 var _ Service = (*service)(nil)
@@ -162,6 +167,119 @@ func (s *service) CreateForService(ctx context.Context, in CreateForServiceInput
 		return Deployment{}, mapErr(err, "create deployment")
 	}
 	s.log.Info("deployment created", "id", created.ID, "service_id", in.ServiceID, "server_id", created.ServerID, "source_kind", created.SourceKind, "workspace_id", workspaceID, "actor", caller.UserID)
+	return created, nil
+}
+
+// CreatePreview enqueues a preview deployment of an existing git service: a build of a branch,
+// or of a pull request's head ref (resolved through GitHub and linked back via pr_url). The
+// preview runs alongside production with its own route_key — its own URL, container-replacement
+// group, supersede scope, and isolated network — so it never disturbs the service's production
+// deployment. The service's source is resolved server-side (a caller can't smuggle a private
+// URL through); only PUBLIC git services are buildable in this slice.
+func (s *service) CreatePreview(ctx context.Context, in CreatePreviewInput) (Deployment, error) {
+	if _, err := id.Parse(in.ServiceID); err != nil {
+		return Deployment{}, problem.InvalidInput("a valid service_id is required")
+	}
+	if _, err := id.Parse(in.ServerID); err != nil {
+		return Deployment{}, problem.InvalidInput("a valid server_id is required")
+	}
+	if in.ContainerPort < 0 || in.ContainerPort > maxPort {
+		return Deployment{}, problem.InvalidInput("container_port must be between 1 and %d, or 0 to use the service's port", maxPort)
+	}
+	branch := strings.TrimSpace(in.Branch)
+	// Exactly one of branch / pr_number identifies what to build.
+	if (branch == "") == (in.PRNumber <= 0) {
+		return Deployment{}, problem.InvalidInput("provide exactly one of a branch or a pull request number")
+	}
+
+	workspaceID, _, ok, err := s.store.WorkspaceAndProjectForService(ctx, in.ServiceID)
+	if err != nil {
+		return Deployment{}, problem.Internalf(err, "create preview")
+	}
+	if !ok {
+		return Deployment{}, problem.NotFound("service %s not found", in.ServiceID)
+	}
+
+	caller := principal.FromContext(ctx)
+	if err := s.authorizer.Authorize(ctx, caller, authz.ActionDeploymentCreate, authz.Resource{Type: "deployment", WorkspaceID: workspaceID}); err != nil {
+		return Deployment{}, err
+	}
+
+	serverWorkspace, ok, err := s.store.WorkspaceForServer(ctx, in.ServerID)
+	if err != nil {
+		return Deployment{}, problem.Internalf(err, "create preview")
+	}
+	if !ok || serverWorkspace != workspaceID {
+		return Deployment{}, problem.NotFound("server %s not found in this workspace", in.ServerID)
+	}
+
+	// Resolve the service's source BEFORE the transaction (a PR lookup is network I/O, which
+	// must not run inside a DB tx). Previews build public git services only.
+	svc, ok, err := s.store.ServiceForDeploy(ctx, in.ServiceID)
+	if err != nil {
+		return Deployment{}, problem.Internalf(err, "create preview")
+	}
+	if !ok {
+		return Deployment{}, problem.NotFound("service %s not found", in.ServiceID)
+	}
+	if svc.SourceKind != SourceGit {
+		return Deployment{}, problem.InvalidInput("previews are only supported for git services")
+	}
+	if svc.SourceAccess != "public" {
+		return Deployment{}, problem.InvalidInput("building private repositories isn't supported yet — connect a public repo (GitHub App support is coming)")
+	}
+
+	// Resolve the ref to build and the PR linkage. A PR number is resolved to its head ref;
+	// the route_key is keyed by PR number (stable across pushes) or by a slug of the branch.
+	gitRef := branch
+	var prNumber int32
+	var prURL string
+	if in.PRNumber > 0 {
+		pr, perr := s.gh.GetPullRequest(ctx, "", svc.Owner, svc.Repo, int(in.PRNumber))
+		if perr != nil {
+			return Deployment{}, mapGitHubErr(perr)
+		}
+		if pr.HeadRef == "" {
+			return Deployment{}, problem.NotFound("pull request #%d was not found in %s/%s", in.PRNumber, svc.Owner, svc.Repo)
+		}
+		gitRef = pr.HeadRef
+		prNumber = in.PRNumber
+		prURL = pr.HTMLURL
+	}
+
+	port := svc.ContainerPort
+	if in.ContainerPort > 0 {
+		port = in.ContainerPort
+	}
+	routeKey := previewRouteKey(in.ServiceID, prNumber, gitRef)
+
+	var created Deployment
+	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		var txErr error
+		created, txErr = s.store.InsertPreviewDeployment(ctx, tx, NewPreviewDeployment{
+			ServiceID:     in.ServiceID,
+			RouteKey:      routeKey,
+			EnvironmentID: svc.EnvironmentID,
+			ProjectID:     svc.ProjectID,
+			WorkspaceID:   svc.WorkspaceID,
+			ServerID:      in.ServerID,
+			ContainerPort: port,
+			SourceAccess:  svc.SourceAccess,
+			// Provider is GitHub-only today; construct the standard clone URL from owner/repo.
+			CloneURL: "https://github.com/" + svc.Owner + "/" + svc.Repo + ".git",
+			GitRef:   gitRef,
+			PRNumber: prNumber,
+			PRURL:    prURL,
+		})
+		if txErr != nil {
+			return txErr
+		}
+		return s.audit.Record(ctx, tx, "deployment.preview", "deployment", created.ID, workspaceID, caller.UserID)
+	})
+	if err != nil {
+		return Deployment{}, mapErr(err, "create preview")
+	}
+	s.log.Info("preview deployment created", "id", created.ID, "service_id", in.ServiceID, "route_key", routeKey, "pr_number", prNumber, "git_ref", gitRef, "server_id", in.ServerID, "workspace_id", workspaceID, "actor", caller.UserID)
 	return created, nil
 }
 
@@ -524,6 +642,62 @@ func environmentNetworkName(environmentID string) string {
 // database). The agent creates it lazily. See docs/architecture/deployment-engine.md.
 func previewNetworkName(routeKey string) string {
 	return "plorigo-preview-" + routeKey
+}
+
+// maxRouteKeyLen bounds a route_key to a single DNS label, since it becomes the Caddy route
+// host {route_key}.{base_domain}.
+const maxRouteKeyLen = 63
+
+var routeKeyNonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
+
+// previewRouteKey derives a stable, DNS-label-safe routing key for a preview. It is keyed by PR
+// number when previewing a pull request (so the key is stable as the PR is pushed to), otherwise
+// by a slug of the branch. The service id prefix keeps previews of different services from
+// colliding; an over-long key is truncated with a short hash tail so distinct refs stay distinct.
+func previewRouteKey(serviceID string, prNumber int32, ref string) string {
+	suffix := slugifyRef(ref)
+	if prNumber > 0 {
+		suffix = "pr-" + strconv.Itoa(int(prNumber))
+	}
+	key := serviceID + "-" + suffix
+	if len(key) <= maxRouteKeyLen {
+		return key
+	}
+	h := sha256.Sum256([]byte(suffix))
+	tail := hex.EncodeToString(h[:])[:8]
+	budget := maxRouteKeyLen - len(serviceID) - len("-") - len("-") - len(tail)
+	if budget < 0 {
+		budget = 0
+	}
+	trunc := suffix
+	if len(trunc) > budget {
+		trunc = trunc[:budget]
+	}
+	trunc = strings.Trim(trunc, "-")
+	return serviceID + "-" + trunc + "-" + tail
+}
+
+// slugifyRef lowercases a git ref and reduces it to a DNS-label-safe slug ([a-z0-9-], no
+// leading/trailing hyphen), defaulting to "branch" if nothing is left.
+func slugifyRef(ref string) string {
+	s := strings.Trim(routeKeyNonAlnum.ReplaceAllString(strings.ToLower(ref), "-"), "-")
+	if s == "" {
+		return "branch"
+	}
+	return s
+}
+
+// mapGitHubErr translates the github client's typed errors into plain-English domain errors for
+// the preview PR lookup (a missing/inaccessible PR both surface as NotFound).
+func mapGitHubErr(err error) error {
+	switch {
+	case errors.Is(err, github.ErrNotFound):
+		return problem.NotFound("pull request not found, or your access can't see it")
+	case errors.Is(err, github.ErrRateLimited):
+		return problem.Internalf(err, "GitHub rate limit reached; please try again shortly")
+	default:
+		return problem.Internalf(err, "could not reach GitHub")
+	}
 }
 
 // ReportDeployment records a status transition and any new runtime log lines for a

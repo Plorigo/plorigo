@@ -22,6 +22,9 @@ type Deps struct {
 	// Crypto decrypts environment/service secrets at deploy time so their plaintext can be
 	// injected into the container. Satisfied by *crypto.Box (same box that seals them).
 	Crypto Opener
+	// GitHub resolves a pull request to its head ref + URL when creating a PR preview.
+	// Satisfied by *github.Client (the same client the sources module uses).
+	GitHub GitHubClient
 	Log    *slog.Logger
 }
 
@@ -35,7 +38,7 @@ type Module struct {
 func New(d Deps) *Module {
 	store := newPostgresStore(d.DB)
 	return &Module{
-		service: newService(d.DB, store, d.Policy, d.Audit, d.Crypto, d.Log),
+		service: newService(d.DB, store, d.Policy, d.Audit, d.Crypto, d.GitHub, d.Log),
 	}
 }
 

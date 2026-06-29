@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/plorigo/plorigo/internal/platform/database"
+	"github.com/plorigo/plorigo/internal/platform/github"
 )
 
 // Store is the repository port the service needs. Implemented by postgres.go, faked in
@@ -158,6 +159,13 @@ type Recorder interface {
 // *crypto.Box satisfies it structurally — deployments never imports platform/crypto.
 type Opener interface {
 	Open(sealed []byte) ([]byte, error)
+}
+
+// GitHubClient is the CONSUMER-DEFINED port for the GitHub reads a preview needs: resolving a
+// pull request to its head ref + URL. *github.Client (a neutral platform package, like the one
+// the services module uses) satisfies it structurally. token may be empty for a public repo.
+type GitHubClient interface {
+	GetPullRequest(ctx context.Context, token, owner, repo string, number int) (github.PullRequest, error)
 }
 
 // ConfigForDeploy is one configuration entry to inject into a service's container at deploy

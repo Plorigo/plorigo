@@ -35,6 +35,20 @@ func (h *adminHandler) CreateDeploymentForService(ctx context.Context, req *conn
 	return connect.NewResponse(&controlplanev1.CreateDeploymentForServiceResponse{Deployment: toProto(dep)}), nil
 }
 
+func (h *adminHandler) CreatePreviewDeployment(ctx context.Context, req *connect.Request[controlplanev1.CreatePreviewDeploymentRequest]) (*connect.Response[controlplanev1.CreatePreviewDeploymentResponse], error) {
+	dep, err := h.svc.CreatePreview(ctx, CreatePreviewInput{
+		ServiceID:     req.Msg.GetServiceId(),
+		ServerID:      req.Msg.GetServerId(),
+		Branch:        req.Msg.GetBranch(),
+		PRNumber:      req.Msg.GetPrNumber(),
+		ContainerPort: req.Msg.GetContainerPort(),
+	})
+	if err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&controlplanev1.CreatePreviewDeploymentResponse{Deployment: toProto(dep)}), nil
+}
+
 func (h *adminHandler) RollbackDeployment(ctx context.Context, req *connect.Request[controlplanev1.RollbackDeploymentRequest]) (*connect.Response[controlplanev1.RollbackDeploymentResponse], error) {
 	dep, err := h.svc.RollbackToDeployment(ctx, req.Msg.GetTargetDeploymentId())
 	if err != nil {
@@ -225,6 +239,9 @@ func toProto(d Deployment) *controlplanev1.Deployment {
 		BuiltImageRef:  d.BuiltImageRef,
 		RouteUrl:       d.RouteURL,
 		RolledBackFrom: d.RolledBackFrom,
+		Kind:           d.Kind,
+		PrNumber:       d.PRNumber,
+		PrUrl:          d.PRURL,
 	}
 }
 
