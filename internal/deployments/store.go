@@ -44,6 +44,9 @@ type Store interface {
 
 	InsertDeployment(ctx context.Context, tx database.Tx, d NewDeployment) (Deployment, error)
 	InsertDeploymentFromGit(ctx context.Context, tx database.Tx, d NewDeploymentFromGit) (Deployment, error)
+	// InsertPreviewDeployment inserts a queued PREVIEW deployment (git source only) with its
+	// own route_key, so it runs alongside production without superseding it.
+	InsertPreviewDeployment(ctx context.Context, tx database.Tx, d NewPreviewDeployment) (Deployment, error)
 	GetDeployment(ctx context.Context, deploymentID string) (Deployment, bool, error)
 	ListByService(ctx context.Context, serviceID string) ([]Deployment, error)
 	ListByEnvironment(ctx context.Context, environmentID string) ([]Deployment, error)
@@ -57,10 +60,11 @@ type Store interface {
 	// UpdateStatus records a status transition; a zero host port / empty container id
 	// never clobbers a value already set.
 	UpdateStatus(ctx context.Context, tx database.Tx, u StatusUpdate) error
-	// SupersedePreviousRunning marks the SERVICE's prior running deployment on this server
-	// as superseded once a newer one reaches running (keyed by service, not environment, so
-	// a sibling service in the same environment is never superseded).
-	SupersedePreviousRunning(ctx context.Context, tx database.Tx, serviceID, serverID, deploymentID string) error
+	// SupersedePreviousRunning marks the prior running deployment with the same route_key on
+	// this server as superseded once a newer one reaches running (keyed by route_key, which is
+	// the service id for production and a distinct key per preview, so a preview never
+	// supersedes production or another preview, and a sibling service is never superseded).
+	SupersedePreviousRunning(ctx context.Context, tx database.Tx, routeKey, serverID, deploymentID string) error
 	// UpdateServiceRouteURL caches a public service's current URL from a running deployment's
 	// reported route (a sibling write Rule 2 permits, committed in the report tx).
 	UpdateServiceRouteURL(ctx context.Context, tx database.Tx, serviceID, routeURL string) error
@@ -95,6 +99,24 @@ type NewDeploymentFromGit struct {
 	CloneURL       string
 	GitRef         string
 	RolledBackFrom string
+}
+
+// NewPreviewDeployment is the data to insert a queued preview (build-from-source) deployment.
+// RouteKey is the preview's distinct, DNS-safe routing key; PRNumber/PRURL link it to a GitHub
+// pull request (0 / "" for a plain branch preview).
+type NewPreviewDeployment struct {
+	ServiceID     string
+	RouteKey      string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	ContainerPort int32
+	SourceAccess  string
+	CloneURL      string
+	GitRef        string
+	PRNumber      int32
+	PRURL         string
 }
 
 // StatusUpdate is an agent's reported transition for a deployment. A zero host port /

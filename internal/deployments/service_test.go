@@ -48,9 +48,10 @@ type fakeStore struct {
 
 	config []ConfigForDeploy
 
-	inserted    NewDeployment
-	insertedGit NewDeploymentFromGit
-	insertErr   error
+	inserted        NewDeployment
+	insertedGit     NewDeploymentFromGit
+	insertedPreview NewPreviewDeployment
+	insertErr       error
 
 	getDep Deployment
 	getOK  bool
@@ -60,7 +61,7 @@ type fakeStore struct {
 
 	statusUpdates    []StatusUpdate
 	events           []NewEvent
-	supersededWith   string // service id passed to SupersedePreviousRunning
+	supersededWith   string // route_key passed to SupersedePreviousRunning
 	superseded       bool
 	routeServiceID   string
 	routeURLReported string
@@ -131,6 +132,30 @@ func (f *fakeStore) InsertDeploymentFromGit(_ context.Context, _ database.Tx, d 
 		GitRef:        d.GitRef,
 	}, nil
 }
+func (f *fakeStore) InsertPreviewDeployment(_ context.Context, _ database.Tx, d NewPreviewDeployment) (Deployment, error) {
+	f.insertedPreview = d
+	if f.insertErr != nil {
+		return Deployment{}, f.insertErr
+	}
+	return Deployment{
+		ID:            testDeployID,
+		ServiceID:     d.ServiceID,
+		RouteKey:      d.RouteKey,
+		Kind:          KindPreview,
+		EnvironmentID: d.EnvironmentID,
+		ProjectID:     d.ProjectID,
+		WorkspaceID:   d.WorkspaceID,
+		ServerID:      d.ServerID,
+		ContainerPort: d.ContainerPort,
+		Status:        StatusQueued,
+		SourceKind:    SourceGit,
+		SourceAccess:  d.SourceAccess,
+		CloneURL:      d.CloneURL,
+		GitRef:        d.GitRef,
+		PRNumber:      d.PRNumber,
+		PRURL:         d.PRURL,
+	}, nil
+}
 func (f *fakeStore) GetDeployment(_ context.Context, _ string) (Deployment, bool, error) {
 	return f.getDep, f.getOK, nil
 }
@@ -152,9 +177,9 @@ func (f *fakeStore) UpdateStatus(_ context.Context, _ database.Tx, u StatusUpdat
 	f.statusUpdates = append(f.statusUpdates, u)
 	return nil
 }
-func (f *fakeStore) SupersedePreviousRunning(_ context.Context, _ database.Tx, serviceID, _, _ string) error {
+func (f *fakeStore) SupersedePreviousRunning(_ context.Context, _ database.Tx, routeKey, _, _ string) error {
 	f.superseded = true
-	f.supersededWith = serviceID
+	f.supersededWith = routeKey
 	return nil
 }
 func (f *fakeStore) UpdateServiceRouteURL(_ context.Context, _ database.Tx, serviceID, routeURL string) error {
@@ -595,6 +620,74 @@ func TestPollDeployment_GitClaimCarriesSourceAndBuildTag(t *testing.T) {
 	}
 	if claimed.BuiltImageTag != "plorigo-build:"+testDeployID {
 		t.Errorf("built tag = %q, want deterministic per-deployment tag", claimed.BuiltImageTag)
+	}
+}
+
+func TestPollDeployment_PreviewIsolatesNetworkAndWithholdsSecrets(t *testing.T) {
+	const routeKey = testServiceID + "-pr-7"
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		claimDep: Deployment{
+			ID: testDeployID, ServiceID: testServiceID, EnvironmentID: testEnvID, ContainerPort: 8080,
+			Kind: KindPreview, RouteKey: routeKey,
+			SourceKind: SourceGit, CloneURL: "https://github.com/o/r.git", GitRef: "feature",
+		},
+		claimOK: true,
+		config: []ConfigForDeploy{
+			{Type: "variable", Scope: "service", Key: "FOO", Value: strptr("bar")},
+			{Type: "secret", Scope: "environment", Key: "TOKEN", Ciphertext: []byte("sealed:s3cr3t")},
+		},
+		svc: ServiceForDeploy{Slug: "web", Visibility: "public"}, svcOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+
+	claimed, err := svc.PollDeployment(context.Background(), PollInput{AgentID: testAgentID, Credential: "plag_x"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// A preview routes and replaces by its own route_key, not the bare service id.
+	if claimed.AppLabel != routeKey {
+		t.Errorf("app label = %q, want the preview route_key %q", claimed.AppLabel, routeKey)
+	}
+	// It joins its OWN isolated network so it cannot reach production's siblings.
+	if claimed.NetworkName != "plorigo-preview-"+routeKey {
+		t.Errorf("network = %q, want the isolated preview network", claimed.NetworkName)
+	}
+	// Non-secret variables still flow; the environment's decrypted secrets are withheld.
+	if claimed.Env["FOO"] != "bar" {
+		t.Errorf("FOO = %q, want non-secret variable injected", claimed.Env["FOO"])
+	}
+	if _, ok := claimed.Env["TOKEN"]; ok {
+		t.Errorf("TOKEN present in preview env (%q); secrets must be withheld from previews", claimed.Env["TOKEN"])
+	}
+}
+
+func TestReportDeployment_PreviewSupersedesByRouteKeyAndKeepsServiceURL(t *testing.T) {
+	const routeKey = testServiceID + "-pr-7"
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		getDep: Deployment{
+			ID: testDeployID, ServiceID: testServiceID, ServerID: testServerID, EnvironmentID: testEnvID,
+			Kind: KindPreview, RouteKey: routeKey,
+		},
+		getOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	err := svc.ReportDeployment(context.Background(), ReportInput{
+		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID,
+		Status: StatusRunning, HostPort: 32768, ContainerID: "abc",
+		RouteURL: "http://" + routeKey + ".localhost:8083",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Supersede is keyed by the preview's route_key, so it never touches production.
+	if !store.superseded || store.supersededWith != routeKey {
+		t.Errorf("supersede = (%v, %q), want keyed by the preview route_key", store.superseded, store.supersededWith)
+	}
+	// A preview must NOT overwrite the service's cached live URL (that tracks production only).
+	if store.routeServiceID != "" || store.routeURLReported != "" {
+		t.Errorf("route cache = (%q, %q), want untouched for a preview", store.routeServiceID, store.routeURLReported)
 	}
 }
 

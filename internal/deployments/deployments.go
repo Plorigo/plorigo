@@ -41,6 +41,16 @@ const (
 	SourceGit   = "git"
 )
 
+// Deployment kinds. A production deployment is the service's main release (route_key = the
+// service id). A preview deployment is a build of a branch or pull-request head ref that runs
+// alongside production with its own route_key — its own Caddy route, container-replacement
+// group, supersede scope, and isolated network — so it never disturbs production. See
+// docs/architecture/deployment-engine.md.
+const (
+	KindProduction = "production"
+	KindPreview    = "preview"
+)
+
 // Deployment event kinds.
 const (
 	KindStatus = "status" // a status transition
@@ -84,7 +94,7 @@ type Deployment struct {
 	CommitSha     string
 	BuiltImageRef string
 
-	// RouteURL is the real deployment URL (e.g. http://{service-id}.localhost:8083) computed
+	// RouteURL is the real deployment URL (e.g. http://{route-key}.localhost:8083) computed
 	// by the agent for a PUBLIC service and stored so the dashboard can display a clickable
 	// link. Empty for a private service (no public route).
 	RouteURL string
@@ -92,6 +102,15 @@ type Deployment struct {
 	// RolledBackFrom is the id of the previous healthy deployment this one reproduces, set
 	// when it was created by a rollback. Empty for a normal deploy.
 	RolledBackFrom string
+
+	// Preview fields. Kind is KindProduction or KindPreview. RouteKey is the service id for a
+	// production deployment and a distinct, DNS-safe key per preview (it drives the Caddy route,
+	// the container-replacement group, the supersede scope, and the isolated network). PRNumber
+	// and PRURL link a pull-request preview back to its GitHub PR (0 / "" for a branch preview).
+	Kind     string
+	RouteKey string
+	PRNumber int32
+	PRURL    string
 }
 
 // Event is one entry in a deployment's timeline: a status transition (KindStatus) or

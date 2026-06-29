@@ -15,21 +15,36 @@ WHERE e.id = $1;
 SELECT id, server_id FROM agents WHERE credential_hash = $1;
 
 -- rolled_back_from is NULL for a normal deploy and set to the restored deployment's id when
--- this row is a rollback (see RollbackDeployment).
+-- this row is a rollback (see RollbackDeployment). route_key = the service id for a production
+-- deployment, so its Caddy route, container-replacement group, and supersede scope are keyed
+-- by service exactly as before previews existed.
 -- name: CreateDeployment :one
-INSERT INTO deployments (service_id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, rolled_back_from)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO deployments (service_id, route_key, environment_id, project_id, workspace_id, server_id, image_ref, container_port, rolled_back_from)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
 -- CreateDeploymentFromGit records a queued deployment whose source is a repo+ref to clone
--- and build on the server (image_ref is filled in by the agent after the build). See
--- docs/architecture/deployment-engine.md.
+-- and build on the server (image_ref is filled in by the agent after the build). route_key =
+-- the service id (a production deployment). See docs/architecture/deployment-engine.md.
 -- name: CreateDeploymentFromGit :one
 INSERT INTO deployments (
-    service_id, environment_id, project_id, workspace_id, server_id,
+    service_id, route_key, environment_id, project_id, workspace_id, server_id,
     container_port, source_kind, source_access, clone_url, git_ref, rolled_back_from
 )
-VALUES ($1, $2, $3, $4, $5, $6, 'git', $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6, $7, 'git', $8, $9, $10, $11)
+RETURNING *;
+
+-- CreatePreviewDeployment records a queued PREVIEW deployment of a service: a build of a
+-- branch or pull-request head ref, isolated from the service's production deployment by its
+-- own route_key (which drives a distinct Caddy route, container-replacement group, and
+-- supersede scope). pr_number / pr_url link it to a GitHub pull request (0 / '' for a plain
+-- branch preview). Previews build PUBLIC git sources only in this slice.
+-- name: CreatePreviewDeployment :one
+INSERT INTO deployments (
+    service_id, route_key, kind, environment_id, project_id, workspace_id, server_id,
+    container_port, source_kind, source_access, clone_url, git_ref, pr_number, pr_url
+)
+VALUES ($1, $2, 'preview', $3, $4, $5, $6, $7, 'git', $8, $9, $10, $11, $12)
 RETURNING *;
 
 -- name: GetDeployment :one
@@ -81,14 +96,15 @@ SET status = sqlc.arg(status),
 WHERE id = sqlc.arg(id)
 RETURNING *;
 
--- SupersedePreviousRunning marks the SERVICE's prior running deployment on this server as
--- superseded once a newer one reaches 'running', so "current" is unambiguous. Keyed by
--- service (not environment) so deploying one service never supersedes a sibling service
--- running in the same environment.
+-- SupersedePreviousRunning marks the prior running deployment with the same route_key on this
+-- server as superseded once a newer one reaches 'running', so "current" is unambiguous. Keyed
+-- by route_key (= the service id for a production deployment, a distinct key per preview) so a
+-- preview never supersedes production (or another preview), and a sibling service in the same
+-- environment is never superseded.
 -- name: SupersedePreviousRunning :exec
 UPDATE deployments
 SET status = 'superseded', updated_at = now()
-WHERE service_id = $1 AND server_id = $2 AND status = 'running' AND id <> $3;
+WHERE route_key = $1 AND server_id = $2 AND status = 'running' AND id <> $3;
 
 -- name: AppendDeploymentEvent :one
 INSERT INTO deployment_events (deployment_id, kind, status, message, stream)

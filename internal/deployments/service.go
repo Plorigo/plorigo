@@ -54,7 +54,12 @@ const (
 // (environment = defaults, service = override). Secret values are decrypted here via the
 // Opener; variable values are plaintext. The merged map of plaintext KEY=VALUE travels to
 // the agent in the signed deploy job, exactly as env vars always have.
-func (s *service) configEnvForService(ctx context.Context, serviceID string) (map[string]string, error) {
+//
+// includeSecrets is false for a PREVIEW deployment: a preview builds untrusted branch/PR code,
+// so it must not receive the environment's decrypted secrets (it gets non-secret variables
+// only). This is the first line of preview isolation; the preview also runs on its own network
+// (see PollDeployment). See docs/architecture/deployment-engine.md and security.md.
+func (s *service) configEnvForService(ctx context.Context, serviceID string, includeSecrets bool) (map[string]string, error) {
 	entries, err := s.store.ConfigForService(ctx, serviceID)
 	if err != nil {
 		return nil, err
@@ -64,6 +69,9 @@ func (s *service) configEnvForService(ctx context.Context, serviceID string) (ma
 	for _, scope := range []string{configScopeEnvironment, configScopeService} {
 		for _, e := range entries {
 			if e.Scope != scope {
+				continue
+			}
+			if e.Type == configTypeSecret && !includeSecrets {
 				continue
 			}
 			val, verr := s.configValue(e)
@@ -444,12 +452,15 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 		return Claimed{HasWork: false}, nil
 	}
 
-	env, err := s.configEnvForService(ctx, claimed.ServiceID)
+	isPreview := claimed.Kind == KindPreview
+	// A preview runs untrusted branch/PR code, so it gets the service's non-secret variables
+	// but NOT the environment's decrypted secrets.
+	env, err := s.configEnvForService(ctx, claimed.ServiceID, !isPreview)
 	if err != nil {
 		return Claimed{}, problem.Internalf(err, "poll deployment")
 	}
-	// Resolve the service's slug + visibility for the route label and the per-environment
-	// network the agent attaches the container to.
+	// Resolve the service's slug + visibility for the route label and the network the agent
+	// attaches the container to.
 	svc, ok, err := s.store.ServiceForDeploy(ctx, claimed.ServiceID)
 	if err != nil {
 		return Claimed{}, problem.Internalf(err, "poll deployment")
@@ -457,17 +468,32 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 	if !ok {
 		return Claimed{}, problem.Internalf(errors.New("service for claimed deployment not found"), "poll deployment")
 	}
-	s.log.Info("deployment claimed", "id", claimed.ID, "service_id", claimed.ServiceID, "server_id", serverID, "source_kind", claimed.SourceKind, "image", claimed.ImageRef)
+	// AppLabel drives the Caddy route host, the container-replacement group, and the reported
+	// route_url. It is the route_key: the service id for production, a distinct key per preview,
+	// so a preview gets its own URL and never replaces production's container. (Older rows
+	// predating route_key fall back to the service id.)
+	appLabel := claimed.RouteKey
+	if appLabel == "" {
+		appLabel = claimed.ServiceID
+	}
+	// Production joins its per-environment network (siblings reach it at its slug). A preview
+	// joins its OWN isolated network so it can't reach production's siblings (e.g. the prod
+	// database) — separation in depth alongside withholding secrets.
+	networkName := environmentNetworkName(claimed.EnvironmentID)
+	if isPreview {
+		networkName = previewNetworkName(appLabel)
+	}
+	s.log.Info("deployment claimed", "id", claimed.ID, "service_id", claimed.ServiceID, "kind", claimed.Kind, "route_key", appLabel, "server_id", serverID, "source_kind", claimed.SourceKind, "image", claimed.ImageRef)
 	out := Claimed{
 		HasWork:       true,
 		DeploymentID:  claimed.ID,
 		ImageRef:      claimed.ImageRef,
 		ContainerPort: claimed.ContainerPort,
 		Env:           env,
-		AppLabel:      claimed.ServiceID,
+		AppLabel:      appLabel,
 		SourceKind:    claimed.SourceKind,
 		Visibility:    svc.Visibility,
-		NetworkName:   environmentNetworkName(claimed.EnvironmentID),
+		NetworkName:   networkName,
 		NetworkAlias:  svc.Slug,
 	}
 	// For a git deployment the agent clones + builds; hand it the clone URL, ref, and a
@@ -491,6 +517,13 @@ func builtImageTag(deploymentID string) string {
 // alias) while different environments stay isolated. The agent ensures it exists.
 func environmentNetworkName(environmentID string) string {
 	return "plorigo-" + environmentID
+}
+
+// previewNetworkName is the isolated Docker network a single preview deployment joins (keyed by
+// its route_key), so the preview cannot reach the production environment's siblings (e.g. its
+// database). The agent creates it lazily. See docs/architecture/deployment-engine.md.
+func previewNetworkName(routeKey string) string {
+	return "plorigo-preview-" + routeKey
 }
 
 // ReportDeployment records a status transition and any new runtime log lines for a
@@ -545,21 +578,27 @@ func (s *service) ReportDeployment(ctx context.Context, in ReportInput) error {
 				return txErr
 			}
 		}
-		// Cache the public URL on the service whenever the agent reports one (public
-		// services only; private services report an empty route), so the dashboard can show
-		// a service's current URL without walking its deployment history.
-		if in.RouteURL != "" {
+		// Cache the public URL on the service whenever a PRODUCTION deployment reports one
+		// (public services only; private services report an empty route), so the dashboard can
+		// show the service's current URL without walking its history. A preview reports its own
+		// route_url onto its deployment row (above) but must NOT overwrite the service's live
+		// URL, which always tracks production.
+		if in.RouteURL != "" && dep.Kind != KindPreview {
 			if txErr := s.store.UpdateServiceRouteURL(ctx, tx, dep.ServiceID, in.RouteURL); txErr != nil {
 				return txErr
 			}
 		}
-		// Supersede THIS service's previous release only on the agent's real "now running"
-		// report, which carries the bound host port. The runtime-log tail loop re-reports
-		// status='running' (host port 0) just to attach new log lines — that must not
-		// re-run the supersede on every tick. Keyed by service so a sibling service in the
-		// same environment is never superseded.
+		// Supersede the prior release with the SAME route_key only on the agent's real "now
+		// running" report, which carries the bound host port. The runtime-log tail loop
+		// re-reports status='running' (host port 0) just to attach new log lines — that must
+		// not re-run the supersede on every tick. Keyed by route_key so a preview supersedes
+		// only its own prior preview, never production (and vice versa).
 		if in.Status == StatusRunning && in.HostPort > 0 {
-			return s.store.SupersedePreviousRunning(ctx, tx, dep.ServiceID, serverID, in.DeploymentID)
+			routeKey := dep.RouteKey
+			if routeKey == "" {
+				routeKey = dep.ServiceID
+			}
+			return s.store.SupersedePreviousRunning(ctx, tx, routeKey, serverID, in.DeploymentID)
 		}
 		return nil
 	})
