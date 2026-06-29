@@ -66,8 +66,8 @@ discriminator on the service's folded source (`oauth` | `public` | `app`; see
   RPC returns it and it is **never logged**. It is decrypted only in-process to call the provider
   (list repositories, read a repo/branch). It is **never sent to the agent**: building from a
   private/OAuth repo is **not implemented**, so creating a service with a non-public git source
-  is rejected. A private build will use a short-lived **GitHub App installation token** minted
-  per job, not this broad, long-lived OAuth token.
+  is rejected. Private reads use a short-lived **GitHub App installation token** minted per use
+  (below), not this broad, long-lived OAuth token.
 - **Public repositories (`access = 'public'`) carry no credential at all.** The repo is read
   **unauthenticated** (empty token, no connection), so only genuinely public repos resolve — a
   private or missing repo is invisible to an anonymous request and surfaces as "not found". The
@@ -86,6 +86,31 @@ discriminator on the service's folded source (`oauth` | `public` | `app`; see
   /applications/{client_id}/token`), so "disconnect" actually cuts off access rather than only
   forgetting the token locally — OAuth-App tokens do not expire on their own.
 
+#### GitHub App (private reads + webhook verification)
+
+A workspace can also connect a **GitHub App installation** (`provider = 'github_app'`), the
+narrower, per-repo, read-only path for **private** repositories and the basis for webhook-driven
+previews. Its credential model is deliberately tighter than OAuth's:
+
+- The **App private key** (`GITHUB_APP_PRIVATE_KEY`), **app id** (`GITHUB_APP_ID`), and **webhook
+  secret** (`GITHUB_WEBHOOK_SECRET`) are **server config**, held only in the control plane. None is
+  ever returned by an RPC, **logged**, or **sent to the agent**. When unset, the App features report
+  themselves as not configured and the UI hides them.
+- **No long-lived token is stored.** Unlike OAuth, an App connection stores only the
+  **`installation_id`** (and the account login, for display) — never a token. To read a private
+  repo, the control plane signs a short-lived **RS256 app JWT** with the private key (≤10-minute
+  lifetime, held in memory only) and exchanges it for a **per-installation access token** that
+  GitHub expires within the hour. The token is **cached in memory** until shortly before expiry,
+  used in-process to call GitHub, and **never persisted, returned, or sent to the agent**. So a
+  database leak exposes no GitHub credential for an App connection, and the blast radius is one
+  installation's granted repositories for at most an hour.
+- The install handshake reuses the OAuth flow's protection: a **sealed, expiring, single-use
+  `state`** bound to the initiating workspace + user (an `HttpOnly` cookie), verified on the setup
+  callback (`/api/github/app/setup`) before the installation is recorded and **audited**.
+- **Inbound webhooks** (a later slice) are verified with `GITHUB_WEBHOOK_SECRET` via a
+  constant-time **HMAC-SHA256** check of the raw body against `X-Hub-Signature-256`; a missing or
+  mismatched signature is rejected before the payload is parsed.
+
 > [!IMPORTANT]
 > **Blast radius.** The OAuth-App scope defaults to `repo` (`GITHUB_OAUTH_SCOPES`), which grants
 > read/write to **all** of the connecting user's repositories — there is no per-repo or read-only
@@ -95,8 +120,8 @@ discriminator on the service's folded source (`oauth` | `public` | `app`; see
 > credential entirely (connect by URL, read anonymously) — and public **clone/build already needs
 > no credential**, since the agent only ever receives a clone URL. The narrower, per-repo,
 > read-only path for **private** clone/build is a **GitHub App** (a short-lived installation token
-> minted per job), which is the direction before private builds land — see
-> [ROADMAP.md](../../ROADMAP.md).
+> minted per use, no stored token — see above); wiring it into the build path lands with private
+> previews — see [ROADMAP.md](../../ROADMAP.md).
 
 ### Server access & remote management (SSH)
 
