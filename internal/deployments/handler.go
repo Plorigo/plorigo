@@ -42,6 +42,8 @@ func (h *adminHandler) CreatePreviewDeployment(ctx context.Context, req *connect
 		Branch:        req.Msg.GetBranch(),
 		PRNumber:      req.Msg.GetPrNumber(),
 		ContainerPort: req.Msg.GetContainerPort(),
+		Password:      req.Msg.GetPassword(),
+		PasswordUser:  req.Msg.GetPasswordUsername(),
 	})
 	if err != nil {
 		return nil, problem.ToConnect(err)
@@ -160,6 +162,8 @@ func (h *gatewayHandler) PollDeployment(ctx context.Context, req *connect.Reques
 		Visibility:    claimed.Visibility,
 		NetworkName:   claimed.NetworkName,
 		NetworkAlias:  claimed.NetworkAlias,
+		BasicAuthUser: claimed.BasicAuthUser,
+		BasicAuthHash: claimed.BasicAuthHash,
 	}), nil
 }
 

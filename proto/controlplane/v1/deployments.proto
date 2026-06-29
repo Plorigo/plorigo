@@ -89,6 +89,11 @@ message CreatePreviewDeploymentRequest {
   string branch = 3;        // build this branch (mutually exclusive with pr_number)
   int32 pr_number = 4;      // build this pull request's head ref (mutually exclusive with branch)
   int32 container_port = 5; // optional override; 0 = the service's configured port
+  // Optional basic-auth protection for the preview's URL. When password is set the control plane
+  // bcrypt-hashes it and the agent requires it on the preview's Caddy route; the plaintext is never
+  // stored or sent to the agent. password_username defaults to "preview" when blank.
+  string password = 6;
+  string password_username = 7;
 }
 
 message CreatePreviewDeploymentResponse {

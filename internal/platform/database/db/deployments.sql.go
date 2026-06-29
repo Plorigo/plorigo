@@ -56,7 +56,7 @@ WHERE id = (
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url, preview_auth_user, preview_auth_hash
 `
 
 // ClaimNextDeploymentForServer atomically claims the oldest queued deployment for a
@@ -93,6 +93,8 @@ func (q *Queries) ClaimNextDeploymentForServer(ctx context.Context, serverID str
 		&i.RouteKey,
 		&i.PrNumber,
 		&i.PrUrl,
+		&i.PreviewAuthUser,
+		&i.PreviewAuthHash,
 	)
 	return i, err
 }
@@ -136,7 +138,7 @@ func (q *Queries) ClaimNextTeardownForServer(ctx context.Context, serverID strin
 const createDeployment = `-- name: CreateDeployment :one
 INSERT INTO deployments (service_id, route_key, environment_id, project_id, workspace_id, server_id, image_ref, container_port, rolled_back_from)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url, preview_auth_user, preview_auth_hash
 `
 
 type CreateDeploymentParams struct {
@@ -195,6 +197,8 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		&i.RouteKey,
 		&i.PrNumber,
 		&i.PrUrl,
+		&i.PreviewAuthUser,
+		&i.PreviewAuthHash,
 	)
 	return i, err
 }
@@ -205,7 +209,7 @@ INSERT INTO deployments (
     container_port, source_kind, source_access, clone_url, git_ref, rolled_back_from
 )
 VALUES ($1, $2, $3, $4, $5, $6, $7, 'git', $8, $9, $10, $11)
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url, preview_auth_user, preview_auth_hash
 `
 
 type CreateDeploymentFromGitParams struct {
@@ -267,6 +271,8 @@ func (q *Queries) CreateDeploymentFromGit(ctx context.Context, arg CreateDeploym
 		&i.RouteKey,
 		&i.PrNumber,
 		&i.PrUrl,
+		&i.PreviewAuthUser,
+		&i.PreviewAuthHash,
 	)
 	return i, err
 }
@@ -274,25 +280,28 @@ func (q *Queries) CreateDeploymentFromGit(ctx context.Context, arg CreateDeploym
 const createPreviewDeployment = `-- name: CreatePreviewDeployment :one
 INSERT INTO deployments (
     service_id, route_key, kind, environment_id, project_id, workspace_id, server_id,
-    container_port, source_kind, source_access, clone_url, git_ref, pr_number, pr_url
+    container_port, source_kind, source_access, clone_url, git_ref, pr_number, pr_url,
+    preview_auth_user, preview_auth_hash
 )
-VALUES ($1, $2, 'preview', $3, $4, $5, $6, $7, 'git', $8, $9, $10, $11, $12)
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url
+VALUES ($1, $2, 'preview', $3, $4, $5, $6, $7, 'git', $8, $9, $10, $11, $12, $13, $14)
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url, preview_auth_user, preview_auth_hash
 `
 
 type CreatePreviewDeploymentParams struct {
-	ServiceID     string
-	RouteKey      string
-	EnvironmentID string
-	ProjectID     string
-	WorkspaceID   string
-	ServerID      string
-	ContainerPort int32
-	SourceAccess  string
-	CloneUrl      string
-	GitRef        string
-	PrNumber      int32
-	PrUrl         string
+	ServiceID       string
+	RouteKey        string
+	EnvironmentID   string
+	ProjectID       string
+	WorkspaceID     string
+	ServerID        string
+	ContainerPort   int32
+	SourceAccess    string
+	CloneUrl        string
+	GitRef          string
+	PrNumber        int32
+	PrUrl           string
+	PreviewAuthUser string
+	PreviewAuthHash string
 }
 
 // CreatePreviewDeployment records a queued PREVIEW deployment of a service: a build of a
@@ -314,6 +323,8 @@ func (q *Queries) CreatePreviewDeployment(ctx context.Context, arg CreatePreview
 		arg.GitRef,
 		arg.PrNumber,
 		arg.PrUrl,
+		arg.PreviewAuthUser,
+		arg.PreviewAuthHash,
 	)
 	var i Deployment
 	err := row.Scan(
@@ -343,6 +354,8 @@ func (q *Queries) CreatePreviewDeployment(ctx context.Context, arg CreatePreview
 		&i.RouteKey,
 		&i.PrNumber,
 		&i.PrUrl,
+		&i.PreviewAuthUser,
+		&i.PreviewAuthHash,
 	)
 	return i, err
 }
@@ -418,7 +431,7 @@ func (q *Queries) GetAgentServerByCredential(ctx context.Context, credentialHash
 }
 
 const getDeployment = `-- name: GetDeployment :one
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments WHERE id = $1
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url, preview_auth_user, preview_auth_hash FROM deployments WHERE id = $1
 `
 
 func (q *Queries) GetDeployment(ctx context.Context, id string) (Deployment, error) {
@@ -451,6 +464,8 @@ func (q *Queries) GetDeployment(ctx context.Context, id string) (Deployment, err
 		&i.RouteKey,
 		&i.PrNumber,
 		&i.PrUrl,
+		&i.PreviewAuthUser,
+		&i.PreviewAuthHash,
 	)
 	return i, err
 }
@@ -478,7 +493,7 @@ func (q *Queries) GetEnvironmentWorkspaceAndProject(ctx context.Context, id stri
 }
 
 const getLatestActivePreviewByRouteKey = `-- name: GetLatestActivePreviewByRouteKey :one
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url, preview_auth_user, preview_auth_hash FROM deployments
 WHERE service_id = $1 AND route_key = $2 AND kind = 'preview' AND status <> 'torndown'
 ORDER BY created_at DESC
 LIMIT 1
@@ -523,6 +538,8 @@ func (q *Queries) GetLatestActivePreviewByRouteKey(ctx context.Context, arg GetL
 		&i.RouteKey,
 		&i.PrNumber,
 		&i.PrUrl,
+		&i.PreviewAuthUser,
+		&i.PreviewAuthHash,
 	)
 	return i, err
 }
@@ -610,7 +627,7 @@ func (q *Queries) ListDeploymentEvents(ctx context.Context, arg ListDeploymentEv
 }
 
 const listDeploymentsByEnvironment = `-- name: ListDeploymentsByEnvironment :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments WHERE environment_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url, preview_auth_user, preview_auth_hash FROM deployments WHERE environment_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByEnvironment(ctx context.Context, environmentID string) ([]Deployment, error) {
@@ -649,6 +666,8 @@ func (q *Queries) ListDeploymentsByEnvironment(ctx context.Context, environmentI
 			&i.RouteKey,
 			&i.PrNumber,
 			&i.PrUrl,
+			&i.PreviewAuthUser,
+			&i.PreviewAuthHash,
 		); err != nil {
 			return nil, err
 		}
@@ -661,7 +680,7 @@ func (q *Queries) ListDeploymentsByEnvironment(ctx context.Context, environmentI
 }
 
 const listDeploymentsByProject = `-- name: ListDeploymentsByProject :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments WHERE project_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url, preview_auth_user, preview_auth_hash FROM deployments WHERE project_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByProject(ctx context.Context, projectID string) ([]Deployment, error) {
@@ -700,6 +719,8 @@ func (q *Queries) ListDeploymentsByProject(ctx context.Context, projectID string
 			&i.RouteKey,
 			&i.PrNumber,
 			&i.PrUrl,
+			&i.PreviewAuthUser,
+			&i.PreviewAuthHash,
 		); err != nil {
 			return nil, err
 		}
@@ -712,7 +733,7 @@ func (q *Queries) ListDeploymentsByProject(ctx context.Context, projectID string
 }
 
 const listDeploymentsByService = `-- name: ListDeploymentsByService :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments WHERE service_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url, preview_auth_user, preview_auth_hash FROM deployments WHERE service_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByService(ctx context.Context, serviceID string) ([]Deployment, error) {
@@ -751,6 +772,8 @@ func (q *Queries) ListDeploymentsByService(ctx context.Context, serviceID string
 			&i.RouteKey,
 			&i.PrNumber,
 			&i.PrUrl,
+			&i.PreviewAuthUser,
+			&i.PreviewAuthHash,
 		); err != nil {
 			return nil, err
 		}
@@ -763,7 +786,7 @@ func (q *Queries) ListDeploymentsByService(ctx context.Context, serviceID string
 }
 
 const listDeploymentsByWorkspace = `-- name: ListDeploymentsByWorkspace :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments WHERE workspace_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url, preview_auth_user, preview_auth_hash FROM deployments WHERE workspace_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID string) ([]Deployment, error) {
@@ -802,6 +825,8 @@ func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID st
 			&i.RouteKey,
 			&i.PrNumber,
 			&i.PrUrl,
+			&i.PreviewAuthUser,
+			&i.PreviewAuthHash,
 		); err != nil {
 			return nil, err
 		}
@@ -814,7 +839,7 @@ func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID st
 }
 
 const listExpiredPreviews = `-- name: ListExpiredPreviews :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url, preview_auth_user, preview_auth_hash FROM deployments
 WHERE kind = 'preview' AND status = 'running' AND created_at < $1
 ORDER BY created_at
 `
@@ -858,6 +883,8 @@ func (q *Queries) ListExpiredPreviews(ctx context.Context, createdAt time.Time) 
 			&i.RouteKey,
 			&i.PrNumber,
 			&i.PrUrl,
+			&i.PreviewAuthUser,
+			&i.PreviewAuthHash,
 		); err != nil {
 			return nil, err
 		}
@@ -960,7 +987,7 @@ SET status = $1,
     route_url = CASE WHEN $7::text <> '' THEN $7::text ELSE route_url END,
     updated_at = now()
 WHERE id = $8
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url, preview_auth_user, preview_auth_hash
 `
 
 type UpdateDeploymentStatusParams struct {
@@ -1018,6 +1045,8 @@ func (q *Queries) UpdateDeploymentStatus(ctx context.Context, arg UpdateDeployme
 		&i.RouteKey,
 		&i.PrNumber,
 		&i.PrUrl,
+		&i.PreviewAuthUser,
+		&i.PreviewAuthHash,
 	)
 	return i, err
 }

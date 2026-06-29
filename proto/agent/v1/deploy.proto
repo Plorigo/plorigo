@@ -60,6 +60,11 @@ message PollDeploymentResponse {
   string visibility = 11;    // "public" | "private"
   string network_name = 12;  // the per-environment Docker network to attach the container to
   string network_alias = 13; // the service's DNS alias on that network (its slug)
+  // Optional basic-auth for a PROTECTED PREVIEW's Caddy route. basic_auth_hash is a bcrypt hash
+  // (never the plaintext password); when set the agent renders a basic_auth block requiring
+  // basic_auth_user + that hash on the preview's route. Empty for production and unprotected previews.
+  string basic_auth_user = 14;
+  string basic_auth_hash = 15;
 }
 
 message ReportDeploymentRequest {

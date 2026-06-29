@@ -164,6 +164,8 @@ type NewPreviewDeployment struct {
 	GitRef        string
 	PRNumber      int32
 	PRURL         string
+	AuthUser      string // basic-auth username for a protected preview ("" = unprotected)
+	AuthHash      string // bcrypt hash of the preview password ("" = unprotected)
 }
 
 // StatusUpdate is an agent's reported transition for a deployment. A zero host port /
