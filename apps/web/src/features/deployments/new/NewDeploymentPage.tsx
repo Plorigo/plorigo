@@ -97,6 +97,10 @@ export function NewDeploymentPage() {
   const configured = connection.data?.configured ?? false;
   const connected = connection.data?.connected ?? false;
   const githubLogin = connection.data?.connection?.githubLogin ?? "";
+  // The GitHub App is independent of OAuth: it enables PRIVATE-repo previews (short-lived
+  // per-installation tokens) and webhook-driven previews.
+  const appConfigured = connection.data?.appConfigured ?? false;
+  const appConnected = connection.data?.appConnected ?? false;
 
   // Target. Selections use an override-or-default shape: an empty override means "follow the
   // computed default" (derived below from freshly loaded data); the Select onChange records an
@@ -158,6 +162,9 @@ export function NewDeploymentPage() {
     if (!status) return;
     if (status === "connected") {
       toast.success("GitHub connected");
+      void queryClient.invalidateQueries({ queryKey: ["githubConnection"] });
+    } else if (status === "app_connected") {
+      toast.success("GitHub App installed");
       void queryClient.invalidateQueries({ queryKey: ["githubConnection"] });
     } else if (status === "error") {
       toast.error(params.get("reason") || "Could not connect GitHub");
@@ -271,6 +278,16 @@ export function NewDeploymentPage() {
     const returnTo = encodeURIComponent("/deployments/new");
     window.location.assign(
       `/api/github/connect?workspace_id=${encodeURIComponent(workspaceId)}&return_to=${returnTo}`,
+    );
+  }
+
+  // startAppInstall sends the browser to GitHub's App install page; on return the setup callback
+  // ties the new installation to this workspace, enabling private-repo previews.
+  function startAppInstall() {
+    if (!workspaceId) return;
+    const returnTo = encodeURIComponent("/deployments/new");
+    window.location.assign(
+      `/api/github/app/install?workspace_id=${encodeURIComponent(workspaceId)}&return_to=${returnTo}`,
     );
   }
 
@@ -725,6 +742,26 @@ export function NewDeploymentPage() {
                   <SearchInput value={repoFilter} onChange={setRepoFilter} placeholder="Search repositories…" />
                 )}
               </SectionHeader>
+
+              {appConfigured && (
+                <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground">
+                  {appConnected ? (
+                    <span>GitHub App installed — private-repo previews are enabled for this workspace.</span>
+                  ) : (
+                    <>
+                      <span>Install the GitHub App to enable private-repo previews.</span>
+                      <button
+                        type="button"
+                        onClick={startAppInstall}
+                        disabled={!workspaceId}
+                        className="shrink-0 font-medium text-blue-400 hover:text-blue-300 hover:underline disabled:opacity-50"
+                      >
+                        Install GitHub App
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
 
               {!configured && !connection.isLoading ? (
                 <div className="p-4 text-sm text-muted-foreground">

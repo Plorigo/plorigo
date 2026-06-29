@@ -42,6 +42,9 @@ export function ProjectsPage() {
     if (status === "connected") {
       toast.success("GitHub connected");
       void queryClient.invalidateQueries({ queryKey: ["githubConnection"] });
+    } else if (status === "app_connected") {
+      toast.success("GitHub App installed");
+      void queryClient.invalidateQueries({ queryKey: ["githubConnection"] });
     } else if (status === "error") {
       toast.error(params.get("reason") || "Could not connect GitHub");
     }
