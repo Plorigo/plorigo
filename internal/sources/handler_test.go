@@ -27,6 +27,15 @@ func (f *fakeService) BeginGitHubAuth(context.Context, BeginAuthInput) (BeginAut
 func (f *fakeService) CompleteGitHubAuth(context.Context, CompleteAuthInput) (CompleteAuthResult, error) {
 	return CompleteAuthResult{}, f.err
 }
+func (f *fakeService) BeginAppInstall(context.Context, BeginAuthInput) (BeginAuthResult, error) {
+	return BeginAuthResult{}, f.err
+}
+func (f *fakeService) CompleteAppInstall(context.Context, CompleteAppInput) (CompleteAuthResult, error) {
+	return CompleteAuthResult{}, f.err
+}
+func (f *fakeService) InstallationToken(context.Context, string) (string, bool, error) {
+	return "", false, f.err
+}
 func (f *fakeService) GetConnection(context.Context, string) (ConnectionStatus, error) {
 	return f.status, f.err
 }
