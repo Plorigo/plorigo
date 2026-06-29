@@ -10,6 +10,7 @@ import {
   ExternalLink,
   GitBranch,
   GitFork,
+  GitPullRequest,
   Globe,
   Info,
   Lock,
@@ -102,12 +103,17 @@ export function ServiceDetailPage() {
 
   const s = svc.data;
   const rows = deployments.data ?? [];
+  // Production and previews are split so the hero card, history, and rollback target track the
+  // live service only — previews run alongside it with their own URLs (see PreviewsPanel).
+  const prodRows = rows.filter((d) => d.kind !== "preview");
+  const previewRows = rows.filter((d) => d.kind === "preview");
   // The card and header reflect what's live: the running deployment if there is one, else the
   // newest attempt (rows are newest-first). restorable is the most recent previously-healthy
   // version — the target for an instant rollback.
-  const active = rows.find((d) => d.status === "running") ?? rows[0];
-  const restorable = rows.find((d) => d.status === "superseded");
+  const active = prodRows.find((d) => d.status === "running") ?? prodRows[0];
+  const restorable = prodRows.find((d) => d.status === "superseded");
   const publicSvc = isPublic(s);
+  const isGit = s.sourceKind === "git";
 
   return (
     <div className="space-y-6">
@@ -156,12 +162,12 @@ export function ServiceDetailPage() {
       <DomainsPanel service={s} />
 
       <Panel>
-        <PanelHeader title="Deployments" description="This service's deployment history." />
+        <PanelHeader title="Deployments" description="This service's production deployment history." />
         {deployments.isLoading ? (
           <div className="p-4">
             <Skeleton className="h-40 w-full" />
           </div>
-        ) : rows.length === 0 ? (
+        ) : prodRows.length === 0 ? (
           <div className="p-4">
             <EmptyState
               title="No deployments yet"
@@ -179,7 +185,7 @@ export function ServiceDetailPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {rows.map((d) => (
+                {prodRows.map((d) => (
                   <TableRow
                     key={d.id}
                     className="cursor-pointer"
@@ -208,6 +214,10 @@ export function ServiceDetailPage() {
           </div>
         )}
       </Panel>
+
+      {isGit && (
+        <PreviewsPanel service={s} previews={previewRows} loading={deployments.isLoading} projectId={pid} />
+      )}
 
       <ServiceSettingsPanel service={s} projectId={pid} />
     </div>
@@ -696,6 +706,236 @@ function DomainsPanel({ service }: { service: Service }) {
       </Dialog>
     </Panel>
   );
+}
+
+// PreviewsPanel lists and creates this git service's preview deployments. A preview builds a
+// branch or a pull request's head ref and runs alongside production with its OWN URL and an
+// isolated network, so it never touches the live service — Plorigo's separation of previews from
+// production. Previews build PUBLIC repos only in this slice; a PR number is resolved to its head
+// ref and linked back to its GitHub pull request.
+function PreviewsPanel({
+  service,
+  previews,
+  loading,
+  projectId,
+}: {
+  service: Service;
+  previews: Deployment[];
+  loading: boolean;
+  projectId: string;
+}) {
+  const navigate = useNavigate();
+  const workspaceId = useWorkspaceStore((s) => s.workspaceId);
+  const servers = useServers(workspaceId);
+  const agents = useAgents(workspaceId);
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"branch" | "pr">("branch");
+  const [value, setValue] = useState("");
+  const [serverOverride, setServerOverride] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Previews build a public git source only (the GitHub App for private repos is a later slice).
+  const buildable = service.sourceAccess === "public";
+  const serverId = serverOverride || pickDefaultServer(servers.data, agents.data)?.id || "";
+  const noServers = !servers.isLoading && (servers.data?.length ?? 0) === 0;
+
+  async function onCreate(e: FormEvent) {
+    e.preventDefault();
+    const v = value.trim();
+    if (!v || busy) return;
+    if (!serverId) {
+      toast.error("No connected server to deploy onto. Connect one first.");
+      return;
+    }
+    let req: { serviceId: string; serverId: string; branch?: string; prNumber?: number };
+    if (mode === "pr") {
+      const n = Number(v);
+      if (!Number.isInteger(n) || n <= 0) {
+        toast.error("Enter a pull request number, like 42.");
+        return;
+      }
+      req = { serviceId: service.id, serverId, prNumber: n };
+    } else {
+      req = { serviceId: service.id, serverId, branch: v };
+    }
+    setBusy(true);
+    try {
+      const { deployment } = await deploymentClient.createPreviewDeployment(req);
+      if (!deployment) throw new Error("the preview was not created");
+      setOpen(false);
+      setValue("");
+      void navigate({
+        to: "/projects/$projectId/deployments/$deploymentId",
+        params: { projectId, deploymentId: deployment.id },
+      });
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not create the preview");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Panel>
+      <PanelHeader
+        title="Previews"
+        description="Branch and pull-request builds that run alongside production, each on its own URL."
+        action={
+          <Button size="sm" disabled={!buildable} onClick={() => setOpen(true)}>
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            Create preview
+          </Button>
+        }
+      />
+      <div className="p-4">
+        {!buildable ? (
+          <EmptyState
+            title="Previews need a public Git source"
+            body="This service doesn't build from a public repository, so it can't create previews yet. Private-repo previews arrive with the GitHub App."
+          />
+        ) : loading ? (
+          <Skeleton className="h-32 w-full" />
+        ) : previews.length === 0 ? (
+          <EmptyState
+            title="No previews yet"
+            body="Create a preview of a branch or pull request to test a change on its own URL before it ships to production."
+          />
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Preview</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>URL</TableHead>
+                  <TableHead className="text-right">Created</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {previews.map((d) => (
+                  <TableRow
+                    key={d.id}
+                    className="cursor-pointer"
+                    onClick={() =>
+                      navigate({
+                        to: "/projects/$projectId/deployments/$deploymentId",
+                        params: { projectId, deploymentId: d.id },
+                      })
+                    }
+                  >
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        {d.prNumber > 0 ? (
+                          <GitPullRequest className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                        ) : (
+                          <GitBranch className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                        )}
+                        <span className="truncate font-mono text-sm font-medium text-foreground">{previewLabel(d)}</span>
+                        <Badge tone="blue">preview</Badge>
+                      </div>
+                      {d.prUrl && (
+                        <a
+                          href={d.prUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="mt-0.5 inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 hover:underline"
+                        >
+                          View pull request
+                          <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                        </a>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <StatusDot tone={statusTone(d.status)} label={d.status} />
+                    </TableCell>
+                    <TableCell>
+                      {d.routeUrl ? (
+                        <a
+                          href={d.routeUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex max-w-[260px] items-center gap-1 truncate font-mono text-xs text-blue-400 hover:text-blue-300 hover:underline"
+                        >
+                          <span className="truncate">{d.routeUrl}</span>
+                          <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
+                        </a>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right text-muted-foreground">{timeAgo(d.createdAt)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create preview</DialogTitle>
+            <DialogDescription>
+              Build a branch or pull request and run it on its own URL, isolated from production.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={onCreate} className="space-y-4">
+            <div className="grid grid-cols-[140px_minmax(0,1fr)] gap-2">
+              <div>
+                <span className="mb-1.5 block text-xs font-medium text-foreground">Source</span>
+                <Select value={mode} onChange={(e) => setMode(e.target.value as "branch" | "pr")} aria-label="Preview source">
+                  <option value="branch">Branch</option>
+                  <option value="pr">Pull request</option>
+                </Select>
+              </div>
+              <div>
+                <span className="mb-1.5 block text-xs font-medium text-foreground">
+                  {mode === "pr" ? "PR number" : "Branch"}
+                </span>
+                <Input
+                  value={value}
+                  onChange={(e) => setValue(e.target.value)}
+                  placeholder={mode === "pr" ? "42" : "feature/new-thing"}
+                  inputMode={mode === "pr" ? "numeric" : "text"}
+                  autoCapitalize="none"
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+              </div>
+            </div>
+            {(servers.data?.length ?? 0) > 1 && (
+              <div>
+                <span className="mb-1.5 block text-xs font-medium text-foreground">Server</span>
+                <Select value={serverId} onChange={(e) => setServerOverride(e.target.value)} aria-label="Server">
+                  {(servers.data ?? []).map((srv) => (
+                    <option key={srv.id} value={srv.id}>
+                      {srv.name} — {serverStatusLabel(srv.id, agents.data)}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={busy || !value.trim() || noServers || !serverId}>
+                {busy ? "Creating…" : "Create preview"}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </Panel>
+  );
+}
+
+// previewLabel names a preview row: its PR (#n) or the branch it builds.
+function previewLabel(d: Deployment): string {
+  return d.prNumber > 0 ? `PR #${d.prNumber}` : d.gitRef || "preview";
 }
 
 // ConnectionPanel shows how to connect to a managed database (a template service). It rebuilds

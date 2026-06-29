@@ -104,9 +104,12 @@ export function DeploymentDetailPage() {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="truncate font-mono text-xl font-semibold tracking-tight text-foreground">{deploymentRefLabel(d)}</h1>
+            {d.kind === "preview" && <Badge tone="blue">preview</Badge>}
             <StatusDot tone={statusTone(d.status)} label={d.status} />
           </div>
-          <p className="mt-1.5 text-sm text-muted-foreground">Deployment {d.id.slice(0, 8)}</p>
+          <p className="mt-1.5 text-sm text-muted-foreground">
+            {d.kind === "preview" ? "Preview deployment" : "Deployment"} {d.id.slice(0, 8)}
+          </p>
         </div>
         {/* A superseded deployment is a previous healthy version, so it can be rolled back to. */}
         {d.status === "superseded" && (
@@ -154,6 +157,24 @@ export function DeploymentDetailPage() {
           <PanelHeader title="Details" />
           <div className="space-y-3 p-4 text-sm">
             <Row label="Status" value={<Badge tone={statusTone(d.status)}>{d.status}</Badge>} />
+            {d.kind === "preview" && (
+              <Row label="Kind" value={<Badge tone="blue">preview</Badge>} />
+            )}
+            {d.prUrl && (
+              <Row
+                label="Pull request"
+                value={
+                  <a
+                    href={d.prUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono text-blue-400 hover:text-blue-300 hover:underline"
+                  >
+                    #{d.prNumber}
+                  </a>
+                }
+              />
+            )}
             {d.rolledBackFrom && <Row label="Rolled back from" value={<DeploymentRef id={d.rolledBackFrom} projectId={projectId} />} />}
             <Row
               label="Host port"
