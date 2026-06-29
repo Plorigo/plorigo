@@ -223,6 +223,26 @@ export function isTerminalBackupStatus(status: string): boolean {
   return status === "succeeded" || status === "failed";
 }
 
+// A teardown is terminal once it has succeeded or failed.
+export function isTerminalTeardownStatus(status: string): boolean {
+  return status === "succeeded" || status === "failed";
+}
+
+// useTeardownsByService lists a service's preview-teardown jobs (newest first), polling while any is
+// still in flight so a "removing…" preview row updates live, then settling once it is gone or failed.
+export function useTeardownsByService(serviceId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["teardowns", "service", serviceId],
+    queryFn: async () => (await deploymentClient.listTeardownJobsByService({ serviceId })).teardowns,
+    enabled: enabled && serviceId.length > 0 && !isPrototypeId(serviceId),
+    refetchInterval: (query) => {
+      const rows = query.state.data;
+      const inFlight = rows?.some((t) => !isTerminalTeardownStatus(t.status)) ?? false;
+      return inFlight ? 2000 : false;
+    },
+  });
+}
+
 // useBackupsByService lists a managed database service's backups (newest first), polling while any
 // is still in flight so status transitions appear live.
 export function useBackupsByService(serviceId: string, enabled: boolean) {
