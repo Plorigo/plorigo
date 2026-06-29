@@ -42,6 +42,6 @@ software being free and open.
 ## Questions / permission requests
 
 Not sure whether your use is okay, or want permission for something above? Email
-**i.babirli@outlook.com** — we're friendly and happy to help.
+**hello@plorigo.com** — we're friendly and happy to help.
 
 *This policy may be updated over time; changes are made via pull request.*

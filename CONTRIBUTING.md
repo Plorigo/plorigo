@@ -30,7 +30,7 @@ up and what to expect from the review process.
 ## Code of Conduct
 
 This project follows the [Contributor Covenant](./CODE_OF_CONDUCT.md). By participating you
-agree to uphold it. Report unacceptable behavior to **i.babirli@outlook.com**.
+agree to uphold it. Report unacceptable behavior to **hello@plorigo.com**.
 
 ## Ways to contribute
 
