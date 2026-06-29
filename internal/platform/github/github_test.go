@@ -203,6 +203,39 @@ func TestGetFileContent(t *testing.T) {
 	}
 }
 
+func TestGetPullRequest(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/o/r/pulls/42" {
+			t.Errorf("path = %q, want /repos/o/r/pulls/42", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"number":42,"state":"open","title":"Add widget","html_url":"https://github.com/o/r/pull/42","head":{"ref":"feature/widget","sha":"abc123"}}`))
+	}))
+	defer ts.Close()
+
+	pr, err := newTestClient(ts).GetPullRequest(context.Background(), "", "o", "r", 42)
+	if err != nil {
+		t.Fatalf("GetPullRequest: %v", err)
+	}
+	if pr.Number != 42 || pr.State != "open" || pr.HeadRef != "feature/widget" || pr.HeadSHA != "abc123" {
+		t.Fatalf("unexpected pr: %+v", pr)
+	}
+	if pr.HTMLURL != "https://github.com/o/r/pull/42" || pr.Title != "Add widget" {
+		t.Fatalf("unexpected pr link/title: %+v", pr)
+	}
+}
+
+func TestGetPullRequest_NotFound(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	_, err := newTestClient(ts).GetPullRequest(context.Background(), "", "o", "r", 7)
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestListUserRepos_QueryAndMapping(t *testing.T) {
 	var gotSort, gotPerPage, gotPage string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

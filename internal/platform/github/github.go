@@ -97,6 +97,18 @@ type RepoInfo struct {
 	Description   string
 }
 
+// PullRequest is the subset of a GitHub pull request Plorigo needs to build and link a
+// preview deployment: its head ref (the branch to build), head commit SHA, web URL, title,
+// and state.
+type PullRequest struct {
+	Number  int
+	State   string // "open" | "closed"
+	Title   string
+	HTMLURL string
+	HeadRef string // the head branch name — what the preview builds
+	HeadSHA string
+}
+
 // ListReposOptions tunes ListUserRepos. Zero values fall back to sensible defaults.
 type ListReposOptions struct {
 	Page    int    // 1-based; <=0 means page 1
@@ -227,6 +239,17 @@ func (c *Client) GetBranch(ctx context.Context, token, owner, repo, branch strin
 	return c.getJSON(ctx, token, path, &ignore)
 }
 
+// GetPullRequest returns a single pull request by number, or ErrNotFound if it does not exist
+// or the token cannot see it. token may be empty for a public repository.
+func (c *Client) GetPullRequest(ctx context.Context, token, owner, repo string, number int) (PullRequest, error) {
+	var body pullRequestJSON
+	path := "/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/pulls/" + strconv.Itoa(number)
+	if err := c.getJSON(ctx, token, path, &body); err != nil {
+		return PullRequest{}, err
+	}
+	return body.toPullRequest(), nil
+}
+
 // GetFileContent returns the raw bytes of a single file at ref (a branch, tag, or commit SHA).
 // ok is false (nil error) when the file does not exist. token may be empty for a public repo.
 // It is used by framework detection to read a repo's package.json, lockfile, and configs.
@@ -308,6 +331,29 @@ func (r repoJSON) toRepoInfo() RepoInfo {
 		Private:       r.Private,
 		HTMLURL:       r.HTMLURL,
 		Description:   r.Description,
+	}
+}
+
+// pullRequestJSON is the wire shape of a GitHub pull request; mapped to PullRequest.
+type pullRequestJSON struct {
+	Number  int    `json:"number"`
+	State   string `json:"state"`
+	Title   string `json:"title"`
+	HTMLURL string `json:"html_url"`
+	Head    struct {
+		Ref string `json:"ref"`
+		SHA string `json:"sha"`
+	} `json:"head"`
+}
+
+func (p pullRequestJSON) toPullRequest() PullRequest {
+	return PullRequest{
+		Number:  p.Number,
+		State:   p.State,
+		Title:   p.Title,
+		HTMLURL: p.HTMLURL,
+		HeadRef: p.Head.Ref,
+		HeadSHA: p.Head.SHA,
 	}
 }
 
