@@ -107,9 +107,13 @@ previews. Its credential model is deliberately tighter than OAuth's:
 - The install handshake reuses the OAuth flow's protection: a **sealed, expiring, single-use
   `state`** bound to the initiating workspace + user (an `HttpOnly` cookie), verified on the setup
   callback (`/api/github/app/setup`) before the installation is recorded and **audited**.
-- **Inbound webhooks** (a later slice) are verified with `GITHUB_WEBHOOK_SECRET` via a
-  constant-time **HMAC-SHA256** check of the raw body against `X-Hub-Signature-256`; a missing or
-  mismatched signature is rejected before the payload is parsed.
+- **Inbound webhooks** drive previews from PR events (`POST /api/github/webhook`). The handler
+  verifies `GITHUB_WEBHOOK_SECRET` via a constant-time **HMAC-SHA256** check of the raw body against
+  `X-Hub-Signature-256` **before parsing**; a missing or mismatched signature is rejected, and an
+  unset secret rejects every delivery (**fail-closed**). A verified event is **re-scoped** to the
+  installation's workspace and only that repo's services, so the one external entry point that
+  drives deployments can never reach beyond what the installation owns. See
+  [deployment-engine.md](./deployment-engine.md).
 
 > [!IMPORTANT]
 > **Blast radius.** The OAuth-App scope defaults to `repo` (`GITHUB_OAUTH_SCOPES`), which grants
