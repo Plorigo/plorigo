@@ -18,7 +18,7 @@ Backing Plorigo puts your logo in front of the developers, teams, and agencies w
 infrastructure. Company tiers include **logo placement** here and in the project README. Because
 Polar is a merchant of record, **invoices and VAT are handled for you**, so it's easy to expense.
 
-Want a custom arrangement or have questions? Email **i.babirli@outlook.com**.
+Want a custom arrangement or have questions? Email **hello@plorigo.com**.
 
 ## Our sponsors
 

@@ -27,7 +27,7 @@ Report privately using either of the following:
    Go to the repository's **Security** tab → **Report a vulnerability**, or open
    <https://github.com/Plorigo/plorigo/security/advisories/new>. This keeps the report
    private and lets us collaborate on a fix and a coordinated advisory.
-2. **Email:** **i.babirli@outlook.com** — please include "SECURITY" in the subject line.
+2. **Email:** **hello@plorigo.com** — please include "SECURITY" in the subject line.
 
 When reporting, please include as much as you can:
 
@@ -64,5 +64,5 @@ We will not pursue or support legal action against researchers who:
 - Avoid privacy violations, data destruction, and service degradation, and
 - Only interact with systems/accounts they own or have explicit permission to test.
 
-If in doubt, ask us first at **i.babirli@outlook.com**. Thank you for helping keep Plorigo and
+If in doubt, ask us first at **hello@plorigo.com**. Thank you for helping keep Plorigo and
 its users safe. 🔐

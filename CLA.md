@@ -70,4 +70,4 @@ Unless required by applicable law or agreed in writing, you provide your Contrib
 ---
 
 **How to sign:** open a pull request. The CLA-assistant bot will post a comment with a link;
-follow it once and you're done. Questions? Email **i.babirli@outlook.com**.
+follow it once and you're done. Questions? Email **hello@plorigo.com**.

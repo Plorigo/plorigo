@@ -74,4 +74,4 @@ The mark uses a purple→blue gradient (approx. `#7C5CFC` → `#3B82F6`). The da
 ---
 
 Need a format we don't have here (SVG, a specific size)? Open an issue or email
-**i.babirli@outlook.com**.
+**hello@plorigo.com**.
