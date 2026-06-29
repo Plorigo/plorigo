@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Config is the process configuration shared by all three binaries.
@@ -55,6 +57,11 @@ type Config struct {
 	GitHubAppPrivateKey string
 	GitHubAppSlug       string
 	GitHubWebhookSecret string
+
+	// PreviewTTL is how long a running preview deployment lives before the control plane
+	// auto-expires it (enqueues a teardown). 0 disables auto-expiry. Default 72h; override the
+	// hours with PLORIGO_PREVIEW_TTL_HOURS (0 to disable).
+	PreviewTTL time.Duration
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -98,6 +105,8 @@ func Load() Config {
 		GitHubAppPrivateKey: os.Getenv("GITHUB_APP_PRIVATE_KEY"),
 		GitHubAppSlug:       os.Getenv("GITHUB_APP_SLUG"),
 		GitHubWebhookSecret: os.Getenv("GITHUB_WEBHOOK_SECRET"),
+
+		PreviewTTL: time.Duration(envIntOr("PLORIGO_PREVIEW_TTL_HOURS", 72)) * time.Hour,
 	}
 }
 
@@ -137,6 +146,17 @@ func (c Config) Validate() error {
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+// envIntOr reads a non-negative integer env var, falling back to def when unset or unparseable. A
+// negative value also falls back to def (so a typo never yields a surprising negative TTL).
+func envIntOr(key string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
 	}
 	return def
 }

@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"context"
+	"time"
 
 	"github.com/plorigo/plorigo/internal/platform/database"
 	"github.com/plorigo/plorigo/internal/platform/github"
@@ -92,6 +93,9 @@ type Store interface {
 	// LatestActivePreviewByRouteKey returns the most recent not-yet-torndown preview deployment for
 	// a route_key, so a webhook PR-close can enqueue a teardown against it. ok is false when none.
 	LatestActivePreviewByRouteKey(ctx context.Context, serviceID, routeKey string) (Deployment, bool, error)
+	// ListExpiredPreviews returns running preview deployments created before the cutoff — the
+	// candidates the expiry sweep tears down.
+	ListExpiredPreviews(ctx context.Context, cutoff time.Time) ([]Deployment, error)
 }
 
 // NewTeardownJob is the data to insert a queued preview teardown. route_key is the preview's

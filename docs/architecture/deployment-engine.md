@@ -226,11 +226,17 @@ an already-gone preview is a no-op, and an unknown installation / unmatched repo
 is ignored. A per-service failure is logged and skipped so one bad service neither drops the others
 nor makes GitHub redeliver.
 
+**Expiration.** Abandoned previews don't linger: the control plane runs a periodic **expiry
+sweep** that tears down (via the same teardown job) every **running** preview older than a
+configurable TTL (`PLORIGO_PREVIEW_TTL_HOURS`, default 72h; `0` disables it). The sweep is a
+system action — not policy-authorized, audited with a `preview-expiry` actor — and idempotent
+(a torn-down preview leaves `running`, so a later sweep skips it).
+
 > [!NOTE]
 > **What's built so far.** Previews are created **manually** (dashboard or RPC) **and
-> automatically from PR webhooks** (above), for **public** git services, and can be **torn down on
-> demand or on PR close**. Building a **private** repo through the App's installation token, and
-> preview **expiration**, build on this and are later slices — see [ROADMAP.md](../../ROADMAP.md).
+> automatically from PR webhooks** (above), for **public** git services; they are **torn down on
+> demand, on PR close, or by the TTL expiry sweep**. Building a **private** repo through the App's
+> installation token builds on this and is a later slice — see [ROADMAP.md](../../ROADMAP.md).
 > Note the two senses of "preview": an **environment** of
 > `type = 'preview'` (a long-lived environment) is distinct from a **deployment** of
 > `kind = 'preview'` (the ephemeral branch/PR build described here).
