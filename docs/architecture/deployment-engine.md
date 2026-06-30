@@ -193,14 +193,29 @@ code. The service's cached live `route_url` always tracks **production**, never 
 of this requires an agent change — the agent already derives the route, the replacement group,
 and the network from the job's `app_label` and `network_name`, which the control plane sets.
 
+### Teardown
+
+A preview can be **removed on demand** — `DeploymentService.TeardownPreview` (by preview
+deployment id) enqueues a **teardown job** for the preview's server agent, mirroring the
+backups/restore job model (a `teardown_jobs` table + the agent-facing `agent.v1.TeardownService`
+Poll/Report, rather than overloading the deployment poll). The agent stops + removes every
+container labelled `plorigo.service={route_key}`, then **reconciles Caddy from Docker truth**
+(`listManagedRoutes` → `router.apply`), so the route drops automatically because the container is
+gone. Teardown is **idempotent** (an already-removed preview reports success), it best-effort
+removes the preview's isolated `plorigo-preview-{route_key}` network, and it is **scoped to the
+`route_key`** — production and other previews are never touched. On success the control plane
+moves the preview's deployment rows to a terminal **`torndown`** status (so the dashboard stops
+showing it running) and the action is audited. Failures surface on the preview row in the
+dashboard's Previews panel, where teardown is triggered by a **Remove preview** action.
+
 > [!NOTE]
 > **What's built so far.** Previews are created **manually** (dashboard or RPC) for **public**
-> git services. Webhook-driven previews (auto-create on PR open/sync, **teardown** on close),
-> the **GitHub App** for private repos, and preview expiration are later slices — see
-> [ROADMAP.md](../../ROADMAP.md). There is no teardown job yet: a preview's container is
-> replaced when the preview is re-pushed, but is not torn down on its own. Note the two senses
-> of "preview": an **environment** of `type = 'preview'` (a long-lived environment) is distinct
-> from a **deployment** of `kind = 'preview'` (the ephemeral branch/PR build described here).
+> git services and can be **torn down on demand** (the teardown job above). Webhook-driven
+> previews (auto-create on PR open/sync, **auto-teardown** on close), the **GitHub App** for
+> private repos, and preview expiration build on this and are later slices — see
+> [ROADMAP.md](../../ROADMAP.md). Note the two senses of "preview": an **environment** of
+> `type = 'preview'` (a long-lived environment) is distinct from a **deployment** of
+> `kind = 'preview'` (the ephemeral branch/PR build described here).
 
 ## Managed database services
 

@@ -58,3 +58,10 @@ func (m *Module) Route(opts ...connect.HandlerOption) (string, http.Handler) {
 func (m *Module) AgentRoute(opts ...connect.HandlerOption) (string, http.Handler) {
 	return agentv1connect.NewDeployServiceHandler(&gatewayHandler{svc: m.service}, opts...)
 }
+
+// TeardownAgentRoute returns the agent-facing agent.v1.TeardownService mount and handler (preview
+// teardown claim/report). Public at the auth interceptor; the service validates the agent
+// credential in the request body, like AgentRoute.
+func (m *Module) TeardownAgentRoute(opts ...connect.HandlerOption) (string, http.Handler) {
+	return agentv1connect.NewTeardownServiceHandler(&teardownGatewayHandler{svc: m.service}, opts...)
+}

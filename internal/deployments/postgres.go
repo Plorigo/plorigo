@@ -394,3 +394,88 @@ func eventFromRow(r db.DeploymentEvent) Event {
 		CreatedAt:    r.CreatedAt,
 	}
 }
+
+func (s *postgresStore) InsertTeardownJob(ctx context.Context, tx database.Tx, t NewTeardownJob) (TeardownJob, error) {
+	row, err := db.New(tx).CreateTeardownJob(ctx, db.CreateTeardownJobParams{
+		DeploymentID:  t.DeploymentID,
+		ServiceID:     t.ServiceID,
+		RouteKey:      t.RouteKey,
+		EnvironmentID: t.EnvironmentID,
+		ProjectID:     t.ProjectID,
+		WorkspaceID:   t.WorkspaceID,
+		ServerID:      t.ServerID,
+	})
+	if err != nil {
+		return TeardownJob{}, err
+	}
+	return teardownFromRow(row), nil
+}
+
+func (s *postgresStore) GetTeardownJob(ctx context.Context, id string) (TeardownJob, bool, error) {
+	row, err := db.New(s.pool).GetTeardownJob(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return TeardownJob{}, false, nil
+		}
+		return TeardownJob{}, false, err
+	}
+	return teardownFromRow(row), true, nil
+}
+
+func (s *postgresStore) ListTeardownsByService(ctx context.Context, serviceID string) ([]TeardownJob, error) {
+	rows, err := db.New(s.pool).ListTeardownJobsByService(ctx, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TeardownJob, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, teardownFromRow(r))
+	}
+	return out, nil
+}
+
+func (s *postgresStore) ClaimNextTeardownForServer(ctx context.Context, tx database.Tx, serverID string) (TeardownJob, bool, error) {
+	row, err := db.New(tx).ClaimNextTeardownForServer(ctx, serverID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return TeardownJob{}, false, nil
+		}
+		return TeardownJob{}, false, err
+	}
+	return teardownFromRow(row), true, nil
+}
+
+func (s *postgresStore) UpdateTeardownStatus(ctx context.Context, tx database.Tx, u TeardownStatusUpdate) (TeardownJob, error) {
+	row, err := db.New(tx).UpdateTeardownStatus(ctx, db.UpdateTeardownStatusParams{
+		Status:  u.Status,
+		Message: u.Message,
+		Error:   u.Error,
+		ID:      u.TeardownID,
+	})
+	if err != nil {
+		return TeardownJob{}, err
+	}
+	return teardownFromRow(row), nil
+}
+
+func (s *postgresStore) MarkPreviewTornDown(ctx context.Context, tx database.Tx, routeKey, serverID string) error {
+	return db.New(tx).MarkPreviewTornDown(ctx, db.MarkPreviewTornDownParams{RouteKey: routeKey, ServerID: serverID})
+}
+
+func teardownFromRow(r db.TeardownJob) TeardownJob {
+	return TeardownJob{
+		ID:            r.ID,
+		DeploymentID:  r.DeploymentID,
+		ServiceID:     r.ServiceID,
+		RouteKey:      r.RouteKey,
+		EnvironmentID: r.EnvironmentID,
+		ProjectID:     r.ProjectID,
+		WorkspaceID:   r.WorkspaceID,
+		ServerID:      r.ServerID,
+		Status:        r.Status,
+		Message:       r.Message,
+		Error:         r.Error,
+		CreatedAt:     r.CreatedAt,
+		UpdatedAt:     r.UpdatedAt,
+	}
+}

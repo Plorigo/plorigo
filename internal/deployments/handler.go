@@ -49,6 +49,26 @@ func (h *adminHandler) CreatePreviewDeployment(ctx context.Context, req *connect
 	return connect.NewResponse(&controlplanev1.CreatePreviewDeploymentResponse{Deployment: toProto(dep)}), nil
 }
 
+func (h *adminHandler) TeardownPreview(ctx context.Context, req *connect.Request[controlplanev1.TeardownPreviewRequest]) (*connect.Response[controlplanev1.TeardownPreviewResponse], error) {
+	t, err := h.svc.TeardownPreview(ctx, req.Msg.GetDeploymentId())
+	if err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&controlplanev1.TeardownPreviewResponse{Teardown: teardownToProto(t)}), nil
+}
+
+func (h *adminHandler) ListTeardownJobsByService(ctx context.Context, req *connect.Request[controlplanev1.ListTeardownJobsByServiceRequest]) (*connect.Response[controlplanev1.ListTeardownJobsByServiceResponse], error) {
+	rows, err := h.svc.ListTeardownsByService(ctx, req.Msg.GetServiceId())
+	if err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	out := make([]*controlplanev1.TeardownJob, 0, len(rows))
+	for _, t := range rows {
+		out = append(out, teardownToProto(t))
+	}
+	return connect.NewResponse(&controlplanev1.ListTeardownJobsByServiceResponse{Teardowns: out}), nil
+}
+
 func (h *adminHandler) RollbackDeployment(ctx context.Context, req *connect.Request[controlplanev1.RollbackDeploymentRequest]) (*connect.Response[controlplanev1.RollbackDeploymentResponse], error) {
 	dep, err := h.svc.RollbackToDeployment(ctx, req.Msg.GetTargetDeploymentId())
 	if err != nil {
@@ -206,6 +226,60 @@ func (h *gatewayHandler) ReportRouteSync(ctx context.Context, req *connect.Reque
 		return nil, problem.ToConnect(err)
 	}
 	return connect.NewResponse(&agentv1.ReportRouteSyncResponse{}), nil
+}
+
+// teardownGatewayHandler serves the agent-facing agent.v1.TeardownService. Like the deploy
+// gateway, its procedures are public at the auth interceptor; the service validates the agent
+// credential carried in the request body and scopes work to the agent's own server.
+type teardownGatewayHandler struct {
+	svc Service
+}
+
+var _ agentv1connect.TeardownServiceHandler = (*teardownGatewayHandler)(nil)
+
+func (h *teardownGatewayHandler) PollTeardownJob(ctx context.Context, req *connect.Request[agentv1.PollTeardownJobRequest]) (*connect.Response[agentv1.PollTeardownJobResponse], error) {
+	claimed, err := h.svc.PollTeardownJob(ctx, PollInput{AgentID: req.Msg.GetAgentId(), Credential: req.Msg.GetCredential()})
+	if err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&agentv1.PollTeardownJobResponse{
+		HasWork:     claimed.HasWork,
+		TeardownId:  claimed.TeardownID,
+		RouteKey:    claimed.RouteKey,
+		NetworkName: claimed.NetworkName,
+	}), nil
+}
+
+func (h *teardownGatewayHandler) ReportTeardownJob(ctx context.Context, req *connect.Request[agentv1.ReportTeardownJobRequest]) (*connect.Response[agentv1.ReportTeardownJobResponse], error) {
+	if err := h.svc.ReportTeardownJob(ctx, ReportTeardownInput{
+		AgentID:    req.Msg.GetAgentId(),
+		Credential: req.Msg.GetCredential(),
+		TeardownID: req.Msg.GetTeardownId(),
+		Status:     req.Msg.GetStatus(),
+		Message:    req.Msg.GetMessage(),
+		Error:      req.Msg.GetError(),
+	}); err != nil {
+		return nil, problem.ToConnect(err)
+	}
+	return connect.NewResponse(&agentv1.ReportTeardownJobResponse{}), nil
+}
+
+func teardownToProto(t TeardownJob) *controlplanev1.TeardownJob {
+	return &controlplanev1.TeardownJob{
+		Id:            t.ID,
+		DeploymentId:  t.DeploymentID,
+		ServiceId:     t.ServiceID,
+		RouteKey:      t.RouteKey,
+		EnvironmentId: t.EnvironmentID,
+		ProjectId:     t.ProjectID,
+		WorkspaceId:   t.WorkspaceID,
+		ServerId:      t.ServerID,
+		Status:        t.Status,
+		Message:       t.Message,
+		Error:         t.Error,
+		CreatedAt:     t.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:     t.UpdatedAt.UTC().Format(time.RFC3339),
+	}
 }
 
 func toProtos(ds []Deployment) []*controlplanev1.Deployment {

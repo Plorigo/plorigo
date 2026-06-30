@@ -96,6 +96,42 @@ func (q *Queries) ClaimNextDeploymentForServer(ctx context.Context, serverID str
 	return i, err
 }
 
+const claimNextTeardownForServer = `-- name: ClaimNextTeardownForServer :one
+UPDATE teardown_jobs
+SET status = 'assigned', updated_at = now()
+WHERE id = (
+    SELECT t.id FROM teardown_jobs t
+    WHERE t.server_id = $1 AND t.status = 'queued'
+    ORDER BY t.created_at
+    FOR UPDATE SKIP LOCKED
+    LIMIT 1
+)
+RETURNING id, deployment_id, service_id, route_key, environment_id, project_id, workspace_id, server_id, status, message, error, created_at, updated_at
+`
+
+// ClaimNextTeardownForServer atomically claims the oldest queued teardown for a server (cf.
+// ClaimNextDeploymentForServer / ClaimNextRestoreForServer).
+func (q *Queries) ClaimNextTeardownForServer(ctx context.Context, serverID string) (TeardownJob, error) {
+	row := q.db.QueryRow(ctx, claimNextTeardownForServer, serverID)
+	var i TeardownJob
+	err := row.Scan(
+		&i.ID,
+		&i.DeploymentID,
+		&i.ServiceID,
+		&i.RouteKey,
+		&i.EnvironmentID,
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.ServerID,
+		&i.Status,
+		&i.Message,
+		&i.Error,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createDeployment = `-- name: CreateDeployment :one
 INSERT INTO deployments (service_id, route_key, environment_id, project_id, workspace_id, server_id, image_ref, container_port, rolled_back_from)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -310,6 +346,56 @@ func (q *Queries) CreatePreviewDeployment(ctx context.Context, arg CreatePreview
 	return i, err
 }
 
+const createTeardownJob = `-- name: CreateTeardownJob :one
+
+INSERT INTO teardown_jobs (deployment_id, service_id, route_key, environment_id, project_id, workspace_id, server_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, deployment_id, service_id, route_key, environment_id, project_id, workspace_id, server_id, status, message, error, created_at, updated_at
+`
+
+type CreateTeardownJobParams struct {
+	DeploymentID  string
+	ServiceID     string
+	RouteKey      string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+}
+
+// --- teardown_jobs ---
+// CreateTeardownJob records a queued teardown of a preview deployment. route_key is the preview's
+// container-replacement / Caddy route key (the agent matches plorigo.service={route_key}); the rest
+// are denormalized from the preview's deployment row so the claim is self-contained.
+func (q *Queries) CreateTeardownJob(ctx context.Context, arg CreateTeardownJobParams) (TeardownJob, error) {
+	row := q.db.QueryRow(ctx, createTeardownJob,
+		arg.DeploymentID,
+		arg.ServiceID,
+		arg.RouteKey,
+		arg.EnvironmentID,
+		arg.ProjectID,
+		arg.WorkspaceID,
+		arg.ServerID,
+	)
+	var i TeardownJob
+	err := row.Scan(
+		&i.ID,
+		&i.DeploymentID,
+		&i.ServiceID,
+		&i.RouteKey,
+		&i.EnvironmentID,
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.ServerID,
+		&i.Status,
+		&i.Message,
+		&i.Error,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getAgentServerByCredential = `-- name: GetAgentServerByCredential :one
 SELECT id, server_id FROM agents WHERE credential_hash = $1
 `
@@ -387,6 +473,31 @@ func (q *Queries) GetEnvironmentWorkspaceAndProject(ctx context.Context, id stri
 	row := q.db.QueryRow(ctx, getEnvironmentWorkspaceAndProject, id)
 	var i GetEnvironmentWorkspaceAndProjectRow
 	err := row.Scan(&i.WorkspaceID, &i.ProjectID)
+	return i, err
+}
+
+const getTeardownJob = `-- name: GetTeardownJob :one
+SELECT id, deployment_id, service_id, route_key, environment_id, project_id, workspace_id, server_id, status, message, error, created_at, updated_at FROM teardown_jobs WHERE id = $1
+`
+
+func (q *Queries) GetTeardownJob(ctx context.Context, id string) (TeardownJob, error) {
+	row := q.db.QueryRow(ctx, getTeardownJob, id)
+	var i TeardownJob
+	err := row.Scan(
+		&i.ID,
+		&i.DeploymentID,
+		&i.ServiceID,
+		&i.RouteKey,
+		&i.EnvironmentID,
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.ServerID,
+		&i.Status,
+		&i.Message,
+		&i.Error,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
 	return i, err
 }
 
@@ -634,6 +745,64 @@ func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID st
 	return items, nil
 }
 
+const listTeardownJobsByService = `-- name: ListTeardownJobsByService :many
+SELECT id, deployment_id, service_id, route_key, environment_id, project_id, workspace_id, server_id, status, message, error, created_at, updated_at FROM teardown_jobs WHERE service_id = $1 ORDER BY created_at DESC
+`
+
+func (q *Queries) ListTeardownJobsByService(ctx context.Context, serviceID string) ([]TeardownJob, error) {
+	rows, err := q.db.Query(ctx, listTeardownJobsByService, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TeardownJob{}
+	for rows.Next() {
+		var i TeardownJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.DeploymentID,
+			&i.ServiceID,
+			&i.RouteKey,
+			&i.EnvironmentID,
+			&i.ProjectID,
+			&i.WorkspaceID,
+			&i.ServerID,
+			&i.Status,
+			&i.Message,
+			&i.Error,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const markPreviewTornDown = `-- name: MarkPreviewTornDown :exec
+UPDATE deployments
+SET status = 'torndown', updated_at = now()
+WHERE route_key = $1 AND server_id = $2 AND status NOT IN ('failed', 'superseded', 'torndown')
+`
+
+type MarkPreviewTornDownParams struct {
+	RouteKey string
+	ServerID string
+}
+
+// MarkPreviewTornDown moves a torn-down preview's still-active deployment rows (same route_key on
+// the server) to the terminal 'torndown' status, so the dashboard stops showing the preview as
+// running once its container and route are gone. Failed/superseded/already-torndown rows are left
+// as they are.
+func (q *Queries) MarkPreviewTornDown(ctx context.Context, arg MarkPreviewTornDownParams) error {
+	_, err := q.db.Exec(ctx, markPreviewTornDown, arg.RouteKey, arg.ServerID)
+	return err
+}
+
 const supersedePreviousRunning = `-- name: SupersedePreviousRunning :exec
 UPDATE deployments
 SET status = 'superseded', updated_at = now()
@@ -725,6 +894,51 @@ func (q *Queries) UpdateDeploymentStatus(ctx context.Context, arg UpdateDeployme
 		&i.RouteKey,
 		&i.PrNumber,
 		&i.PrUrl,
+	)
+	return i, err
+}
+
+const updateTeardownStatus = `-- name: UpdateTeardownStatus :one
+UPDATE teardown_jobs
+SET status = $1,
+    message = CASE WHEN $2::text <> '' THEN $2::text ELSE message END,
+    error = CASE WHEN $3::text <> '' THEN $3::text ELSE error END,
+    updated_at = now()
+WHERE id = $4
+RETURNING id, deployment_id, service_id, route_key, environment_id, project_id, workspace_id, server_id, status, message, error, created_at, updated_at
+`
+
+type UpdateTeardownStatusParams struct {
+	Status  string
+	Message string
+	Error   string
+	ID      string
+}
+
+// UpdateTeardownStatus records a status transition; a zero/empty message or error never clobbers a
+// value already set.
+func (q *Queries) UpdateTeardownStatus(ctx context.Context, arg UpdateTeardownStatusParams) (TeardownJob, error) {
+	row := q.db.QueryRow(ctx, updateTeardownStatus,
+		arg.Status,
+		arg.Message,
+		arg.Error,
+		arg.ID,
+	)
+	var i TeardownJob
+	err := row.Scan(
+		&i.ID,
+		&i.DeploymentID,
+		&i.ServiceID,
+		&i.RouteKey,
+		&i.EnvironmentID,
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.ServerID,
+		&i.Status,
+		&i.Message,
+		&i.Error,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

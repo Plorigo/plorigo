@@ -72,6 +72,42 @@ type Store interface {
 	AppendEvent(ctx context.Context, tx database.Tx, e NewEvent) error
 	VerifiedDomainsForServices(ctx context.Context, serviceIDs []string) (map[string][]string, error)
 	MarkDomainsRouteSync(ctx context.Context, tx database.Tx, serviceID string, hostnames []string, status, message string) error
+
+	// Teardown jobs (preview removal). The agent claim mirrors the deployment/backup claim.
+	InsertTeardownJob(ctx context.Context, tx database.Tx, t NewTeardownJob) (TeardownJob, error)
+	GetTeardownJob(ctx context.Context, id string) (TeardownJob, bool, error)
+	ListTeardownsByService(ctx context.Context, serviceID string) ([]TeardownJob, error)
+	// ClaimNextTeardownForServer atomically claims the oldest queued teardown for a server
+	// (status -> assigned). ok is false (nil error) when there is no queued work.
+	ClaimNextTeardownForServer(ctx context.Context, tx database.Tx, serverID string) (TeardownJob, bool, error)
+	// UpdateTeardownStatus records a teardown's status transition; a zero/empty value never
+	// clobbers a set one.
+	UpdateTeardownStatus(ctx context.Context, tx database.Tx, u TeardownStatusUpdate) (TeardownJob, error)
+	// MarkPreviewTornDown moves a torn-down preview's still-active deployment rows (same route_key
+	// on the server) to the terminal 'torndown' status, so the dashboard stops showing it running.
+	MarkPreviewTornDown(ctx context.Context, tx database.Tx, routeKey, serverID string) error
+}
+
+// NewTeardownJob is the data to insert a queued preview teardown. route_key is the preview's
+// container-replacement / Caddy route key; the rest are denormalized from the preview's deployment
+// row so the agent's claim is self-contained.
+type NewTeardownJob struct {
+	DeploymentID  string
+	ServiceID     string
+	RouteKey      string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+}
+
+// TeardownStatusUpdate is an agent's reported transition for a teardown. A zero/empty message or
+// error never clobbers a value already set.
+type TeardownStatusUpdate struct {
+	TeardownID string
+	Status     string
+	Message    string
+	Error      string
 }
 
 // NewDeployment is the data to insert a queued image deployment. RolledBackFrom is empty for

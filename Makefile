@@ -31,7 +31,7 @@ E2E_AGENT_NATIVE_BIN ?= dist/plorigo-agent-native
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup generate proto sqlc check-generated verify build build-embed web web-check dev seed test lint fmt tidy migrate e2e-agent e2e-build e2e-backup e2e-fresh-vps
+.PHONY: help setup generate proto sqlc check-generated verify build build-embed web web-check dev seed test lint fmt tidy migrate e2e-agent e2e-build e2e-backup e2e-teardown e2e-fresh-vps
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -147,6 +147,17 @@ e2e-backup: check-generated migrate ## Run the backup/restore e2e on real Docker
 	APP_MASTER_KEY="$(APP_MASTER_KEY)" DATABASE_URL="$(DATABASE_URL)" \
 		PLORIGO_E2E_AGENT_BIN="$(CURDIR)/$(E2E_AGENT_NATIVE_BIN)" \
 		go test -tags e2e -run TestE2EBackupRestore -count=1 -v ./internal/app/...
+
+# Preview teardown, end to end (PLO-99). Deploys a production release of a public git service,
+# creates a branch preview alongside it, tears the preview down (the agent stops + removes its
+# container and reconciles Caddy so the route drops), and asserts the preview is gone + 'torndown'
+# while production is untouched. Needs Docker (with the `docker` CLI), Caddy, a migrated Postgres,
+# and internet (it clones). Local-only (not in CI).
+e2e-teardown: check-generated migrate ## Run the preview-teardown e2e on real Docker/Caddy (local-only; not in CI)
+	CGO_ENABLED=0 go build -o $(E2E_AGENT_NATIVE_BIN) ./cmd/agent
+	APP_MASTER_KEY="$(APP_MASTER_KEY)" DATABASE_URL="$(DATABASE_URL)" \
+		PLORIGO_E2E_AGENT_BIN="$(CURDIR)/$(E2E_AGENT_NATIVE_BIN)" \
+		go test -tags e2e -run TestE2EPreviewTeardown -count=1 -v ./internal/app/...
 
 # Fresh-VPS → first-reachable-app release-gate verification (PLO-96). Drives REAL Ubuntu
 # 22.04/24.04 VPSes against a REAL, publicly-reachable control plane — connect (manual + the

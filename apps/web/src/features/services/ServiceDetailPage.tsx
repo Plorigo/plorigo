@@ -55,7 +55,9 @@ import {
   useDomainsByService,
   useServers,
   useService,
+  useTeardownsByService,
 } from "@/lib/queries";
+import type { TeardownJob } from "@/gen/controlplane/v1/deployments_pb";
 import { useEffectiveProjectId } from "@/lib/projectScope";
 import { pickDefaultServer, serverStatusLabel } from "@/lib/serverSelection";
 import { statusTone } from "@/lib/status";
@@ -725,6 +727,7 @@ function PreviewsPanel({
   projectId: string;
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const workspaceId = useWorkspaceStore((s) => s.workspaceId);
   const servers = useServers(workspaceId);
   const agents = useAgents(workspaceId);
@@ -733,11 +736,32 @@ function PreviewsPanel({
   const [value, setValue] = useState("");
   const [serverOverride, setServerOverride] = useState("");
   const [busy, setBusy] = useState(false);
+  const [removing, setRemoving] = useState<Record<string, boolean>>({});
 
   // Previews build a public git source only (the GitHub App for private repos is a later slice).
   const buildable = service.sourceAccess === "public";
   const serverId = serverOverride || pickDefaultServer(servers.data, agents.data)?.id || "";
   const noServers = !servers.isLoading && (servers.data?.length ?? 0) === 0;
+
+  // Teardown jobs, keyed by the preview deployment they target, so each row can show "removing…"
+  // while its container/route are being removed or surface a failed teardown.
+  const teardowns = useTeardownsByService(service.id, buildable);
+  const latestTeardown = (deploymentId: string): TeardownJob | undefined =>
+    teardowns.data?.find((t) => t.deploymentId === deploymentId);
+
+  async function onTeardown(deploymentId: string) {
+    setRemoving((m) => ({ ...m, [deploymentId]: true }));
+    try {
+      await deploymentClient.teardownPreview({ deploymentId });
+      toast.success("Removing preview — its container and URL will be torn down shortly.");
+      await queryClient.invalidateQueries({ queryKey: ["teardowns", "service", service.id] });
+      await queryClient.invalidateQueries({ queryKey: ["deployments", "service", service.id] });
+    } catch (err) {
+      toast.error(err instanceof ConnectError ? err.message : "Could not remove the preview");
+    } finally {
+      setRemoving((m) => ({ ...m, [deploymentId]: false }));
+    }
+  }
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();
@@ -809,10 +833,16 @@ function PreviewsPanel({
                   <TableHead>Status</TableHead>
                   <TableHead>URL</TableHead>
                   <TableHead className="text-right">Created</TableHead>
+                  <TableHead className="w-10" aria-label="Actions" />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {previews.map((d) => (
+                {previews.map((d) => {
+                  const td = latestTeardown(d.id);
+                  const teardownInFlight =
+                    Boolean(removing[d.id]) || Boolean(td && td.status !== "succeeded" && td.status !== "failed");
+                  const teardownFailed = td?.status === "failed";
+                  return (
                   <TableRow
                     key={d.id}
                     className="cursor-pointer"
@@ -847,7 +877,15 @@ function PreviewsPanel({
                       )}
                     </TableCell>
                     <TableCell>
-                      <StatusDot tone={statusTone(d.status)} label={d.status} />
+                      {teardownInFlight ? (
+                        <StatusDot tone="amber" label="removing…" />
+                      ) : teardownFailed ? (
+                        <span title={td?.error} className="cursor-help">
+                          <StatusDot tone="red" label="remove failed" />
+                        </span>
+                      ) : (
+                        <StatusDot tone={statusTone(d.status)} label={d.status} />
+                      )}
                     </TableCell>
                     <TableCell>
                       {d.routeUrl ? (
@@ -866,8 +904,31 @@ function PreviewsPanel({
                       )}
                     </TableCell>
                     <TableCell className="text-right text-muted-foreground">{timeAgo(d.createdAt)}</TableCell>
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                      {d.status !== "torndown" && (
+                        <ConfirmDialog
+                          trigger={
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              disabled={teardownInFlight}
+                              aria-label="Remove preview"
+                              title="Remove preview"
+                            >
+                              <Trash2 className="h-4 w-4" aria-hidden="true" />
+                            </Button>
+                          }
+                          title="Remove this preview?"
+                          description={`This stops and removes the ${previewLabel(d)} preview's container and drops its URL. Production and other previews are untouched.`}
+                          recovery="You can recreate the preview at any time from this panel."
+                          confirmLabel="Remove preview"
+                          onConfirm={() => void onTeardown(d.id)}
+                        />
+                      )}
+                    </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

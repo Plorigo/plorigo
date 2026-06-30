@@ -47,6 +47,10 @@ var publicProcedures = map[string]bool{
 	"/agent.v1.BackupService/ReportBackupJob":  true,
 	"/agent.v1.BackupService/PollRestoreJob":   true,
 	"/agent.v1.BackupService/ReportRestoreJob": true,
+	// The teardown gateway: the agent claims and reports preview-teardown jobs, authenticated by
+	// its durable agent credential (validated in the deployments service), not a session.
+	"/agent.v1.TeardownService/PollTeardownJob":   true,
+	"/agent.v1.TeardownService/ReportTeardownJob": true,
 }
 
 // authInterceptor resolves the caller's principal from the request, applies a CSRF
