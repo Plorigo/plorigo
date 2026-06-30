@@ -40,9 +40,10 @@ const (
 
 type deploymentRuntime interface {
 	pull(ctx context.Context, imageRef string, emit func(string)) error
-	// clone fetches the repo at gitRef into dir (shallow, anonymous — public repos only)
-	// and returns the exact commit SHA it checked out.
-	clone(ctx context.Context, cloneURL, gitRef, dir string, emit func(string)) (commitSHA string, err error)
+	// clone fetches the repo at gitRef into dir (shallow) and returns the exact commit SHA it
+	// checked out. credential is empty for a public repo (anonymous clone) or a short-lived
+	// GitHub App installation token for a private repo, applied as basic-auth (never put in the URL).
+	clone(ctx context.Context, cloneURL, gitRef, credential, dir string, emit func(string)) (commitSHA string, err error)
 	// build builds the Dockerfile at the root of dir into the local image tag, with BuildKit.
 	build(ctx context.Context, dir, tag string, emit func(string)) error
 	// detectPort returns the image's exposed port (its Dockerfile/base EXPOSE) so a git
@@ -386,7 +387,8 @@ func runningMessage(public bool, routeURL, alias string, containerPort, hostPort
 // reporting cloning -> building. It returns the built image tag, the commit SHA, and the
 // build logs to carry into the starting report; ok is false when it has already reported a
 // failure (the caller should stop). It sets *commitSHA so later reports include it, and
-// always cleans up the temporary checkout. No credential is used — public repos only.
+// always cleans up the temporary checkout. A public repo is cloned anonymously; a private repo
+// is cloned with the job's short-lived GitHub App token (basic-auth, never put in the clone URL).
 func buildFromSource(ctx context.Context, out io.Writer, runtime deploymentRuntime, job *agentv1.PollDeploymentResponse, commitSHA *string, report func(status string, hostPort int32, containerID, message string, logs []string)) (builtImageRef string, prepLogs []string, ok bool) {
 	dir, err := os.MkdirTemp("", "plorigo-build-")
 	if err != nil {
@@ -403,7 +405,7 @@ func buildFromSource(ctx context.Context, out io.Writer, runtime deploymentRunti
 
 	report(statusCloning, 0, "", "cloning "+job.GetCloneUrl(), nil)
 	var cloneLines []string
-	checkedOut, err := runtime.clone(ctx, job.GetCloneUrl(), job.GetGitRef(), dir, func(l string) { cloneLines = appendCapped(cloneLines, l, 30) })
+	checkedOut, err := runtime.clone(ctx, job.GetCloneUrl(), job.GetGitRef(), job.GetGitCredential(), dir, func(l string) { cloneLines = appendCapped(cloneLines, l, 30) })
 	if err != nil {
 		report(statusFailed, 0, "", "clone failed: "+err.Error(), cloneLines)
 		return "", nil, false

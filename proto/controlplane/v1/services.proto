@@ -48,13 +48,14 @@ message CreateServiceRequest {
   string image_ref = 4;       // image / template
   string template_id = 5;     // template
   string repo_url = 6;        // git (public): a public repo URL or "owner/repo"
-  string owner = 7;           // git (oauth): from a connected repo
-  string repo = 8;            // git (oauth)
+  string owner = 7;           // git (connected): from a chosen connection's repo
+  string repo = 8;            // git (connected)
   string branch = 9;          // git: optional (empty = the repo's default branch)
   int32 container_port = 10;  // 0 = auto-detect from the Dockerfile EXPOSE (git only)
   string visibility = 11;     // "public" | "private" (empty = public)
   string server_id = 12;      // required when deploy_now
   bool deploy_now = 13;       // create the service AND enqueue its first deployment
+  string connection_id = 14;  // git (connected): which integration to reach owner/repo through
 }
 
 message CreateServiceResponse {

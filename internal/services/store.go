@@ -92,12 +92,6 @@ type Store interface {
 	// WorkspaceForProject resolves a project's owning workspace (ListByProject authz). ok is
 	// false (nil error) when the project does not exist.
 	WorkspaceForProject(ctx context.Context, projectID string) (workspaceID string, ok bool, err error)
-
-	// GetConnection resolves the workspace's GitHub connection id + account login for an
-	// OAuth git source (a sibling read of source_connections). ok is false when none.
-	GetConnection(ctx context.Context, workspaceID string) (connectionID, githubLogin string, ok bool, err error)
-	// GetConnectionToken returns the sealed OAuth token for validating a connected repo.
-	GetConnectionToken(ctx context.Context, workspaceID string) (ciphertext []byte, ok bool, err error)
 }
 
 // TxRunner runs fn inside one transaction. Implemented by *database.DB; declared here as a
@@ -119,15 +113,52 @@ type SecretBox interface {
 	Open(sealed []byte) ([]byte, error)
 }
 
-// GitHubClient is the CONSUMER-DEFINED port for validating a repo + branch. *github.Client
-// satisfies it structurally (the same concrete client the sources module uses). It is the
-// minimal slice services needs — repo discovery + OAuth live in the sources module.
+// GitHubClient is the CONSUMER-DEFINED port for validating a PUBLIC repo + branch and reading files
+// for framework detection (all anonymous — token is empty). *github.Client satisfies it. Connected
+// (oauth/app) repos are validated through the Sources port instead, so the provider seam stays in the
+// sources module.
 type GitHubClient interface {
 	GetRepository(ctx context.Context, token, owner, repo string) (github.RepoInfo, error)
 	GetBranch(ctx context.Context, token, owner, repo, branch string) error
 	// GetFileContent reads a single repo file at ref for framework detection; ok is false when
 	// the file is absent. token is empty for a public repo.
 	GetFileContent(ctx context.Context, token, owner, repo, ref, path string) (data []byte, ok bool, err error)
+}
+
+// ConnectionMeta is the subset of an integration's metadata services needs to confirm a connection
+// belongs to the service's workspace. It mirrors the sources domain type across the module boundary;
+// the adapter wired in internal/app translates between them.
+type ConnectionMeta struct {
+	WorkspaceID  string
+	Provider     string
+	Kind         string
+	AccountLogin string
+}
+
+// ResolvedRepo is the validated repo facts services records for a connected git source (returned by
+// the Sources port). Buildable comes from the provider (App installs build; OAuth is discovery-only).
+type ResolvedRepo struct {
+	Owner         string
+	Name          string
+	FullName      string
+	DefaultBranch string
+	HTMLURL       string
+	IsPrivate     bool
+	Branch        string
+	Provider      string
+	Kind          string
+	AccountLogin  string
+	Buildable     bool
+}
+
+// Sources is the CONSUMER-DEFINED port for validating a repo reached through one of the workspace's
+// connections. The sources module satisfies it through an adapter wired in internal/app — services
+// never reaches a provider for a connected repo directly; sources owns the provider seam.
+// GetConnectionMeta confirms the connection's workspace; ValidateRepo validates owner/repo(+branch)
+// and reports the access kind + buildability.
+type Sources interface {
+	GetConnectionMeta(ctx context.Context, connectionID string) (ConnectionMeta, bool, error)
+	ValidateRepo(ctx context.Context, connectionID, owner, repo, branch string) (ResolvedRepo, error)
 }
 
 // Enqueuer is the CONSUMER-DEFINED port for queuing a new service's first deployment inside

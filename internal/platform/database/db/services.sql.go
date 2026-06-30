@@ -226,7 +226,7 @@ func (q *Queries) GetService(ctx context.Context, id string) (Service, error) {
 const getServiceForDeploy = `-- name: GetServiceForDeploy :one
 SELECT
     environment_id, project_id, workspace_id, source_kind, image_ref,
-    source_access, owner, repo, full_name, branch, default_branch, html_url,
+    source_access, connection_id, owner, repo, full_name, branch, default_branch, html_url,
     container_port, visibility, slug
 FROM services WHERE id = $1
 `
@@ -238,6 +238,7 @@ type GetServiceForDeployRow struct {
 	SourceKind    string
 	ImageRef      string
 	SourceAccess  string
+	ConnectionID  *string
 	Owner         string
 	Repo          string
 	FullName      string
@@ -262,6 +263,7 @@ func (q *Queries) GetServiceForDeploy(ctx context.Context, id string) (GetServic
 		&i.SourceKind,
 		&i.ImageRef,
 		&i.SourceAccess,
+		&i.ConnectionID,
 		&i.Owner,
 		&i.Repo,
 		&i.FullName,

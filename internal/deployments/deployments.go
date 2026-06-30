@@ -170,6 +170,7 @@ type ServiceForDeploy struct {
 	SourceKind    string // "image" | "git" | "template"
 	ImageRef      string
 	SourceAccess  string // "" | "public" | "oauth" | "app"
+	ConnectionID  string // the integration this service builds from (empty for public)
 	Owner         string
 	Repo          string
 	Branch        string
@@ -201,12 +202,15 @@ type Claimed struct {
 	AppLabel string
 
 	// Build-from-Git. For a git deployment SourceKind is SourceGit and the agent clones
-	// CloneURL at GitRef, builds the Dockerfile to BuiltImageTag, then runs that tag. No
-	// credential is included: this slice builds public repositories only.
+	// CloneURL at GitRef, builds the Dockerfile to BuiltImageTag, then runs that tag. A public
+	// repo carries no credential; a private (GitHub App-backed) repo carries a short-lived
+	// installation token in GitCredential, used by the agent as the clone password (never logged
+	// or embedded in CloneURL).
 	SourceKind    string
 	CloneURL      string
 	GitRef        string
 	BuiltImageTag string
+	GitCredential string
 
 	// Visibility + internal networking. A public service is published + routed through Caddy;
 	// a private service is reachable only by siblings. Every service joins NetworkName (one

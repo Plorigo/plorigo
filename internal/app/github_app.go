@@ -23,8 +23,9 @@ func (a *App) githubAppInstallHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		returnTo := safeReturnPath(r.URL.Query().Get("return_to"))
 		ctx := principal.NewContext(r.Context(), a.resolveBrowserPrincipal(r))
-		res, err := a.sources.Service().BeginAppInstall(ctx, sources.BeginAuthInput{
+		res, err := a.sources.Service().BeginAppInstall(ctx, sources.BeginConnectInput{
 			WorkspaceID: r.URL.Query().Get("workspace_id"),
+			Provider:    "github",
 		})
 		if err != nil {
 			a.redirectToDashboard(w, r, returnTo, "error", reasonFor(err))
@@ -71,6 +72,7 @@ func (a *App) githubAppSetupHandler() http.Handler {
 
 		ctx := principal.NewContext(r.Context(), a.resolveBrowserPrincipal(r))
 		_, err := a.sources.Service().CompleteAppInstall(ctx, sources.CompleteAppInput{
+			Provider:       "github",
 			InstallationID: r.URL.Query().Get("installation_id"),
 			SetupAction:    r.URL.Query().Get("setup_action"),
 			State:          r.URL.Query().Get("state"),

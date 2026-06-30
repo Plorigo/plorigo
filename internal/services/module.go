@@ -22,6 +22,7 @@ type Deps struct {
 	Policy   authz.Authorizer
 	Crypto   SecretBox
 	GitHub   GitHubClient
+	Sources  Sources
 	Enqueuer Enqueuer
 	Config   ConfigSetter
 	Log      *slog.Logger
@@ -36,7 +37,7 @@ type Module struct {
 func New(d Deps) *Module {
 	store := newPostgresStore(d.DB)
 	return &Module{
-		service: newService(d.DB, store, d.Crypto, d.GitHub, d.Enqueuer, d.Config, d.Policy, d.Audit, d.Log),
+		service: newService(d.DB, store, d.Crypto, d.GitHub, d.Sources, d.Enqueuer, d.Config, d.Policy, d.Audit, d.Log),
 	}
 }
 

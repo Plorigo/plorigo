@@ -37,7 +37,7 @@ func TestAppJWT_ClaimsAndSignature(t *testing.T) {
 	c := NewClient(Config{AppID: "12345", AppPrivateKeyPEM: keyPEM})
 	now := time.Unix(1_700_000_000, 0)
 
-	tok, err := c.appJWT(now)
+	tok, err := c.appJWT(context.Background(), now)
 	if err != nil {
 		t.Fatalf("appJWT: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestAppJWT_ClaimsAndSignature(t *testing.T) {
 
 func TestAppJWT_RejectsBadKey(t *testing.T) {
 	c := NewClient(Config{AppID: "1", AppPrivateKeyPEM: "not a pem"})
-	if _, err := c.appJWT(time.Now()); err == nil {
+	if _, err := c.appJWT(context.Background(), time.Now()); err == nil {
 		t.Fatal("appJWT with a bad key should error")
 	}
 }
@@ -145,7 +145,7 @@ func TestInstallationToken_RequiresAppConfig(t *testing.T) {
 	if _, err := c.InstallationToken(context.Background(), "42"); err == nil {
 		t.Fatal("InstallationToken without App config should error")
 	}
-	if c.AppConfigured() {
+	if c.AppConfigured(context.Background()) {
 		t.Error("AppConfigured should be false without credentials")
 	}
 }

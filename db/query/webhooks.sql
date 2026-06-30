@@ -6,7 +6,7 @@
 -- Resolve a GitHub App installation id to its workspace, so a webhook delivery is scoped to the
 -- workspace that connected the installation. ErrNoRows for an unknown/unconnected installation.
 SELECT workspace_id FROM source_connections
-WHERE provider = 'github_app' AND installation_id = $1;
+WHERE kind = 'app' AND installation_id = $1;
 
 -- name: ListServiceIDsForRepo :many
 -- The git services in a workspace whose source is owner/repo (case-insensitive), so a PR event maps

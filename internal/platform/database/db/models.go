@@ -162,6 +162,19 @@ type Environment struct {
 	CreatedAt time.Time
 }
 
+type GithubAppConfig struct {
+	Singleton           bool
+	AppID               string
+	AppSlug             string
+	ClientID            string
+	SealedPrivateKey    []byte
+	SealedWebhookSecret []byte
+	SealedClientSecret  []byte
+	CreatedBy           *string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
 type Invitation struct {
 	ID          string
 	WorkspaceID string
@@ -272,14 +285,15 @@ type SourceConnection struct {
 	ID                    string
 	WorkspaceID           string
 	Provider              string
-	GithubLogin           string
-	GithubUserID          *int64
+	AccountLogin          string
+	AccountID             *int64
 	AccessTokenCiphertext []byte
 	Scopes                string
 	ConnectedBy           *string
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
 	InstallationID        *string
+	Kind                  string
 }
 
 type SshManagementKey struct {

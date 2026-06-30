@@ -56,8 +56,10 @@ side of Caddy and container management is in [agent.md](./agent.md).
 >
 > Build detection covers a **repo Dockerfile** and, when there is none, a **generated Dockerfile
 > for a detected Node/Vite/Next.js app** (the shared `internal/builder` package — see below).
-> **Private repos aren't built yet** — only `access = 'public'` sources are dispatched, so no
-> credential ever leaves the control plane (see [security.md](./security.md)). Logs are
+> **Public and GitHub App-backed private repos are built**: a `public` source clones anonymously,
+> while an `app` source is cloned with a short-lived installation token minted per claim and handed
+> to the agent in the job (an `oauth` source stays discovery-only — see
+> [security.md](./security.md) and [sources.md](./sources.md)). Logs are
 > delivered by **polling**, not SSE; Caddy routing is
 > HTTP-only and derives a route from the **service id** (so two services in one environment
 > don't collide). SSL, custom domains, Compose/Nixpacks/static builds, and one-click rollback
@@ -167,9 +169,10 @@ A service's **visibility** decides what is exposed to the outside:
 A **preview** is a deployment of a service built from a **branch or pull request** that runs
 **alongside** the service's production deployment — Plorigo's take on Vercel-style previews,
 without a separate environment or service row. `DeploymentService.CreatePreviewDeployment`
-enqueues one: it resolves the service's source server-side (public git only in this slice) and
-takes either a `branch` or a `pr_number` (resolved through the GitHub API to its head ref, and
-linked back via `pr_url`).
+enqueues one: it resolves the service's source server-side (a `public` or GitHub App-backed
+`app` git service — an `oauth` source is not buildable) and takes either a `branch` or a
+`pr_number` (resolved through the GitHub API to its head ref, and linked back via `pr_url`). A
+private (`app`) preview is cloned with the same per-claim installation token as a production deploy.
 
 A deployment carries a **`kind`** (`production` | `preview`) and a **`route_key`**. The
 `route_key` is what isolates a preview, because it is what the deploy flow keys on in the three

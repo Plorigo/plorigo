@@ -45,7 +45,10 @@ func (a *App) githubWebhookHandler() http.Handler {
 			http.Error(w, "could not read body", http.StatusBadRequest)
 			return
 		}
-		if !github.VerifyWebhookSignature(a.cfg.GitHubWebhookSecret, body, r.Header.Get("X-Hub-Signature-256")) {
+		// The webhook secret is resolved through githubapp (env, or the registered App), so a
+		// dashboard-registered App's secret verifies without a restart. Empty (no App configured)
+		// fails closed.
+		if !github.VerifyWebhookSignature(a.githubapp.WebhookSecret(r.Context()), body, r.Header.Get("X-Hub-Signature-256")) {
 			http.Error(w, "invalid signature", http.StatusUnauthorized)
 			return
 		}

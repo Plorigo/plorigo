@@ -216,6 +216,15 @@ type GitHubClient interface {
 	GetPullRequest(ctx context.Context, token, owner, repo string, number int) (github.PullRequest, error)
 }
 
+// SourceTokens is the CONSUMER-DEFINED port for minting a short-lived git credential for a PRIVATE
+// (App-backed) source at deploy time, keyed by the service's CONNECTION (a workspace may have many).
+// *sources.Service satisfies it structurally — deployments never imports the sources module. ok is
+// false (nil error) when the connection is missing or not an App installation. The returned token is
+// short-lived and must never be logged or persisted; it is handed to the agent in the claim only.
+type SourceTokens interface {
+	InstallationToken(ctx context.Context, connectionID string) (token string, ok bool, err error)
+}
+
 // ConfigForDeploy is one configuration entry to inject into a service's container at deploy
 // time. Scope is "service" or "environment"; on a key collision service overrides
 // environment. For a variable Value holds the plaintext; for a secret Ciphertext holds the

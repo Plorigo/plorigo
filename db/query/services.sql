@@ -32,7 +32,7 @@ SELECT * FROM services WHERE id = $1;
 -- name: GetServiceForDeploy :one
 SELECT
     environment_id, project_id, workspace_id, source_kind, image_ref,
-    source_access, owner, repo, full_name, branch, default_branch, html_url,
+    source_access, connection_id, owner, repo, full_name, branch, default_branch, html_url,
     container_port, visibility, slug
 FROM services WHERE id = $1;
 

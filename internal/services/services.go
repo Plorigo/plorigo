@@ -28,10 +28,13 @@ const (
 )
 
 // How a git source is reached. A public source carries no connection; an oauth source
-// resolves through the workspace's GitHub connection. ('app' is a later slice.)
+// resolves through the workspace's GitHub OAuth connection (discovery only, not buildable); an
+// app source resolves through the workspace's GitHub App installation (private, buildable — the
+// deploy path mints a short-lived installation token per claim).
 const (
 	accessOAuth  = "oauth"
 	accessPublic = "public"
+	accessApp    = "app"
 )
 
 // Visibility: a public service is published on a host port and routed through Caddy; a
@@ -76,10 +79,10 @@ type Service struct {
 	UpdatedAt     time.Time
 }
 
-// CreateInput is what the dashboard supplies to create a service. The source is exactly one
-// of: image_ref (image), template_id+image_ref (template), repo_url (public git), or
-// owner+repo (an OAuth-connected git repo). DeployNow enqueues the first deployment onto
-// ServerID (required when DeployNow).
+// CreateInput is what the dashboard supplies to create a service. The source is exactly one of:
+// image_ref (image), template_id+image_ref (template), repo_url (public git), or
+// connection_id+owner+repo (a repo reached through one of the workspace's connected integrations).
+// DeployNow enqueues the first deployment onto ServerID (required when DeployNow).
 type CreateInput struct {
 	EnvironmentID string
 	Name          string
@@ -87,6 +90,7 @@ type CreateInput struct {
 	ImageRef      string
 	TemplateID    string
 	RepoURL       string
+	ConnectionID  string
 	Owner         string
 	Repo          string
 	Branch        string
@@ -104,6 +108,7 @@ type UpdateSourceInput struct {
 	ImageRef      string
 	TemplateID    string
 	RepoURL       string
+	ConnectionID  string
 	Owner         string
 	Repo          string
 	Branch        string

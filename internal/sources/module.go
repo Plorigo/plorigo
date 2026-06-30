@@ -11,19 +11,17 @@ import (
 	"github.com/plorigo/plorigo/proto/gen/controlplane/v1/controlplanev1connect"
 )
 
-// Deps are what the sources module needs. Audit, Policy, Crypto, and GitHub are
-// CONSUMER-DEFINED ports (authz.Authorizer is satisfied by *policy.Service, Recorder by
-// *audit.Service, SecretBox by *crypto.Box, GitHubClient by *github.Client), wired in
-// internal/app — sources imports none of those modules.
+// Deps are what the sources module needs. Audit, Policy, and Crypto are CONSUMER-DEFINED ports
+// (satisfied by *audit.Service, *policy.Service, *crypto.Box), wired in internal/app — sources
+// imports none of those modules. Providers is the registry of VCS adapters (built in internal/app
+// from the GitHub adapter); all provider access goes through it.
 type Deps struct {
-	DB     *database.DB
-	Audit  Recorder
-	Policy authz.Authorizer
-	Crypto SecretBox
-	GitHub GitHubClient
-	OAuth  OAuthConfig
-	App    AppConfig
-	Log    *slog.Logger
+	DB        *database.DB
+	Audit     Recorder
+	Policy    authz.Authorizer
+	Crypto    SecretBox
+	Providers *Registry
+	Log       *slog.Logger
 }
 
 // Module is the sources module: the only wiring surface other code touches.
@@ -35,16 +33,15 @@ type Module struct {
 func New(d Deps) *Module {
 	store := newPostgresStore(d.DB)
 	return &Module{
-		service: newService(d.DB, store, d.Crypto, d.GitHub, d.OAuth, d.App, d.Policy, d.Audit, d.Log),
+		service: newService(d.DB, store, d.Crypto, d.Providers, d.Policy, d.Audit, d.Log),
 	}
 }
 
-// Service exposes the module's service interface (for the OAuth HTTP handlers in
-// internal/app, tests, and other wiring).
+// Service exposes the module's service (for the connect HTTP handlers in internal/app, the
+// deployments/services modules' consumer ports, tests, and wiring).
 func (m *Module) Service() Service { return m.service }
 
-// Route returns the SourceService mount path and handler. opts carries the app-wide
-// interceptors (e.g. the auth interceptor).
+// Route returns the SourceService mount path and handler. opts carries the app-wide interceptors.
 func (m *Module) Route(opts ...connect.HandlerOption) (string, http.Handler) {
 	return controlplanev1connect.NewSourceServiceHandler(&handler{svc: m.service}, opts...)
 }

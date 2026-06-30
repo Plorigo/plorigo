@@ -9,6 +9,7 @@ import { DeploymentsPage } from "./features/deployments/DeploymentsPage";
 import { NewDeploymentPage } from "./features/deployments/new/NewDeploymentPage";
 import { DomainsPage } from "./features/domains/DomainsPage";
 import { EnvironmentDetailPage } from "./features/environments/EnvironmentDetailPage";
+import { IntegrationsPage } from "./features/integrations/IntegrationsPage";
 import { OverviewPage } from "./features/overview/OverviewPage";
 import { ProjectDetailPage } from "./features/projects/ProjectDetailPage";
 import { ProjectsPage } from "./features/projects/ProjectsPage";
@@ -108,6 +109,7 @@ const projectDeploymentDetailRoute = createRoute({
 });
 const backupsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/backups", component: BackupsPage });
 const securityRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/security", component: SecurityPage });
+const integrationsRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/integrations", component: IntegrationsPage });
 const teamRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/team", component: TeamPage });
 const activityRoute = createRoute({ getParentRoute: () => appLayoutRoute, path: "/activity", component: ActivityPage });
 const projectActivityRoute = createRoute({
@@ -143,6 +145,7 @@ export const routeTree = rootRoute.addChildren([
     deploymentDetailRoute,
     projectDeploymentDetailRoute,
     backupsRoute,
+    integrationsRoute,
     securityRoute,
     teamRoute,
     activityRoute,

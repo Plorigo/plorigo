@@ -53,6 +53,9 @@ var permissions = map[string]map[authz.Action]bool{
 		authz.ActionServerSetupKeyRotate: true,
 		authz.ActionServerSetupKeyRevoke: true,
 		authz.ActionServerSetupKeyRead:   true,
+		// Registering the instance's server-wide GitHub App is owner-only (not granted to admin/
+		// member/viewer below): it sets a credential shared by every workspace.
+		authz.ActionGitHubAppRegister: true,
 	},
 	authz.RoleAdmin: {
 		authz.ActionMemberInvite:         true,

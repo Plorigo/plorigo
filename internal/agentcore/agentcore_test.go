@@ -313,6 +313,7 @@ type fakeRuntime struct {
 
 	cloneSHA     string
 	cloneErr     error
+	cloneCred    string // the credential clone() was handed (asserted by private-repo tests)
 	buildErr     error
 	builtTag     string // the tag build() was asked to produce
 	ranImage     string // the image run() was asked to start
@@ -335,8 +336,9 @@ func (f *fakeRuntime) pull(_ context.Context, _ string, emit func(string)) error
 	return nil
 }
 
-func (f *fakeRuntime) clone(_ context.Context, _, _, _ string, emit func(string)) (string, error) {
+func (f *fakeRuntime) clone(_ context.Context, _, _, credential, _ string, emit func(string)) (string, error) {
 	f.ops = append(f.ops, "clone")
+	f.cloneCred = credential
 	emit("cloned")
 	if f.cloneErr != nil {
 		return "", f.cloneErr
@@ -558,6 +560,34 @@ func TestExecuteDeployment_GitClonesAndBuildsThenRunsBuiltImage(t *testing.T) {
 	last := deploy.reports[len(deploy.reports)-1]
 	if last.GetStatus() != statusRunning || last.GetCommitSha() != "commit-sha-1" || last.GetBuiltImageRef() != "plorigo-build:dep-1" {
 		t.Fatalf("last report = %+v, want running with commit + built image", last)
+	}
+}
+
+func TestExecuteDeployment_GitPrivateThreadsInstallationTokenToClone(t *testing.T) {
+	oldHealthCheck := runHealthCheck
+	defer func() { runHealthCheck = oldHealthCheck }()
+
+	runtime := &fakeRuntime{containerID: "new-container", hostPort: 32768, cloneSHA: "commit-sha-1"}
+	runHealthCheck = func(_ context.Context, _ int32) error { return nil }
+	deploy := &fakeDeployClient{}
+	ident := &identity{st: state{AgentID: "agent-1", Credential: "plag_1"}}
+
+	executeDeployment(context.Background(), io.Discard, deploy, ident, runtime, &fakeRouter{runtime: runtime}, &agentv1.PollDeploymentResponse{
+		HasWork:       true,
+		DeploymentId:  "dep-1",
+		ContainerPort: 80,
+		AppLabel:      "env-1",
+		SourceKind:    "git",
+		CloneUrl:      "https://github.com/o/private.git",
+		GitRef:        "main",
+		BuiltImageTag: "plorigo-build:dep-1",
+		GitCredential: "ghs_installtok",
+	})
+
+	// The job's short-lived installation token is handed to clone() (which applies it as basic-auth);
+	// the clone URL itself stays credential-free.
+	if runtime.cloneCred != "ghs_installtok" {
+		t.Fatalf("clone credential = %q, want the job's installation token threaded to the clone", runtime.cloneCred)
 	}
 }
 

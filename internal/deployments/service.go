@@ -39,11 +39,12 @@ type service struct {
 	audit      Recorder
 	opener     Opener
 	gh         GitHubClient
+	sources    SourceTokens
 	log        *slog.Logger
 }
 
-func newService(tx TxRunner, store Store, authorizer authz.Authorizer, audit Recorder, opener Opener, gh GitHubClient, log *slog.Logger) *service {
-	return &service{tx: tx, store: store, authorizer: authorizer, audit: audit, opener: opener, gh: gh, log: log}
+func newService(tx TxRunner, store Store, authorizer authz.Authorizer, audit Recorder, opener Opener, gh GitHubClient, sources SourceTokens, log *slog.Logger) *service {
+	return &service{tx: tx, store: store, authorizer: authorizer, audit: audit, opener: opener, gh: gh, sources: sources, log: log}
 }
 
 var _ Service = (*service)(nil)
@@ -236,8 +237,8 @@ func (s *service) enqueuePreview(ctx context.Context, serviceID, serverID, branc
 	if svc.SourceKind != SourceGit {
 		return Deployment{}, problem.InvalidInput("previews are only supported for git services")
 	}
-	if svc.SourceAccess != "public" {
-		return Deployment{}, problem.InvalidInput("building private repositories isn't supported yet — connect a public repo (GitHub App support is coming)")
+	if !buildableAccess(svc.SourceAccess) {
+		return Deployment{}, problem.InvalidInput("this git source can't be previewed — connect a public repo or install the GitHub App for private repos")
 	}
 
 	// Resolve the ref to build and the PR linkage. A PR number is resolved to its head ref; the
@@ -406,6 +407,14 @@ func (s *service) EnqueueFirstDeployment(ctx context.Context, tx database.Tx, se
 	return dep.ID, nil
 }
 
+// buildableAccess reports whether a git service's source access can be built and deployed: a
+// public repo (cloned anonymously) or a GitHub App-backed private repo (cloned with a short-lived
+// installation token minted at claim time). An "oauth" source is NOT buildable — its broad,
+// long-lived token is never sent to the agent; private builds use the App path.
+func buildableAccess(access string) bool {
+	return access == "public" || access == "app"
+}
+
 // buildAndInsert inserts a queued deployment (image or git) for a resolved service inside
 // tx. portOverride > 0 replaces the service's configured port; gitRef overrides the branch.
 // It is the shared core of CreateForService and EnqueueFirstDeployment.
@@ -416,11 +425,12 @@ func (s *service) buildAndInsert(ctx context.Context, tx database.Tx, serviceID 
 	}
 
 	if svc.SourceKind == SourceGit {
-		// Public-first: the agent only ever receives a clone URL, never a credential.
-		// Building a private repo needs a short-lived credential, which lands with the
-		// GitHub App. The services module gates deploy_now on this too; this is defense.
-		if svc.SourceAccess != "public" {
-			return Deployment{}, problem.InvalidInput("building private repositories isn't supported yet — connect a public repo (GitHub App support is coming)")
+		// A public repo is cloned anonymously (no credential ever leaves the control plane);
+		// a GitHub App-backed private repo is cloned with a short-lived installation token minted
+		// at claim time (see PollDeployment). An "oauth" source is not buildable. The services
+		// module gates deploy_now on this too; this is defense.
+		if !buildableAccess(svc.SourceAccess) {
+			return Deployment{}, problem.InvalidInput("this git source can't be built — connect a public repo or install the GitHub App for private repos")
 		}
 		ref := strings.TrimSpace(gitRef)
 		if ref == "" {
@@ -643,11 +653,34 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 		RouteHost: routeHost,
 	}
 	// For a git deployment the agent clones + builds; hand it the clone URL, ref, and a
-	// deterministic local tag to build to and then run. No credential (public repos only).
+	// deterministic local tag to build to and then run. A public repo carries no credential
+	// (anonymous clone); a private (GitHub App-backed) repo carries a short-lived installation
+	// token minted now, used by the agent as the clone password (never logged or persisted).
 	if claimed.SourceKind == SourceGit {
 		out.CloneURL = claimed.CloneURL
 		out.GitRef = claimed.GitRef
 		out.BuiltImageTag = builtImageTag(claimed.ID)
+		if svc.SourceAccess == "app" {
+			// Mint a short-lived token for the SERVICE's specific connection (a workspace may have
+			// many integrations), keyed by connection_id — not the workspace.
+			token, ok, terr := s.sources.InstallationToken(ctx, svc.ConnectionID)
+			switch {
+			case terr != nil:
+				// Minting failed (provider unreachable, App misconfigured). Fail this deployment with
+				// a plain-English message instead of leaving it stuck "assigned" or handing the agent
+				// an anonymous clone of a private repo. The agent polls again and finds other work.
+				// Log the cause internally; never surface the raw error.
+				s.log.Error("mint installation token failed", "deployment_id", claimed.ID, "connection_id", svc.ConnectionID, "err", terr)
+				s.failDeployment(ctx, claimed.ID, "could not obtain a token to clone this private repo — check the integration, then redeploy")
+				return Claimed{HasWork: false}, nil
+			case !ok:
+				// App-backed service, but its connection is gone or not an App installation.
+				s.failDeployment(ctx, claimed.ID, "this service builds a private repo but its integration is no longer connected — reconnect it, then redeploy")
+				return Claimed{HasWork: false}, nil
+			default:
+				out.GitCredential = token
+			}
+		}
 	}
 	return out, nil
 }
@@ -656,6 +689,22 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 // and then runs. It is unique per deployment and a valid Docker reference.
 func builtImageTag(deploymentID string) string {
 	return "plorigo-build:" + deploymentID
+}
+
+// failDeployment marks a just-claimed deployment as failed with a plain-English message (best
+// effort, its own tx), so a claim that can't proceed surfaces as a failed deployment in the
+// dashboard instead of a stuck "assigned" row. Used when a private build can't get its GitHub App
+// installation token.
+func (s *service) failDeployment(ctx context.Context, deploymentID, message string) {
+	err := s.tx.WithinTx(ctx, func(tx database.Tx) error {
+		if txErr := s.store.UpdateStatus(ctx, tx, StatusUpdate{DeploymentID: deploymentID, Status: StatusFailed, Message: message}); txErr != nil {
+			return txErr
+		}
+		return s.store.AppendEvent(ctx, tx, NewEvent{DeploymentID: deploymentID, Kind: KindStatus, Status: StatusFailed, Message: message})
+	})
+	if err != nil {
+		s.log.Error("mark deployment failed after token mint failure", "deployment_id", deploymentID, "err", err)
+	}
 }
 
 // environmentNetworkName is the per-environment Docker network that all of an environment's

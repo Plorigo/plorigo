@@ -115,6 +115,10 @@ func (s *postgresStore) serviceForDeploy(ctx context.Context, q db.DBTX, service
 		}
 		return ServiceForDeploy{}, false, err
 	}
+	connectionID := ""
+	if row.ConnectionID != nil {
+		connectionID = *row.ConnectionID
+	}
 	return ServiceForDeploy{
 		EnvironmentID: row.EnvironmentID,
 		ProjectID:     row.ProjectID,
@@ -122,6 +126,7 @@ func (s *postgresStore) serviceForDeploy(ctx context.Context, q db.DBTX, service
 		SourceKind:    row.SourceKind,
 		ImageRef:      row.ImageRef,
 		SourceAccess:  row.SourceAccess,
+		ConnectionID:  connectionID,
 		Owner:         row.Owner,
 		Repo:          row.Repo,
 		Branch:        row.Branch,

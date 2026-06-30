@@ -57,10 +57,16 @@ type Config struct {
 
 	// GitHub App credentials (optional). When both are set the client can act as the App: mint a
 	// short-lived RS256 app JWT and exchange it for per-installation access tokens (see app.go).
-	// AppPrivateKeyPEM is a PKCS#1 or PKCS#8 RSA private key in PEM form; it is parsed lazily on
-	// first use. Neither is ever returned by an RPC or logged.
+	// AppPrivateKeyPEM is a PKCS#1 or PKCS#8 RSA private key in PEM form; it is parsed lazily and
+	// cached. Neither is ever returned by an RPC or logged.
 	AppID            string
 	AppPrivateKeyPEM string
+
+	// AppCredentials, when set, supplies the App id + private-key PEM dynamically at call time
+	// (re-checked on each use, so credentials registered at runtime take effect without a restart).
+	// It takes precedence over the static AppID/AppPrivateKeyPEM above. ok is false when no App is
+	// configured. See internal/githubapp.
+	AppCredentials func(ctx context.Context) (appID, privateKeyPEM string, ok bool)
 }
 
 // Client talks to GitHub. It is safe for concurrent use.
@@ -69,15 +75,18 @@ type Client struct {
 	oauthBaseURL string
 	http         *http.Client
 
-	// GitHub App: the app id, the raw private-key PEM (parsed lazily + cached in appKey), and a
-	// per-installation token cache. instMu guards instTokens.
-	appID      string
-	appKeyPEM  string
-	appKeyOnce sync.Once
-	appKey     *rsa.PrivateKey
-	appKeyErr  error
-	instMu     sync.Mutex
-	instTokens map[string]instToken
+	// GitHub App: the static app id + raw private-key PEM (a fallback when appCredsFn is nil), an
+	// optional dynamic credentials provider (preferred when set), a parsed-key cache keyed by the
+	// PEM it came from (re-parsed only when the PEM changes), and a per-installation token cache.
+	// appKeyMu guards the key cache; instMu guards instTokens.
+	appID           string
+	appKeyPEM       string
+	appCredsFn      func(ctx context.Context) (appID, privateKeyPEM string, ok bool)
+	appKeyMu        sync.Mutex
+	appKey          *rsa.PrivateKey
+	appKeyPEMCached string
+	instMu          sync.Mutex
+	instTokens      map[string]instToken
 }
 
 // NewClient builds a Client, filling defaults for any zero Config field.
@@ -92,6 +101,7 @@ func NewClient(cfg Config) *Client {
 		http:         httpClient,
 		appID:        cfg.AppID,
 		appKeyPEM:    cfg.AppPrivateKeyPEM,
+		appCredsFn:   cfg.AppCredentials,
 	}
 }
 
@@ -229,6 +239,27 @@ func (c *Client) ListUserRepos(ctx context.Context, token string, opts ListRepos
 	}
 	repos := make([]RepoInfo, 0, len(body))
 	for _, r := range body {
+		repos = append(repos, r.toRepoInfo())
+	}
+	return repos, nil
+}
+
+// ListInstallationRepos lists the repositories a GitHub App installation can access, using an
+// installation access token (from InstallationToken). The /installation/repositories endpoint wraps
+// the array in a "repositories" object and does not support a sort param. This is the private-repo
+// discovery path — the installation's grant is whatever repos the user selected when installing.
+func (c *Client) ListInstallationRepos(ctx context.Context, installToken string, opts ListReposOptions) ([]RepoInfo, error) {
+	q := url.Values{}
+	q.Set("per_page", strconv.Itoa(cmp.Or(opts.PerPage, 100)))
+	q.Set("page", strconv.Itoa(cmp.Or(opts.Page, 1)))
+	var body struct {
+		Repositories []repoJSON `json:"repositories"`
+	}
+	if err := c.getJSON(ctx, installToken, "/installation/repositories?"+q.Encode(), &body); err != nil {
+		return nil, err
+	}
+	repos := make([]RepoInfo, 0, len(body.Repositories))
+	for _, r := range body.Repositories {
 		repos = append(repos, r.toRepoInfo())
 	}
 	return repos, nil

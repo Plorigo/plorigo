@@ -201,34 +201,6 @@ func (s *postgresStore) WorkspaceForProject(ctx context.Context, projectID strin
 	return workspaceID, true, nil
 }
 
-func (s *postgresStore) GetConnection(ctx context.Context, workspaceID string) (string, string, bool, error) {
-	row, err := db.New(s.pool).GetSourceConnectionByWorkspace(ctx, db.GetSourceConnectionByWorkspaceParams{
-		WorkspaceID: workspaceID,
-		Provider:    provider,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return "", "", false, nil
-		}
-		return "", "", false, err
-	}
-	return row.ID, row.GithubLogin, true, nil
-}
-
-func (s *postgresStore) GetConnectionToken(ctx context.Context, workspaceID string) ([]byte, bool, error) {
-	cipher, err := db.New(s.pool).GetConnectionTokenByWorkspace(ctx, db.GetConnectionTokenByWorkspaceParams{
-		WorkspaceID: workspaceID,
-		Provider:    provider,
-	})
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, false, nil
-		}
-		return nil, false, err
-	}
-	return cipher, true, nil
-}
-
 func servicesFromRows(rows []db.Service) []Service {
 	out := make([]Service, 0, len(rows))
 	for _, r := range rows {

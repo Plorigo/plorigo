@@ -40,6 +40,9 @@ type fakeStore struct {
 	token             []byte
 	tokenOK           bool
 
+	appConnID, appInstallID string
+	appOK                   bool
+
 	insertedImage ServiceWrite
 	insertedGit   GitServiceWrite
 	insertErr     error
@@ -97,6 +100,9 @@ func (f *fakeStore) GetConnection(_ context.Context, _ string) (string, string, 
 func (f *fakeStore) GetConnectionToken(_ context.Context, _ string) ([]byte, bool, error) {
 	return f.token, f.tokenOK, nil
 }
+func (f *fakeStore) GetAppInstallation(_ context.Context, _ string) (string, string, bool, error) {
+	return f.appConnID, f.appInstallID, f.appOK, nil
+}
 
 type fakeEnqueuer struct {
 	called    bool
@@ -125,9 +131,15 @@ type fakeBox struct{}
 func (fakeBox) Open(sealed []byte) ([]byte, error) { return sealed, nil }
 
 type fakeGH struct {
-	info  github.RepoInfo
-	err   error
-	files map[string]string // repo files for DetectFramework (path -> contents)
+	info            github.RepoInfo
+	err             error
+	files           map[string]string // repo files for DetectFramework (path -> contents)
+	installToken    string
+	installTokenErr error
+}
+
+func (f fakeGH) InstallationToken(_ context.Context, _ string) (string, error) {
+	return f.installToken, f.installTokenErr
 }
 
 func (f fakeGH) GetRepository(_ context.Context, _, owner, repo string) (github.RepoInfo, error) {
@@ -177,13 +189,33 @@ func authedCtx() context.Context {
 }
 
 func newSvc(store Store, gh GitHubClient, enq Enqueuer, authorizer authz.Authorizer, rec Recorder) *service {
-	return newService(fakeTx{}, store, fakeBox{}, gh, enq, &fakeConfigSetter{}, authorizer, rec, slog.Default())
+	return newService(fakeTx{}, store, fakeBox{}, gh, fakeSources{}, enq, &fakeConfigSetter{}, authorizer, rec, slog.Default())
+}
+
+// newSvcSrc builds a service with a configured Sources fake, for connected-repo (oauth/app) tests.
+func newSvcSrc(store Store, gh GitHubClient, srcs Sources, enq Enqueuer, authorizer authz.Authorizer, rec Recorder) *service {
+	return newService(fakeTx{}, store, fakeBox{}, gh, srcs, enq, &fakeConfigSetter{}, authorizer, rec, slog.Default())
 }
 
 // newDBSvc builds a service with a caller-supplied env setter so CreateDatabase tests can
 // inspect the generated credentials it writes.
 func newDBSvc(store Store, enq Enqueuer, env ConfigSetter, authorizer authz.Authorizer, rec Recorder) *service {
-	return newService(fakeTx{}, store, fakeBox{}, fakeGH{}, enq, env, authorizer, rec, slog.Default())
+	return newService(fakeTx{}, store, fakeBox{}, fakeGH{}, fakeSources{}, enq, env, authorizer, rec, slog.Default())
+}
+
+// fakeSources stubs the Sources port for connected-repo tests.
+type fakeSources struct {
+	conn    ConnectionMeta
+	connOK  bool
+	repo    ResolvedRepo
+	repoErr error
+}
+
+func (f fakeSources) GetConnectionMeta(_ context.Context, _ string) (ConnectionMeta, bool, error) {
+	return f.conn, f.connOK, nil
+}
+func (f fakeSources) ValidateRepo(_ context.Context, _, _, _, _ string) (ResolvedRepo, error) {
+	return f.repo, f.repoErr
 }
 
 func wantKind(t *testing.T, err error, kind problem.Kind) {
@@ -386,14 +418,17 @@ func TestCreateService_GitPublicDeployNow(t *testing.T) {
 
 func TestCreateService_GitOAuthDeployNowSkipsDeploy(t *testing.T) {
 	store := envResolved()
-	store.connID, store.connLogin, store.connOK = "conn-1", "octocat", true
-	store.token, store.tokenOK = []byte("tok"), true
 	enq := &fakeEnqueuer{}
-	svc := newSvc(store, fakeGH{info: github.RepoInfo{DefaultBranch: "main", Private: true}}, enq, fakeAuthz{}, &fakeRecorder{})
+	srcs := fakeSources{
+		conn:   ConnectionMeta{WorkspaceID: testWorkspace, Provider: "github", Kind: "oauth", AccountLogin: "octocat"},
+		connOK: true,
+		repo:   ResolvedRepo{Owner: "o", Name: "r", FullName: "o/r", DefaultBranch: "main", Branch: "main", IsPrivate: true, Kind: "oauth", AccountLogin: "octocat", Buildable: false},
+	}
+	svc := newSvcSrc(store, fakeGH{}, srcs, enq, fakeAuthz{}, &fakeRecorder{})
 
 	res, err := svc.CreateService(authedCtx(), CreateInput{
 		EnvironmentID: testEnvID, Name: "api", SourceKind: SourceGit,
-		Owner: "o", Repo: "r", ContainerPort: 0, ServerID: testServerID, DeployNow: true,
+		ConnectionID: "conn-1", Owner: "o", Repo: "r", ContainerPort: 0, ServerID: testServerID, DeployNow: true,
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -401,7 +436,7 @@ func TestCreateService_GitOAuthDeployNowSkipsDeploy(t *testing.T) {
 	if store.insertedGit.SourceAccess != accessOAuth || store.insertedGit.ConnectionID != "conn-1" {
 		t.Errorf("inserted = %+v, want oauth access + connection id", store.insertedGit)
 	}
-	// An OAuth/private repo can't be built yet: the service is created but no deployment.
+	// An OAuth repo isn't buildable: the service is created but no deployment is enqueued.
 	if enq.called || res.DeploymentID != "" {
 		t.Errorf("enqueue=%v dep=%q, want NO deployment for an oauth git service", enq.called, res.DeploymentID)
 	}
@@ -438,6 +473,33 @@ func TestCreateService_EnvironmentNotFound(t *testing.T) {
 	svc := newSvc(store, fakeGH{}, &fakeEnqueuer{}, fakeAuthz{}, &fakeRecorder{})
 	_, err := svc.CreateService(authedCtx(), CreateInput{EnvironmentID: testEnvID, Name: "web", SourceKind: SourceImage, ImageRef: "nginx", ContainerPort: 80})
 	wantKind(t, err, problem.KindNotFound)
+}
+
+func TestCreateService_GitAppDeployNowBuildsPrivate(t *testing.T) {
+	store := envResolved()
+	enq := &fakeEnqueuer{}
+	// An App-backed connection: validated through the sources seam, buildable, deployed now.
+	srcs := fakeSources{
+		conn:   ConnectionMeta{WorkspaceID: testWorkspace, Provider: "github", Kind: "app"},
+		connOK: true,
+		repo:   ResolvedRepo{Owner: "o", Name: "r", FullName: "o/r", DefaultBranch: "main", Branch: "main", IsPrivate: true, Kind: "app", Buildable: true},
+	}
+	svc := newSvcSrc(store, fakeGH{}, srcs, enq, fakeAuthz{}, &fakeRecorder{})
+
+	res, err := svc.CreateService(authedCtx(), CreateInput{
+		EnvironmentID: testEnvID, Name: "api", SourceKind: SourceGit,
+		ConnectionID: "appconn-1", Owner: "o", Repo: "r", ContainerPort: 0, ServerID: testServerID, DeployNow: true,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// App-backed source: buildable, linked to the App connection, and deployed now (unlike OAuth).
+	if store.insertedGit.SourceAccess != accessApp || store.insertedGit.ConnectionID != "appconn-1" {
+		t.Errorf("inserted = %+v, want app access + app connection id", store.insertedGit)
+	}
+	if !enq.called || res.DeploymentID == "" {
+		t.Errorf("enqueue=%v dep=%q, want a deployment enqueued for an app git service", enq.called, res.DeploymentID)
+	}
 }
 
 func TestCreateService_PublicGitRejectsPrivateRepo(t *testing.T) {

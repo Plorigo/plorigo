@@ -16,26 +16,32 @@ import (
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 
 	"github.com/plorigo/plorigo/internal/builder"
 )
 
-// build.go is the agent's build-from-Git path: clone a PUBLIC repo and build it into a local
-// image the deploy loop then runs. When the repo ships its own Dockerfile we build that; when
-// it doesn't, we detect a supported framework (Node/Vite/Next.js) with internal/builder and
-// build a generated Dockerfile. No credential is ever used — private repos are gated upstream
-// (the control plane only dispatches public sources this slice). See docs/architecture/agent.md
-// and deployment-engine.md.
+// build.go is the agent's build-from-Git path: clone a repo and build it into a local image the
+// deploy loop then runs. A public repo is cloned anonymously; a private repo (backed by a GitHub
+// App installation) is cloned with the short-lived installation token the control plane minted and
+// put in the job. When the repo ships its own Dockerfile we build that; when it doesn't, we detect
+// a supported framework (Node/Vite/Next.js) with internal/builder and build a generated Dockerfile.
+// See docs/architecture/agent.md and deployment-engine.md.
 
-// clone does a shallow, anonymous checkout of cloneURL at gitRef into dir and returns the
-// exact commit SHA it landed on. gitRef is treated as a branch (the value sources store);
-// an empty ref clones the remote's default branch.
-func (d *dockerClient) clone(ctx context.Context, cloneURL, gitRef, dir string, emit func(string)) (string, error) {
+// clone does a shallow checkout of cloneURL at gitRef into dir and returns the exact commit SHA it
+// landed on. gitRef is treated as a branch (the value sources store); an empty ref clones the
+// remote's default branch. credential is empty for a public repo (anonymous clone) or a GitHub App
+// installation token for a private repo — applied as the password of an x-access-token basic-auth,
+// kept OUT of the URL so it can never leak into a log line or the stored clone URL, and never emitted.
+func (d *dockerClient) clone(ctx context.Context, cloneURL, gitRef, credential, dir string, emit func(string)) (string, error) {
 	opts := &git.CloneOptions{
 		URL:          cloneURL,
 		Depth:        1,
 		SingleBranch: true,
 		Tags:         git.NoTags,
+	}
+	if credential != "" {
+		opts.Auth = &githttp.BasicAuth{Username: "x-access-token", Password: credential}
 	}
 	if ref := strings.TrimSpace(gitRef); ref != "" {
 		opts.ReferenceName = plumbing.NewBranchReferenceName(ref)

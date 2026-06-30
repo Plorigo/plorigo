@@ -32,6 +32,7 @@ type service struct {
 	store      Store
 	box        SecretBox
 	gh         GitHubClient
+	sources    Sources
 	enqueuer   Enqueuer
 	cfg        ConfigSetter
 	authorizer authz.Authorizer
@@ -39,8 +40,8 @@ type service struct {
 	log        *slog.Logger
 }
 
-func newService(tx TxRunner, store Store, box SecretBox, gh GitHubClient, enqueuer Enqueuer, cfg ConfigSetter, authorizer authz.Authorizer, audit Recorder, log *slog.Logger) *service {
-	return &service{tx: tx, store: store, box: box, gh: gh, enqueuer: enqueuer, cfg: cfg, authorizer: authorizer, audit: audit, log: log}
+func newService(tx TxRunner, store Store, box SecretBox, gh GitHubClient, srcs Sources, enqueuer Enqueuer, cfg ConfigSetter, authorizer authz.Authorizer, audit Recorder, log *slog.Logger) *service {
+	return &service{tx: tx, store: store, box: box, gh: gh, sources: srcs, enqueuer: enqueuer, cfg: cfg, authorizer: authorizer, audit: audit, log: log}
 }
 
 var _ Servicer = (*service)(nil)
@@ -90,7 +91,7 @@ func (s *service) CreateService(ctx context.Context, in CreateInput) (Result, er
 		return Result{}, err
 	}
 
-	rs, err := s.resolveSource(ctx, workspaceID, in.SourceKind, in.ImageRef, in.TemplateID, in.RepoURL, in.Owner, in.Repo, in.Branch)
+	rs, err := s.resolveSource(ctx, workspaceID, in.SourceKind, in.ImageRef, in.TemplateID, in.RepoURL, in.ConnectionID, in.Owner, in.Repo, in.Branch)
 	if err != nil {
 		return Result{}, err
 	}
@@ -348,7 +349,7 @@ func (s *service) UpdateSource(ctx context.Context, in UpdateSourceInput) (Servi
 	if err := s.authorizer.Authorize(ctx, caller, authz.ActionServiceUpdate, authz.Resource{Type: "service", WorkspaceID: workspaceID, ID: in.ID}); err != nil {
 		return Service{}, err
 	}
-	rs, err := s.resolveSource(ctx, workspaceID, in.SourceKind, in.ImageRef, in.TemplateID, in.RepoURL, in.Owner, in.Repo, in.Branch)
+	rs, err := s.resolveSource(ctx, workspaceID, in.SourceKind, in.ImageRef, in.TemplateID, in.RepoURL, in.ConnectionID, in.Owner, in.Repo, in.Branch)
 	if err != nil {
 		return Service{}, err
 	}
@@ -504,7 +505,7 @@ func (g githubFiles) ReadFile(path string) ([]byte, bool, error) {
 
 // resolveSource validates the chosen source and (for git) confirms the repo + branch with
 // GitHub before any database write. It returns the authoritative fields to persist.
-func (s *service) resolveSource(ctx context.Context, workspaceID, kind, imageRef, templateID, repoURL, owner, repo, branch string) (resolvedSource, error) {
+func (s *service) resolveSource(ctx context.Context, workspaceID, kind, imageRef, templateID, repoURL, connectionID, owner, repo, branch string) (resolvedSource, error) {
 	switch kind {
 	case SourceImage:
 		ref, err := validateImageRef(imageRef)
@@ -524,17 +525,18 @@ func (s *service) resolveSource(ctx context.Context, workspaceID, kind, imageRef
 		return resolvedSource{kind: SourceTemplate, imageRef: ref, templateID: strings.TrimSpace(templateID), buildable: true}, nil
 
 	case SourceGit:
-		return s.resolveGitSource(ctx, workspaceID, repoURL, owner, repo, branch)
+		return s.resolveGitSource(ctx, workspaceID, repoURL, connectionID, owner, repo, branch)
 
 	default:
 		return resolvedSource{}, problem.InvalidInput("source_kind must be one of %q, %q, or %q", SourceImage, SourceGit, SourceTemplate)
 	}
 }
 
-// resolveGitSource handles both the PUBLIC path (a repo URL, read anonymously) and the OAuth
-// path (a connected owner/repo, read with the workspace's token). Only public repos are
-// buildable in this slice.
-func (s *service) resolveGitSource(ctx context.Context, workspaceID, repoURL, owner, repo, branch string) (resolvedSource, error) {
+// resolveGitSource handles the git source paths: PUBLIC (a repo URL, read anonymously) and a
+// CONNECTED repo reached through one of the workspace's integrations (connection_id + owner/repo,
+// validated through the sources module's provider seam). Public + app-backed connections are
+// buildable; an oauth connection is discovery-only.
+func (s *service) resolveGitSource(ctx context.Context, workspaceID, repoURL, connectionID, owner, repo, branch string) (resolvedSource, error) {
 	branch = strings.TrimSpace(branch)
 	if strings.TrimSpace(repoURL) != "" {
 		// Public: read the repo with no credential, so a private/missing repo is invisible.
@@ -547,7 +549,7 @@ func (s *service) resolveGitSource(ctx context.Context, workspaceID, repoURL, ow
 			return resolvedSource{}, mapGitHubErr(err)
 		}
 		if info.Private {
-			return resolvedSource{}, problem.InvalidInput("%s is private; connect GitHub to deploy a private repository", info.FullName)
+			return resolvedSource{}, problem.InvalidInput("%s is private; connect an integration to deploy a private repository", info.FullName)
 		}
 		b, err := s.resolveBranch(ctx, "", info, branch)
 		if err != nil {
@@ -560,34 +562,34 @@ func (s *service) resolveGitSource(ctx context.Context, workspaceID, repoURL, ow
 		}, nil
 	}
 
-	// OAuth: validate a connected repo with the workspace's token. Not buildable yet (no
-	// credential leaves the control plane), but the service is still recorded.
+	if strings.TrimSpace(connectionID) == "" {
+		return resolvedSource{}, problem.InvalidInput("a public repository URL, or a connection plus owner and repo, is required")
+	}
 	if strings.TrimSpace(owner) == "" || strings.TrimSpace(repo) == "" {
-		return resolvedSource{}, problem.InvalidInput("a public repository URL, or a connected owner and repo, is required")
+		return resolvedSource{}, problem.InvalidInput("owner and repo are required for a connected source")
 	}
-	connID, login, ok, err := s.store.GetConnection(ctx, workspaceID)
-	if err != nil {
-		return resolvedSource{}, problem.Internalf(err, "resolve git source")
-	}
-	if !ok {
-		return resolvedSource{}, problem.NotFound("connect GitHub for this workspace first")
-	}
-	token, err := s.openConnectionToken(ctx, workspaceID)
+
+	// Confirm the connection belongs to this service's workspace (an integration is workspace-scoped),
+	// then validate the repo through the sources provider seam.
+	conn, ok, err := s.sources.GetConnectionMeta(ctx, connectionID)
 	if err != nil {
 		return resolvedSource{}, err
 	}
-	info, err := s.gh.GetRepository(ctx, token, strings.TrimSpace(owner), strings.TrimSpace(repo))
-	if err != nil {
-		return resolvedSource{}, mapGitHubErr(err)
+	if !ok || conn.WorkspaceID != workspaceID {
+		return resolvedSource{}, problem.NotFound("connection not found in this workspace")
 	}
-	b, err := s.resolveBranch(ctx, token, info, branch)
+	rr, err := s.sources.ValidateRepo(ctx, connectionID, strings.TrimSpace(owner), strings.TrimSpace(repo), branch)
 	if err != nil {
 		return resolvedSource{}, err
+	}
+	access := accessOAuth
+	if rr.Kind == "app" {
+		access = accessApp
 	}
 	return resolvedSource{
-		kind: SourceGit, access: accessOAuth, connectionID: connID, owner: info.Owner,
-		repo: info.Name, fullName: info.FullName, branch: b, defaultBranch: info.DefaultBranch,
-		htmlURL: info.HTMLURL, isPrivate: info.Private, githubLogin: login, buildable: false,
+		kind: SourceGit, access: access, connectionID: connectionID, owner: rr.Owner, repo: rr.Name,
+		fullName: rr.FullName, branch: rr.Branch, defaultBranch: rr.DefaultBranch, htmlURL: rr.HTMLURL,
+		isPrivate: rr.IsPrivate, githubLogin: rr.AccountLogin, buildable: rr.Buildable,
 	}, nil
 }
 
@@ -604,23 +606,6 @@ func (s *service) resolveBranch(ctx context.Context, token string, info github.R
 		return "", mapGitHubErr(err)
 	}
 	return branch, nil
-}
-
-// openConnectionToken loads and opens the workspace's sealed token for a server-side provider
-// call. The plaintext stays in memory for the call only and is never returned to a caller.
-func (s *service) openConnectionToken(ctx context.Context, workspaceID string) (string, error) {
-	cipher, ok, err := s.store.GetConnectionToken(ctx, workspaceID)
-	if err != nil {
-		return "", problem.Internalf(err, "load github token")
-	}
-	if !ok {
-		return "", problem.NotFound("connect GitHub for this workspace first")
-	}
-	plain, err := s.box.Open(cipher)
-	if err != nil {
-		return "", problem.Internalf(err, "open github token")
-	}
-	return string(plain), nil
 }
 
 // providerFor reports the provider stored for a source kind: GitHub for a git source, empty

@@ -114,31 +114,32 @@ export function useConfig(serviceId: string) {
   });
 }
 
-// GitHub source integration. getConnection reports whether the server has OAuth
-// configured and whether this workspace is connected, driving the import UI.
-export function useGitHubConnection(workspaceId: string) {
+// Source integrations. listConnections returns the workspace's connections (multiple, across
+// providers) plus, per provider, what the server has configured — driving the Integrations page and
+// the import picker.
+export function useConnections(workspaceId: string) {
   return useQuery({
-    queryKey: ["githubConnection", workspaceId],
-    queryFn: async () => sourceClient.getConnection({ workspaceId }),
+    queryKey: ["connections", workspaceId],
+    queryFn: async () => sourceClient.listConnections({ workspaceId }),
     enabled: workspaceId.length > 0,
   });
 }
 
-// useRepositories lists the connected account's repositories (first page, ~100, newest
-// first). Enable only once connected; the caller filters client-side for snappy search.
-export function useRepositories(workspaceId: string, enabled: boolean) {
+// useRepositories lists a CONNECTION's repositories (first page, ~100, newest first). The caller
+// filters client-side for snappy search.
+export function useRepositories(connectionId: string) {
   return useQuery({
-    queryKey: ["githubRepos", workspaceId],
-    queryFn: async () => (await sourceClient.listRepositories({ workspaceId })).repositories,
-    enabled: enabled && workspaceId.length > 0,
+    queryKey: ["connectionRepos", connectionId],
+    queryFn: async () => (await sourceClient.listRepositories({ connectionId })).repositories,
+    enabled: connectionId.length > 0,
   });
 }
 
-export function useBranches(workspaceId: string, owner: string, repo: string) {
+export function useBranches(connectionId: string, owner: string, repo: string) {
   return useQuery({
-    queryKey: ["githubBranches", workspaceId, owner, repo],
-    queryFn: async () => (await sourceClient.listBranches({ workspaceId, owner, repo })).branches,
-    enabled: workspaceId.length > 0 && owner.length > 0 && repo.length > 0,
+    queryKey: ["connectionBranches", connectionId, owner, repo],
+    queryFn: async () => (await sourceClient.listBranches({ connectionId, owner, repo })).branches,
+    enabled: connectionId.length > 0 && owner.length > 0 && repo.length > 0,
   });
 }
 

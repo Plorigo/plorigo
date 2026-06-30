@@ -12,7 +12,7 @@ import (
 const getWorkspaceByInstallation = `-- name: GetWorkspaceByInstallation :one
 
 SELECT workspace_id FROM source_connections
-WHERE provider = 'github_app' AND installation_id = $1
+WHERE kind = 'app' AND installation_id = $1
 `
 
 // Queries for the webhooks module (internal/webhooks). It maps a GitHub webhook's installation +

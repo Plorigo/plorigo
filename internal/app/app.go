@@ -15,6 +15,7 @@ import (
 	"github.com/plorigo/plorigo/internal/deployments"
 	"github.com/plorigo/plorigo/internal/domains"
 	"github.com/plorigo/plorigo/internal/environments"
+	"github.com/plorigo/plorigo/internal/githubapp"
 	platformconfig "github.com/plorigo/plorigo/internal/platform/config"
 	"github.com/plorigo/plorigo/internal/platform/database"
 	"github.com/plorigo/plorigo/internal/platform/log"
@@ -46,6 +47,7 @@ type App struct {
 	deployments  *deployments.Module
 	domains      *domains.Module
 	sources      *sources.Module
+	githubapp    githubapp.Service
 	services     *services.Module
 	backups      *backups.Module
 	readiness    *readiness.Module

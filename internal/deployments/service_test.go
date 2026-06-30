@@ -298,12 +298,29 @@ func authedCtx() context.Context {
 }
 
 func newSvc(store Store, authorizer authz.Authorizer, rec Recorder) *service {
-	return newService(fakeTx{}, store, authorizer, rec, fakeOpener{}, fakeGitHub{}, slog.Default())
+	return newService(fakeTx{}, store, authorizer, rec, fakeOpener{}, fakeGitHub{}, fakeSourceTokens{}, slog.Default())
 }
 
 // newSvcGH builds the service with a specific GitHub fake + recorder (preview tests).
 func newSvcGH(store Store, gh GitHubClient, rec Recorder) *service {
-	return newService(fakeTx{}, store, fakeAuthz{}, rec, fakeOpener{}, gh, slog.Default())
+	return newService(fakeTx{}, store, fakeAuthz{}, rec, fakeOpener{}, gh, fakeSourceTokens{}, slog.Default())
+}
+
+// newSvcTok builds the service with a specific SourceTokens fake (private-build tests).
+func newSvcTok(store Store, tokens SourceTokens) *service {
+	return newService(fakeTx{}, store, fakeAuthz{}, &fakeRecorder{}, fakeOpener{}, fakeGitHub{}, tokens, slog.Default())
+}
+
+// fakeSourceTokens stubs the SourceTokens port. The zero value reports no App installation
+// connected (ok=false), the right default for public-repo tests; set token/ok for app-source tests.
+type fakeSourceTokens struct {
+	token string
+	ok    bool
+	err   error
+}
+
+func (f fakeSourceTokens) InstallationToken(_ context.Context, _ string) (string, bool, error) {
+	return f.token, f.ok, f.err
 }
 
 // fakeGitHub stubs the GitHubClient port; pr/prErr drive GetPullRequest.
@@ -778,6 +795,51 @@ func TestPollDeployment_ClaimsJobWithServiceLabelAndNetwork(t *testing.T) {
 	}
 	if len(store.events) != 1 || store.events[0].Status != StatusAssigned {
 		t.Errorf("events = %+v, want one assigned event", store.events)
+	}
+}
+
+func TestPollDeployment_AppSourceMintsInstallationToken(t *testing.T) {
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		claimDep: Deployment{ID: testDeployID, ServiceID: testServiceID, EnvironmentID: testEnvID, WorkspaceID: "ws-1", SourceKind: SourceGit, CloneURL: "https://github.com/o/r.git", GitRef: "main"},
+		claimOK:  true,
+		svc:      ServiceForDeploy{Slug: "api", Visibility: "private", SourceKind: SourceGit, SourceAccess: "app"}, svcOK: true,
+	}
+	svc := newSvcTok(store, fakeSourceTokens{token: "ghs_installtok", ok: true})
+
+	claimed, err := svc.PollDeployment(context.Background(), PollInput{AgentID: testAgentID, Credential: "plag_x"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !claimed.HasWork || claimed.GitCredential != "ghs_installtok" {
+		t.Errorf("claimed.GitCredential = %q, want the minted installation token", claimed.GitCredential)
+	}
+	// The token is handed over out-of-band; it is never embedded in the clone URL (the agent
+	// injects it as basic-auth), so a stored/logged clone URL never carries a credential.
+	if claimed.CloneURL != "https://github.com/o/r.git" {
+		t.Errorf("clone URL = %q, want it credential-free", claimed.CloneURL)
+	}
+}
+
+func TestPollDeployment_AppSourceNoInstallationFailsDeployment(t *testing.T) {
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		claimDep: Deployment{ID: testDeployID, ServiceID: testServiceID, EnvironmentID: testEnvID, WorkspaceID: "ws-1", SourceKind: SourceGit, CloneURL: "https://github.com/o/r.git", GitRef: "main"},
+		claimOK:  true,
+		svc:      ServiceForDeploy{Slug: "api", Visibility: "private", SourceKind: SourceGit, SourceAccess: "app"}, svcOK: true,
+	}
+	svc := newSvcTok(store, fakeSourceTokens{ok: false}) // app source, but no installation connected
+
+	claimed, err := svc.PollDeployment(context.Background(), PollInput{AgentID: testAgentID, Credential: "plag_x"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if claimed.HasWork {
+		t.Error("expected no work when the App token can't be minted")
+	}
+	// The just-claimed deployment is marked failed (not left stuck in 'assigned'), with no credential leak.
+	if len(store.statusUpdates) != 1 || store.statusUpdates[0].Status != StatusFailed {
+		t.Errorf("statusUpdates = %+v, want one failed status update", store.statusUpdates)
 	}
 }
 
