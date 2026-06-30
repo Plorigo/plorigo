@@ -42,9 +42,10 @@ RETURNING *;
 -- name: CreatePreviewDeployment :one
 INSERT INTO deployments (
     service_id, route_key, kind, environment_id, project_id, workspace_id, server_id,
-    container_port, source_kind, source_access, clone_url, git_ref, pr_number, pr_url
+    container_port, source_kind, source_access, clone_url, git_ref, pr_number, pr_url,
+    preview_auth_user, preview_auth_hash
 )
-VALUES ($1, $2, 'preview', $3, $4, $5, $6, $7, 'git', $8, $9, $10, $11, $12)
+VALUES ($1, $2, 'preview', $3, $4, $5, $6, $7, 'git', $8, $9, $10, $11, $12, $13, $14)
 RETURNING *;
 
 -- name: GetDeployment :one

@@ -173,18 +173,20 @@ func (s *postgresStore) InsertDeploymentFromGit(ctx context.Context, tx database
 
 func (s *postgresStore) InsertPreviewDeployment(ctx context.Context, tx database.Tx, d NewPreviewDeployment) (Deployment, error) {
 	row, err := db.New(tx).CreatePreviewDeployment(ctx, db.CreatePreviewDeploymentParams{
-		ServiceID:     d.ServiceID,
-		RouteKey:      d.RouteKey,
-		EnvironmentID: d.EnvironmentID,
-		ProjectID:     d.ProjectID,
-		WorkspaceID:   d.WorkspaceID,
-		ServerID:      d.ServerID,
-		ContainerPort: d.ContainerPort,
-		SourceAccess:  d.SourceAccess,
-		CloneUrl:      d.CloneURL,
-		GitRef:        d.GitRef,
-		PrNumber:      d.PRNumber,
-		PrUrl:         d.PRURL,
+		ServiceID:       d.ServiceID,
+		RouteKey:        d.RouteKey,
+		EnvironmentID:   d.EnvironmentID,
+		ProjectID:       d.ProjectID,
+		WorkspaceID:     d.WorkspaceID,
+		ServerID:        d.ServerID,
+		ContainerPort:   d.ContainerPort,
+		SourceAccess:    d.SourceAccess,
+		CloneUrl:        d.CloneURL,
+		GitRef:          d.GitRef,
+		PrNumber:        d.PRNumber,
+		PrUrl:           d.PRURL,
+		PreviewAuthUser: d.AuthUser,
+		PreviewAuthHash: d.AuthHash,
 	})
 	if err != nil {
 		return Deployment{}, err
@@ -364,6 +366,8 @@ func deploymentFromRow(r db.Deployment) Deployment {
 		RouteKey:       r.RouteKey,
 		PRNumber:       r.PrNumber,
 		PRURL:          r.PrUrl,
+		AuthUser:       r.PreviewAuthUser,
+		AuthHash:       r.PreviewAuthHash,
 	}
 }
 

@@ -40,6 +40,10 @@ type managedRoute struct {
 	ContainerID  string
 	HostPort     int32
 	CustomHosts  []string
+	// Optional basic-auth for a protected preview route. BasicAuthHash is a bcrypt hash (never
+	// plaintext); both empty for production and unprotected previews.
+	BasicAuthUser string
+	BasicAuthHash string
 }
 
 type caddyManager struct {
@@ -240,6 +244,14 @@ func (m *caddyManager) render(routes []managedRoute) (string, error) {
 		}
 		for _, siteHost := range append([]string{host}, r.CustomHosts...) {
 			fmt.Fprintf(&b, "%s {\n", siteAddress(siteHost, m.httpPort))
+			// A protected preview route requires basic auth before proxying. The hash is bcrypt
+			// (Caddy's default for basic_auth); the username is validated control-plane-side to a
+			// safe charset, so neither can inject Caddyfile directives.
+			if r.BasicAuthUser != "" && r.BasicAuthHash != "" {
+				b.WriteString("\tbasic_auth {\n")
+				fmt.Fprintf(&b, "\t\t%s %s\n", r.BasicAuthUser, r.BasicAuthHash)
+				b.WriteString("\t}\n")
+			}
 			fmt.Fprintf(&b, "\treverse_proxy 127.0.0.1:%d\n", r.HostPort)
 			b.WriteString("}\n\n")
 		}

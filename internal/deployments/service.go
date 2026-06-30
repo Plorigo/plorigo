@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/plorigo/plorigo/internal/platform/authz"
 	"github.com/plorigo/plorigo/internal/platform/database"
 	"github.com/plorigo/plorigo/internal/platform/github"
@@ -213,16 +215,17 @@ func (s *service) CreatePreview(ctx context.Context, in CreatePreviewInput) (Dep
 		return Deployment{}, problem.NotFound("server %s not found in this workspace", in.ServerID)
 	}
 
-	return s.enqueuePreview(ctx, in.ServiceID, in.ServerID, branch, in.PRNumber, in.ContainerPort, caller.UserID)
+	return s.enqueuePreview(ctx, in.ServiceID, in.ServerID, branch, in.PRNumber, in.ContainerPort, in.Password, in.PasswordUser, caller.UserID)
 }
 
 // enqueuePreview resolves a git service's source and (for a PR) its head ref, derives the preview
 // route_key, and inserts a queued preview deployment + audit row in one tx. It is the shared core of
 // the dashboard-authorized CreatePreview and the webhook-driven CreatePreviewForPR — so both build a
-// preview identically (public git only); only the audit actor differs. The caller has already
+// preview identically (public git only); only the audit actor differs. An optional password is
+// bcrypt-hashed here (the plaintext is never stored or sent to the agent). The caller has already
 // validated the inputs (and, for CreatePreview, authorized + checked the server's workspace). The
 // PR lookup is network I/O, so it runs BEFORE the transaction.
-func (s *service) enqueuePreview(ctx context.Context, serviceID, serverID, branch string, prNumber, portOverride int32, actor string) (Deployment, error) {
+func (s *service) enqueuePreview(ctx context.Context, serviceID, serverID, branch string, prNumber, portOverride int32, password, passwordUser, actor string) (Deployment, error) {
 	svc, ok, err := s.store.ServiceForDeploy(ctx, serviceID)
 	if err != nil {
 		return Deployment{}, problem.Internalf(err, "create preview")
@@ -259,6 +262,13 @@ func (s *service) enqueuePreview(ctx context.Context, serviceID, serverID, branc
 	}
 	routeKey := previewRouteKey(serviceID, prNumber, gitRef)
 
+	// Optionally protect the preview URL with basic auth. Only the bcrypt hash is stored/sent; the
+	// plaintext password never leaves this function.
+	authUser, authHash, err := hashPreviewPassword(password, passwordUser)
+	if err != nil {
+		return Deployment{}, err
+	}
+
 	var created Deployment
 	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
 		var txErr error
@@ -276,6 +286,8 @@ func (s *service) enqueuePreview(ctx context.Context, serviceID, serverID, branc
 			GitRef:   gitRef,
 			PRNumber: prNumber,
 			PRURL:    prURL,
+			AuthUser: authUser,
+			AuthHash: authHash,
 		})
 		if txErr != nil {
 			return txErr
@@ -619,6 +631,10 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 		Visibility:    svc.Visibility,
 		NetworkName:   networkName,
 		NetworkAlias:  svc.Slug,
+		// Basic-auth for a protected preview (empty for production/unprotected); the agent renders
+		// it onto the preview's Caddy route. The hash is bcrypt — never the plaintext password.
+		BasicAuthUser: claimed.AuthUser,
+		BasicAuthHash: claimed.AuthHash,
 	}
 	// For a git deployment the agent clones + builds; hand it the clone URL, ref, and a
 	// deterministic local tag to build to and then run. No credential (public repos only).
@@ -681,6 +697,32 @@ func previewRouteKey(serviceID string, prNumber int32, ref string) string {
 	}
 	trunc = strings.Trim(trunc, "-")
 	return serviceID + "-" + trunc + "-" + tail
+}
+
+// hashPreviewPassword bcrypt-hashes an optional preview password for basic-auth protection. It
+// returns ("", "", nil) when no password is set (an unprotected preview). The username defaults to
+// "preview". Only the returned hash is ever stored or sent to the agent — never the plaintext.
+// previewAuthUserRe bounds a preview basic-auth username to a safe charset, so it can never inject
+// Caddyfile directives when the agent renders the basic_auth block (the bcrypt hash is inherently
+// safe).
+var previewAuthUserRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,32}$`)
+
+func hashPreviewPassword(password, username string) (authUser, authHash string, err error) {
+	if password == "" {
+		return "", "", nil
+	}
+	user := strings.TrimSpace(username)
+	if user == "" {
+		user = "preview"
+	}
+	if !previewAuthUserRe.MatchString(user) {
+		return "", "", problem.InvalidInput("the preview username must be 1-32 characters of letters, digits, '.', '_' or '-'")
+	}
+	h, herr := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if herr != nil {
+		return "", "", problem.Internalf(herr, "hash preview password")
+	}
+	return user, string(h), nil
 }
 
 // slugifyRef lowercases a git ref and reduces it to a DNS-label-safe slug ([a-z0-9-], no

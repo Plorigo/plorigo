@@ -34,7 +34,8 @@ func (s *service) CreatePreviewForPR(ctx context.Context, serviceID string, prNu
 		// the webhook handler treats this as "nothing to do" for this service.
 		return "", problem.InvalidInput("service %s has not deployed yet, so it has no server to preview on", serviceID)
 	}
-	dep, err := s.enqueuePreview(ctx, serviceID, serverID, "", prNumber, 0, webhookActor)
+	// Webhook-driven previews are unprotected (no password — there's no place to enter one).
+	dep, err := s.enqueuePreview(ctx, serviceID, serverID, "", prNumber, 0, "", "", webhookActor)
 	if err != nil {
 		return "", err
 	}

@@ -734,6 +734,7 @@ function PreviewsPanel({
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"branch" | "pr">("branch");
   const [value, setValue] = useState("");
+  const [password, setPassword] = useState("");
   const [serverOverride, setServerOverride] = useState("");
   const [busy, setBusy] = useState(false);
   const [removing, setRemoving] = useState<Record<string, boolean>>({});
@@ -771,7 +772,13 @@ function PreviewsPanel({
       toast.error("No connected server to deploy onto. Connect one first.");
       return;
     }
-    let req: { serviceId: string; serverId: string; branch?: string; prNumber?: number };
+    let req: {
+      serviceId: string;
+      serverId: string;
+      branch?: string;
+      prNumber?: number;
+      password?: string;
+    };
     if (mode === "pr") {
       const n = Number(v);
       if (!Number.isInteger(n) || n <= 0) {
@@ -782,12 +789,17 @@ function PreviewsPanel({
     } else {
       req = { serviceId: service.id, serverId, branch: v };
     }
+    // Optionally protect the preview URL with a password (basic auth); the username defaults to
+    // "preview" server-side. The plaintext is bcrypt-hashed by the control plane, never stored.
+    const pw = password.trim();
+    if (pw) req.password = pw;
     setBusy(true);
     try {
       const { deployment } = await deploymentClient.createPreviewDeployment(req);
       if (!deployment) throw new Error("the preview was not created");
       setOpen(false);
       setValue("");
+      setPassword("");
       void navigate({
         to: "/projects/$projectId/deployments/$deploymentId",
         params: { projectId, deploymentId: deployment.id },
@@ -966,6 +978,21 @@ function PreviewsPanel({
                   spellCheck={false}
                 />
               </div>
+            </div>
+            <div>
+              <span className="mb-1.5 block text-xs font-medium text-foreground">
+                Password <span className="font-normal text-muted-foreground">(optional)</span>
+              </span>
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Require a password to view this preview"
+                autoComplete="new-password"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Protects the preview URL with basic auth (username <code>preview</code>). Leave blank for an open preview.
+              </p>
             </div>
             {(servers.data?.length ?? 0) > 1 && (
               <div>

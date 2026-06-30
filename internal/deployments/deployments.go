@@ -111,6 +111,11 @@ type Deployment struct {
 	RouteKey string
 	PRNumber int32
 	PRURL    string
+
+	// Optional basic-auth protection for a preview's URL. AuthHash is a bcrypt hash (never the
+	// plaintext password); AuthUser the username. Empty for production and unprotected previews.
+	AuthUser string
+	AuthHash string
 }
 
 // Event is one entry in a deployment's timeline: a status transition (KindStatus) or
@@ -149,6 +154,11 @@ type CreatePreviewInput struct {
 	Branch        string
 	PRNumber      int32
 	ContainerPort int32
+	// Optional basic-auth protection for the preview's URL. When Password is set the service
+	// bcrypt-hashes it (the plaintext is never stored or sent to the agent); PasswordUser defaults
+	// to "preview" when blank.
+	Password     string
+	PasswordUser string
 }
 
 // ServiceForDeploy is a service's source + routing facts, resolved when enqueuing a deploy.
@@ -204,6 +214,11 @@ type Claimed struct {
 	Visibility   string
 	NetworkName  string
 	NetworkAlias string
+
+	// Optional basic-auth for a protected preview's Caddy route. BasicAuthHash is a bcrypt hash
+	// (never plaintext); empty for production and unprotected previews.
+	BasicAuthUser string
+	BasicAuthHash string
 }
 
 // ReportInput is an agent's progress update for a deployment it is executing.
