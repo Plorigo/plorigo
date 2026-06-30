@@ -302,6 +302,12 @@ type Service interface {
 	CreatePreviewForPR(ctx context.Context, serviceID string, prNumber int32) (deploymentID string, err error)
 	TeardownPreviewForPR(ctx context.Context, serviceID string, prNumber int32) error
 
+	// ExpirePreviews tears down every running preview deployment older than ttl, so abandoned
+	// previews don't accumulate. It is the control-plane expiry sweep's entry point — not
+	// policy-authorized (a system action), idempotent, and returns how many it enqueued. ttl <= 0
+	// disables it (returns 0 without scanning).
+	ExpirePreviews(ctx context.Context, ttl time.Duration) (int, error)
+
 	// Agent gateway (credential-authenticated, NOT policy-authorized — like Heartbeat).
 	PollDeployment(ctx context.Context, in PollInput) (Claimed, error)
 	ReportDeployment(ctx context.Context, in ReportInput) error

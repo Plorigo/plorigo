@@ -184,3 +184,11 @@ SELECT * FROM deployments
 WHERE service_id = $1 AND route_key = $2 AND kind = 'preview' AND status <> 'torndown'
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- ListExpiredPreviews returns running preview deployments created before a cutoff — the candidates
+-- the control plane's expiry sweep tears down so abandoned previews don't accumulate. A 'running'
+-- preview is the one holding a live container + route; superseded/failed/torndown rows are skipped.
+-- name: ListExpiredPreviews :many
+SELECT * FROM deployments
+WHERE kind = 'preview' AND status = 'running' AND created_at < $1
+ORDER BY created_at;

@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -482,6 +483,18 @@ func (s *postgresStore) LatestActivePreviewByRouteKey(ctx context.Context, servi
 		return Deployment{}, false, err
 	}
 	return deploymentFromRow(row), true, nil
+}
+
+func (s *postgresStore) ListExpiredPreviews(ctx context.Context, cutoff time.Time) ([]Deployment, error) {
+	rows, err := db.New(s.pool).ListExpiredPreviews(ctx, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Deployment, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, deploymentFromRow(r))
+	}
+	return out, nil
 }
 
 func teardownFromRow(r db.TeardownJob) TeardownJob {

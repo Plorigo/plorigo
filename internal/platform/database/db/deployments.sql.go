@@ -7,6 +7,7 @@ package db
 
 import (
 	"context"
+	"time"
 )
 
 const appendDeploymentEvent = `-- name: AppendDeploymentEvent :one
@@ -767,6 +768,62 @@ SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, conta
 
 func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID string) ([]Deployment, error) {
 	rows, err := q.db.Query(ctx, listDeploymentsByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Deployment{}
+	for rows.Next() {
+		var i Deployment
+		if err := rows.Scan(
+			&i.ID,
+			&i.EnvironmentID,
+			&i.ProjectID,
+			&i.WorkspaceID,
+			&i.ServerID,
+			&i.ImageRef,
+			&i.ContainerPort,
+			&i.HostPort,
+			&i.ContainerID,
+			&i.Status,
+			&i.Message,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.SourceKind,
+			&i.SourceAccess,
+			&i.CloneUrl,
+			&i.GitRef,
+			&i.CommitSha,
+			&i.BuiltImageRef,
+			&i.RouteUrl,
+			&i.ServiceID,
+			&i.RolledBackFrom,
+			&i.Kind,
+			&i.RouteKey,
+			&i.PrNumber,
+			&i.PrUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExpiredPreviews = `-- name: ListExpiredPreviews :many
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments
+WHERE kind = 'preview' AND status = 'running' AND created_at < $1
+ORDER BY created_at
+`
+
+// ListExpiredPreviews returns running preview deployments created before a cutoff — the candidates
+// the control plane's expiry sweep tears down so abandoned previews don't accumulate. A 'running'
+// preview is the one holding a live container + route; superseded/failed/torndown rows are skipped.
+func (q *Queries) ListExpiredPreviews(ctx context.Context, createdAt time.Time) ([]Deployment, error) {
+	rows, err := q.db.Query(ctx, listExpiredPreviews, createdAt)
 	if err != nil {
 		return nil, err
 	}

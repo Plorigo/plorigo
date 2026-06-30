@@ -76,6 +76,8 @@ func New(ctx context.Context, cfg platformconfig.Config) (*App, error) {
 // Run serves until ctx is cancelled, then shuts down and closes the DB pool.
 func (a *App) Run(ctx context.Context) error {
 	defer a.db.Close()
+	// Sweep expired previews beside the HTTP server; it stops when ctx is cancelled.
+	go a.runPreviewExpiry(ctx)
 	return a.srv.Run(ctx)
 }
 

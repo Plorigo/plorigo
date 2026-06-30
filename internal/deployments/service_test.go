@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/plorigo/plorigo/internal/platform/authz"
 	"github.com/plorigo/plorigo/internal/platform/database"
@@ -88,6 +89,9 @@ type fakeStore struct {
 	latestServerOK  bool
 	activePreview   Deployment
 	activePreviewOK bool
+
+	// Expiry sweep.
+	expiredPreviews []Deployment
 }
 
 func (f *fakeStore) WorkspaceAndProjectForEnvironment(_ context.Context, _ string) (string, string, bool, error) {
@@ -263,6 +267,9 @@ func (f *fakeStore) LatestServerForService(_ context.Context, _ string) (string,
 }
 func (f *fakeStore) LatestActivePreviewByRouteKey(_ context.Context, _, _ string) (Deployment, bool, error) {
 	return f.activePreview, f.activePreviewOK, nil
+}
+func (f *fakeStore) ListExpiredPreviews(_ context.Context, _ time.Time) ([]Deployment, error) {
+	return f.expiredPreviews, nil
 }
 
 type fakeRecorder struct {
