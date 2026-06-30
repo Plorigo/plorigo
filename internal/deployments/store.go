@@ -86,6 +86,12 @@ type Store interface {
 	// MarkPreviewTornDown moves a torn-down preview's still-active deployment rows (same route_key
 	// on the server) to the terminal 'torndown' status, so the dashboard stops showing it running.
 	MarkPreviewTornDown(ctx context.Context, tx database.Tx, routeKey, serverID string) error
+	// LatestServerForService returns the server of the service's most recent deployment, so a
+	// webhook PR preview deploys onto the same server. ok is false when it has never deployed.
+	LatestServerForService(ctx context.Context, serviceID string) (serverID string, ok bool, err error)
+	// LatestActivePreviewByRouteKey returns the most recent not-yet-torndown preview deployment for
+	// a route_key, so a webhook PR-close can enqueue a teardown against it. ok is false when none.
+	LatestActivePreviewByRouteKey(ctx context.Context, serviceID, routeKey string) (Deployment, bool, error)
 }
 
 // NewTeardownJob is the data to insert a queued preview teardown. route_key is the preview's

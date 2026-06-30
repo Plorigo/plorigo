@@ -208,12 +208,30 @@ moves the preview's deployment rows to a terminal **`torndown`** status (so the 
 showing it running) and the action is audited. Failures surface on the preview row in the
 dashboard's Previews panel, where teardown is triggered by a **Remove preview** action.
 
+### Webhook-driven previews
+
+Previews also run **automatically from GitHub pull-request events**. The **GitHub App** (see
+[security.md](./security.md)) delivers `pull_request` webhooks to `POST /api/github/webhook`; the
+handler **verifies the HMAC signature** over the raw body against `GITHUB_WEBHOOK_SECRET` **before
+parsing** (fail-closed — an unset secret rejects every delivery), then hands the event to the
+`internal/webhooks` module. That module **re-scopes** the delivery: it maps the `installation_id`
+→ the workspace that connected it, then the repo `owner/repo` → that workspace's matching git
+services, so a verified event can only ever touch what the installation legitimately owns. For each
+matched service it calls the deployments seam — `opened` / `synchronize` / `reopened` →
+`CreatePreviewForPR` (keyed by PR number, so a re-push **supersedes** the same preview), `closed`
+(merged or not) → `TeardownPreviewForPR` (phase-2 teardown). These seam methods are **not
+policy-authorized** — the signature check + the installation→workspace→service mapping is the gate
+(like `EnqueueFirstDeployment`) — and they are **idempotent**: a re-push supersedes, a teardown of
+an already-gone preview is a no-op, and an unknown installation / unmatched repo / unhandled action
+is ignored. A per-service failure is logged and skipped so one bad service neither drops the others
+nor makes GitHub redeliver.
+
 > [!NOTE]
-> **What's built so far.** Previews are created **manually** (dashboard or RPC) for **public**
-> git services and can be **torn down on demand** (the teardown job above). Webhook-driven
-> previews (auto-create on PR open/sync, **auto-teardown** on close), the **GitHub App** for
-> private repos, and preview expiration build on this and are later slices — see
-> [ROADMAP.md](../../ROADMAP.md). Note the two senses of "preview": an **environment** of
+> **What's built so far.** Previews are created **manually** (dashboard or RPC) **and
+> automatically from PR webhooks** (above), for **public** git services, and can be **torn down on
+> demand or on PR close**. Building a **private** repo through the App's installation token, and
+> preview **expiration**, build on this and are later slices — see [ROADMAP.md](../../ROADMAP.md).
+> Note the two senses of "preview": an **environment** of
 > `type = 'preview'` (a long-lived environment) is distinct from a **deployment** of
 > `kind = 'preview'` (the ephemeral branch/PR build described here).
 

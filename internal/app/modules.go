@@ -23,6 +23,7 @@ import (
 	"github.com/plorigo/plorigo/internal/serversetup"
 	"github.com/plorigo/plorigo/internal/services"
 	"github.com/plorigo/plorigo/internal/sources"
+	"github.com/plorigo/plorigo/internal/webhooks"
 )
 
 // sessionTTL is how long a browser session (and its cookie) lasts.
@@ -207,6 +208,17 @@ func (a *App) buildModules() error {
 		Audit:  auditSvc,
 		Policy: policySvc,
 		Log:    a.log,
+	})
+
+	// webhooks turns verified inbound GitHub deliveries into preview actions. It drives the
+	// deployments service through consumer-defined ports (*deployments.Service satisfies the
+	// PreviewCreator + PreviewTeardowner ports structurally) — built after deployments. The HTTP
+	// endpoint that verifies the signature and calls it is github_webhook.go.
+	a.webhooks = webhooks.New(webhooks.Deps{
+		DB:         a.db,
+		Creator:    a.deployments.Service(),
+		Teardowner: a.deployments.Service(),
+		Log:        a.log,
 	})
 
 	mailerSvc := mailer.New(mailer.Config{

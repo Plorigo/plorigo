@@ -213,14 +213,22 @@ func (s *service) CreatePreview(ctx context.Context, in CreatePreviewInput) (Dep
 		return Deployment{}, problem.NotFound("server %s not found in this workspace", in.ServerID)
 	}
 
-	// Resolve the service's source BEFORE the transaction (a PR lookup is network I/O, which
-	// must not run inside a DB tx). Previews build public git services only.
-	svc, ok, err := s.store.ServiceForDeploy(ctx, in.ServiceID)
+	return s.enqueuePreview(ctx, in.ServiceID, in.ServerID, branch, in.PRNumber, in.ContainerPort, caller.UserID)
+}
+
+// enqueuePreview resolves a git service's source and (for a PR) its head ref, derives the preview
+// route_key, and inserts a queued preview deployment + audit row in one tx. It is the shared core of
+// the dashboard-authorized CreatePreview and the webhook-driven CreatePreviewForPR — so both build a
+// preview identically (public git only); only the audit actor differs. The caller has already
+// validated the inputs (and, for CreatePreview, authorized + checked the server's workspace). The
+// PR lookup is network I/O, so it runs BEFORE the transaction.
+func (s *service) enqueuePreview(ctx context.Context, serviceID, serverID, branch string, prNumber, portOverride int32, actor string) (Deployment, error) {
+	svc, ok, err := s.store.ServiceForDeploy(ctx, serviceID)
 	if err != nil {
 		return Deployment{}, problem.Internalf(err, "create preview")
 	}
 	if !ok {
-		return Deployment{}, problem.NotFound("service %s not found", in.ServiceID)
+		return Deployment{}, problem.NotFound("service %s not found", serviceID)
 	}
 	if svc.SourceKind != SourceGit {
 		return Deployment{}, problem.InvalidInput("previews are only supported for git services")
@@ -229,40 +237,38 @@ func (s *service) CreatePreview(ctx context.Context, in CreatePreviewInput) (Dep
 		return Deployment{}, problem.InvalidInput("building private repositories isn't supported yet — connect a public repo (GitHub App support is coming)")
 	}
 
-	// Resolve the ref to build and the PR linkage. A PR number is resolved to its head ref;
-	// the route_key is keyed by PR number (stable across pushes) or by a slug of the branch.
+	// Resolve the ref to build and the PR linkage. A PR number is resolved to its head ref; the
+	// route_key is keyed by PR number (stable across pushes) or by a slug of the branch.
 	gitRef := branch
-	var prNumber int32
 	var prURL string
-	if in.PRNumber > 0 {
-		pr, perr := s.gh.GetPullRequest(ctx, "", svc.Owner, svc.Repo, int(in.PRNumber))
+	if prNumber > 0 {
+		pr, perr := s.gh.GetPullRequest(ctx, "", svc.Owner, svc.Repo, int(prNumber))
 		if perr != nil {
 			return Deployment{}, mapGitHubErr(perr)
 		}
 		if pr.HeadRef == "" {
-			return Deployment{}, problem.NotFound("pull request #%d was not found in %s/%s", in.PRNumber, svc.Owner, svc.Repo)
+			return Deployment{}, problem.NotFound("pull request #%d was not found in %s/%s", prNumber, svc.Owner, svc.Repo)
 		}
 		gitRef = pr.HeadRef
-		prNumber = in.PRNumber
 		prURL = pr.HTMLURL
 	}
 
 	port := svc.ContainerPort
-	if in.ContainerPort > 0 {
-		port = in.ContainerPort
+	if portOverride > 0 {
+		port = portOverride
 	}
-	routeKey := previewRouteKey(in.ServiceID, prNumber, gitRef)
+	routeKey := previewRouteKey(serviceID, prNumber, gitRef)
 
 	var created Deployment
 	err = s.tx.WithinTx(ctx, func(tx database.Tx) error {
 		var txErr error
 		created, txErr = s.store.InsertPreviewDeployment(ctx, tx, NewPreviewDeployment{
-			ServiceID:     in.ServiceID,
+			ServiceID:     serviceID,
 			RouteKey:      routeKey,
 			EnvironmentID: svc.EnvironmentID,
 			ProjectID:     svc.ProjectID,
 			WorkspaceID:   svc.WorkspaceID,
-			ServerID:      in.ServerID,
+			ServerID:      serverID,
 			ContainerPort: port,
 			SourceAccess:  svc.SourceAccess,
 			// Provider is GitHub-only today; construct the standard clone URL from owner/repo.
@@ -274,12 +280,12 @@ func (s *service) CreatePreview(ctx context.Context, in CreatePreviewInput) (Dep
 		if txErr != nil {
 			return txErr
 		}
-		return s.audit.Record(ctx, tx, "deployment.preview", "deployment", created.ID, workspaceID, caller.UserID)
+		return s.audit.Record(ctx, tx, "deployment.preview", "deployment", created.ID, svc.WorkspaceID, actor)
 	})
 	if err != nil {
 		return Deployment{}, mapErr(err, "create preview")
 	}
-	s.log.Info("preview deployment created", "id", created.ID, "service_id", in.ServiceID, "route_key", routeKey, "pr_number", prNumber, "git_ref", gitRef, "server_id", in.ServerID, "workspace_id", workspaceID, "actor", caller.UserID)
+	s.log.Info("preview deployment created", "id", created.ID, "service_id", serviceID, "route_key", routeKey, "pr_number", prNumber, "git_ref", gitRef, "server_id", serverID, "actor", actor)
 	return created, nil
 }
 

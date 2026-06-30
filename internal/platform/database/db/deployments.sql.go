@@ -476,6 +476,73 @@ func (q *Queries) GetEnvironmentWorkspaceAndProject(ctx context.Context, id stri
 	return i, err
 }
 
+const getLatestActivePreviewByRouteKey = `-- name: GetLatestActivePreviewByRouteKey :one
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments
+WHERE service_id = $1 AND route_key = $2 AND kind = 'preview' AND status <> 'torndown'
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type GetLatestActivePreviewByRouteKeyParams struct {
+	ServiceID string
+	RouteKey  string
+}
+
+// GetLatestActivePreviewByRouteKey returns the most recent NOT-yet-torndown preview deployment for
+// a route_key, so a webhook PR-close can enqueue a teardown against it. ErrNoRows when there is no
+// active preview (already torn down, or never created) — the caller treats that as an idempotent
+// no-op.
+func (q *Queries) GetLatestActivePreviewByRouteKey(ctx context.Context, arg GetLatestActivePreviewByRouteKeyParams) (Deployment, error) {
+	row := q.db.QueryRow(ctx, getLatestActivePreviewByRouteKey, arg.ServiceID, arg.RouteKey)
+	var i Deployment
+	err := row.Scan(
+		&i.ID,
+		&i.EnvironmentID,
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.ServerID,
+		&i.ImageRef,
+		&i.ContainerPort,
+		&i.HostPort,
+		&i.ContainerID,
+		&i.Status,
+		&i.Message,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SourceKind,
+		&i.SourceAccess,
+		&i.CloneUrl,
+		&i.GitRef,
+		&i.CommitSha,
+		&i.BuiltImageRef,
+		&i.RouteUrl,
+		&i.ServiceID,
+		&i.RolledBackFrom,
+		&i.Kind,
+		&i.RouteKey,
+		&i.PrNumber,
+		&i.PrUrl,
+	)
+	return i, err
+}
+
+const getLatestServerForService = `-- name: GetLatestServerForService :one
+SELECT server_id FROM deployments
+WHERE service_id = $1
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+// GetLatestServerForService returns the server of the service's most recent deployment (any
+// status), so a webhook-driven PR preview deploys onto the same server production uses. ErrNoRows
+// when the service has never deployed.
+func (q *Queries) GetLatestServerForService(ctx context.Context, serviceID string) (string, error) {
+	row := q.db.QueryRow(ctx, getLatestServerForService, serviceID)
+	var server_id string
+	err := row.Scan(&server_id)
+	return server_id, err
+}
+
 const getTeardownJob = `-- name: GetTeardownJob :one
 SELECT id, deployment_id, service_id, route_key, environment_id, project_id, workspace_id, server_id, status, message, error, created_at, updated_at FROM teardown_jobs WHERE id = $1
 `
