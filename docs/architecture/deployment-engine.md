@@ -175,11 +175,14 @@ A deployment carries a **`kind`** (`production` | `preview`) and a **`route_key`
 `route_key` is what isolates a preview, because it is what the deploy flow keys on in the three
 places that were previously keyed by service id:
 
-- **Routing** — the agent's `app_label` is the `route_key`, so the Caddy host is
-  `{route_key}.{baseDomain}`. Production keeps `route_key = {service-id}` (its URL is
-  unchanged); a preview gets a distinct, DNS-safe key (`{service-id}-pr-{n}`, or a slug of the
-  branch, truncated with a hash tail when long), so it gets its **own URL** and never fights
-  production for the route.
+- **Routing** — the agent's `app_label` is the `route_key`, which keys the container's label,
+  replacement group, and supersede scope. Production keeps `route_key = {service-id}` and its host
+  is `{service-id}.{baseDomain}` (unchanged). A preview gets a distinct, DNS-safe `route_key`
+  (`{service-id}-pr-{n}`, or a slug of the branch, truncated with a hash tail when long) so it
+  never fights production for the route — but its **public host is a human-readable**
+  `{slug}-pr-{n}-{hash}.{baseDomain}` (the control plane sends this `route_host` to the agent; the
+  short hash of the service id keeps it collision-safe across services that share a slug). So the
+  internal key stays UUID-stable while the URL reads nicely.
 - **Supersede** — a new running deployment supersedes only the prior one with the **same
   `route_key`**, so re-pushing a preview replaces that preview, and a preview never supersedes
   production (or another PR's preview).

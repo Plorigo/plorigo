@@ -193,6 +193,12 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 
 	reportBuild(statusStarting, 0, "", "starting container", prepLogs)
 	appLabel := job.GetAppLabel()
+	// The public route host: a preview's pretty host when set, otherwise the app_label (service id)
+	// as before. The container is still labelled/replaced by app_label — only the host differs.
+	routeHostLabel := job.GetRouteHost()
+	if routeHostLabel == "" {
+		routeHostLabel = appLabel
+	}
 	// A public service publishes a host port + gets a Caddy route; a private service is
 	// reachable only by siblings over the per-environment network (no host port, no route).
 	public := job.GetVisibility() != "private"
@@ -206,6 +212,7 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 		public:        public,
 		networkName:   job.GetNetworkName(),
 		networkAlias:  job.GetNetworkAlias(),
+		routeHost:     job.GetRouteHost(),
 		basicAuthUser: job.GetBasicAuthUser(),
 		basicAuthHash: job.GetBasicAuthHash(),
 	})
@@ -235,7 +242,7 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 			return
 		}
 
-		routeURL, err = router.routeURL(appLabel)
+		routeURL, err = router.routeURL(routeHostLabel)
 		if err != nil {
 			reportBuild(statusFailed, hostPort, containerID, "could not derive Caddy route: "+err.Error(), nil)
 			cleanupFailedContainer(ctx, out, runtime, containerID)
@@ -253,6 +260,7 @@ func executeDeployment(ctx context.Context, out io.Writer, deploy agentv1connect
 			DeploymentID:  depID,
 			ContainerID:   containerID,
 			HostPort:      hostPort,
+			RouteHost:     job.GetRouteHost(),
 			BasicAuthUser: job.GetBasicAuthUser(),
 			BasicAuthHash: job.GetBasicAuthHash(),
 		})

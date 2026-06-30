@@ -44,6 +44,9 @@ type managedRoute struct {
 	// plaintext); both empty for production and unprotected previews.
 	BasicAuthUser string
 	BasicAuthHash string
+	// RouteHost is the DNS label for the public host, when it differs from ServiceID — a PREVIEW's
+	// human-readable host ({slug}-pr-{n}-{hash}). Empty for production (the host is ServiceID).
+	RouteHost string
 }
 
 type caddyManager struct {
@@ -238,7 +241,14 @@ func (m *caddyManager) render(routes []managedRoute) (string, error) {
 	b.WriteString("\tauto_https off\n")
 	b.WriteString("}\n\n")
 	for _, r := range normalized {
-		host, err := routeHost(r.ServiceID, m.baseDomain)
+		// The public host is the route's RouteHost label when set (a preview's pretty host),
+		// otherwise the ServiceID (production, as before). The container is still keyed by ServiceID
+		// (the route_key) for replacement + teardown — only the host the route serves changes.
+		hostLabel := r.RouteHost
+		if hostLabel == "" {
+			hostLabel = r.ServiceID
+		}
+		host, err := routeHost(hostLabel, m.baseDomain)
 		if err != nil {
 			return "", err
 		}

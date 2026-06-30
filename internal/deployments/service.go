@@ -616,8 +616,12 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 	// joins its OWN isolated network so it can't reach production's siblings (e.g. the prod
 	// database) — separation in depth alongside withholding secrets.
 	networkName := environmentNetworkName(claimed.EnvironmentID)
+	routeHost := ""
 	if isPreview {
 		networkName = previewNetworkName(appLabel)
+		// A preview gets a human-readable public host ({slug}-pr-{n}-{hash}) instead of the
+		// UUID-based route_key, while the route_key still keys replacement + teardown.
+		routeHost = previewRouteHost(svc.Slug, claimed.PRNumber, claimed.GitRef, claimed.ServiceID)
 	}
 	s.log.Info("deployment claimed", "id", claimed.ID, "service_id", claimed.ServiceID, "kind", claimed.Kind, "route_key", appLabel, "server_id", serverID, "source_kind", claimed.SourceKind, "image", claimed.ImageRef)
 	out := Claimed{
@@ -635,6 +639,8 @@ func (s *service) PollDeployment(ctx context.Context, in PollInput) (Claimed, er
 		// it onto the preview's Caddy route. The hash is bcrypt — never the plaintext password.
 		BasicAuthUser: claimed.AuthUser,
 		BasicAuthHash: claimed.AuthHash,
+		// The pretty public host for a preview (empty for production).
+		RouteHost: routeHost,
 	}
 	// For a git deployment the agent clones + builds; hand it the clone URL, ref, and a
 	// deterministic local tag to build to and then run. No credential (public repos only).
@@ -723,6 +729,30 @@ func hashPreviewPassword(password, username string) (authUser, authHash string, 
 		return "", "", problem.Internalf(herr, "hash preview password")
 	}
 	return user, string(h), nil
+}
+
+// previewRouteHost derives a human-readable, collision-safe DNS label for a preview's PUBLIC route
+// host: {slug}-pr-{n} (or {slug}-{branch-slug}) plus a short hash of the service id, so two services
+// that share a slug never collide on the same host. It is bounded to one DNS label (63 chars). This
+// is distinct from the route_key (which keys the container-replacement group + teardown by service
+// id); only the displayed/routed host changes.
+func previewRouteHost(slug string, prNumber int32, ref, serviceID string) string {
+	base := slugifyRef(slug)
+	if strings.TrimSpace(slug) == "" {
+		base = "preview"
+	}
+	suffix := slugifyRef(ref)
+	if prNumber > 0 {
+		suffix = "pr-" + strconv.Itoa(int(prNumber))
+	}
+	h := sha256.Sum256([]byte(serviceID))
+	tail := hex.EncodeToString(h[:])[:6]
+	head := base + "-" + suffix
+	// Budget the {base}-{suffix} head so the whole label (head + "-" + tail) fits a DNS label.
+	if maxHead := maxRouteKeyLen - len("-") - len(tail); len(head) > maxHead {
+		head = strings.Trim(head[:maxHead], "-")
+	}
+	return head + "-" + tail
 }
 
 // slugifyRef lowercases a git ref and reduces it to a DNS-label-safe slug ([a-z0-9-], no
