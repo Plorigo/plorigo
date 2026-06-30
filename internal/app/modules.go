@@ -165,12 +165,19 @@ func (a *App) buildModules() error {
 		Audit:  auditSvc,
 		Policy: policySvc,
 		Crypto: box,
-		GitHub: github.NewClient(github.Config{}),
+		// An App-configured client so the install flow can resolve an installation and mint
+		// per-installation tokens (the App private key stays in this client, never leaves the
+		// control plane). When App credentials are unset it behaves like the plain client.
+		GitHub: github.NewClient(github.Config{AppID: a.cfg.GitHubAppID, AppPrivateKeyPEM: a.cfg.GitHubAppPrivateKey}),
 		OAuth: sources.OAuthConfig{
 			ClientID:     a.cfg.GitHubClientID,
 			ClientSecret: a.cfg.GitHubClientSecret,
 			Scopes:       a.cfg.GitHubScopes,
 			RedirectURL:  a.cfg.GitHubRedirectURL(),
+		},
+		App: sources.AppConfig{
+			AppID: a.cfg.GitHubAppID,
+			Slug:  a.cfg.GitHubAppSlug,
 		},
 		Log: a.log,
 	})

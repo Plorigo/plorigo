@@ -22,6 +22,7 @@ type Deps struct {
 	Crypto SecretBox
 	GitHub GitHubClient
 	OAuth  OAuthConfig
+	App    AppConfig
 	Log    *slog.Logger
 }
 
@@ -34,7 +35,7 @@ type Module struct {
 func New(d Deps) *Module {
 	store := newPostgresStore(d.DB)
 	return &Module{
-		service: newService(d.DB, store, d.Crypto, d.GitHub, d.OAuth, d.Policy, d.Audit, d.Log),
+		service: newService(d.DB, store, d.Crypto, d.GitHub, d.OAuth, d.App, d.Policy, d.Audit, d.Log),
 	}
 }
 

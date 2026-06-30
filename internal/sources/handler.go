@@ -25,7 +25,12 @@ func (h *handler) GetConnection(ctx context.Context, req *connect.Request[contro
 	if err != nil {
 		return nil, problem.ToConnect(err)
 	}
-	resp := &controlplanev1.GetConnectionResponse{Configured: st.Configured, Connected: st.Connected}
+	resp := &controlplanev1.GetConnectionResponse{
+		Configured:    st.Configured,
+		Connected:     st.Connected,
+		AppConfigured: st.AppConfigured,
+		AppConnected:  st.AppConnected,
+	}
 	if st.Connected {
 		resp.Connection = toProtoConnection(st.Connection)
 	}

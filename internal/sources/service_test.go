@@ -28,6 +28,10 @@ type fakeStore struct {
 	upsertedConn  *ConnectionWrite
 	deletedConnOK bool
 	countByConn   int64
+
+	upsertedApp       *AppConnectionWrite
+	appInstallationID string
+	appInstallOK      bool
 }
 
 // newFakeStore has an active connection with a stored token and deletes successfully —
@@ -57,6 +61,13 @@ func (f *fakeStore) DeleteConnection(_ context.Context, _ database.Tx, _, _ stri
 }
 func (f *fakeStore) CountServicesByConnection(_ context.Context, _ string) (int64, error) {
 	return f.countByConn, nil
+}
+func (f *fakeStore) UpsertAppConnection(_ context.Context, _ database.Tx, c AppConnectionWrite) (Connection, error) {
+	f.upsertedApp = &c
+	return Connection{ID: testConnectionID, WorkspaceID: c.WorkspaceID, Provider: providerApp, GitHubLogin: c.GitHubLogin}, nil
+}
+func (f *fakeStore) InstallationForWorkspace(_ context.Context, _ string) (string, bool, error) {
+	return f.appInstallationID, f.appInstallOK, nil
 }
 
 type fakeRecorder struct {
@@ -105,6 +116,11 @@ type fakeGitHub struct {
 	authorizeState  string
 	listReposCalled bool
 	revokedTokens   []string
+
+	installation    github.Installation
+	installErr      error
+	installToken    string
+	installTokenErr error
 }
 
 func (f *fakeGitHub) AuthorizeURL(_, _, _, state string) string {
@@ -128,6 +144,12 @@ func (f *fakeGitHub) RevokeToken(_ context.Context, _, _, token string) error {
 	f.revokedTokens = append(f.revokedTokens, token)
 	return f.revokeErr
 }
+func (f *fakeGitHub) GetInstallation(_ context.Context, _ string) (github.Installation, error) {
+	return f.installation, f.installErr
+}
+func (f *fakeGitHub) InstallationToken(_ context.Context, _ string) (string, error) {
+	return f.installToken, f.installTokenErr
+}
 
 type fakeTx struct{}
 
@@ -144,7 +166,14 @@ func testOAuth() OAuthConfig {
 }
 
 func newSvc(store Store, box SecretBox, gh GitHubClient, oauth OAuthConfig, authorizer authz.Authorizer, rec Recorder) *service {
-	return newService(fakeTx{}, store, box, gh, oauth, authorizer, rec, slog.Default())
+	return newService(fakeTx{}, store, box, gh, oauth, AppConfig{}, authorizer, rec, slog.Default())
+}
+
+// testApp is a configured GitHub App (gates the install flow in tests).
+func testApp() AppConfig { return AppConfig{AppID: "12345", Slug: "plorigo-test"} }
+
+func newSvcApp(store Store, box SecretBox, gh GitHubClient, app AppConfig, authorizer authz.Authorizer, rec Recorder) *service {
+	return newService(fakeTx{}, store, box, gh, testOAuth(), app, authorizer, rec, slog.Default())
 }
 
 func isKind(err error, kind problem.Kind) bool {

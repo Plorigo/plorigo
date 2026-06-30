@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -44,6 +45,16 @@ type Config struct {
 	GitHubClientID     string
 	GitHubClientSecret string
 	GitHubScopes       string
+
+	// GitHub App credentials (optional), for reading PRIVATE repos/PRs with short-lived
+	// per-installation tokens and verifying inbound webhook signatures. The private key and
+	// webhook secret are control-plane-only: never returned by an RPC, never logged, never sent to
+	// the agent (see docs/architecture/security.md). GitHubAppSlug is the App's URL slug, used to
+	// build its installation URL. When unset, App features are reported as not configured.
+	GitHubAppID         string
+	GitHubAppPrivateKey string
+	GitHubAppSlug       string
+	GitHubWebhookSecret string
 }
 
 // Load reads configuration from the environment, applying defaults.
@@ -82,7 +93,22 @@ func Load() Config {
 		// "repo" grants access to private repositories too; narrow to "public_repo" by
 		// overriding GITHUB_OAUTH_SCOPES if only public repos should be importable.
 		GitHubScopes: envOr("GITHUB_OAUTH_SCOPES", "repo"),
+
+		GitHubAppID:         os.Getenv("GITHUB_APP_ID"),
+		GitHubAppPrivateKey: os.Getenv("GITHUB_APP_PRIVATE_KEY"),
+		GitHubAppSlug:       os.Getenv("GITHUB_APP_SLUG"),
+		GitHubWebhookSecret: os.Getenv("GITHUB_WEBHOOK_SECRET"),
 	}
+}
+
+// GitHubAppInstallURL builds the URL that starts a GitHub App installation, carrying state so the
+// callback can tie the new installation to the requesting workspace. Empty when no App slug is
+// configured (the dashboard then hides the App-connect option).
+func (c Config) GitHubAppInstallURL(state string) string {
+	if c.GitHubAppSlug == "" {
+		return ""
+	}
+	return "https://github.com/apps/" + c.GitHubAppSlug + "/installations/new?state=" + url.QueryEscape(state)
 }
 
 // GitHubRedirectURL is the OAuth callback URL; it must match the OAuth App's registered

@@ -277,6 +277,7 @@ type SourceConnection struct {
 	ConnectedBy           *string
 	CreatedAt             time.Time
 	UpdatedAt             time.Time
+	InstallationID        *string
 }
 
 type SshManagementKey struct {

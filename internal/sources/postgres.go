@@ -46,6 +46,45 @@ func (s *postgresStore) UpsertConnection(ctx context.Context, tx database.Tx, c 
 	}, nil
 }
 
+func (s *postgresStore) UpsertAppConnection(ctx context.Context, tx database.Tx, c AppConnectionWrite) (Connection, error) {
+	installationID := c.InstallationID
+	row, err := db.New(tx).UpsertAppConnection(ctx, db.UpsertAppConnectionParams{
+		WorkspaceID:    c.WorkspaceID,
+		GithubLogin:    c.GitHubLogin,
+		GithubUserID:   c.GitHubUserID,
+		InstallationID: &installationID,
+		ConnectedBy:    c.ConnectedBy,
+	})
+	if err != nil {
+		return Connection{}, err
+	}
+	return Connection{
+		ID:           row.ID,
+		WorkspaceID:  row.WorkspaceID,
+		Provider:     row.Provider,
+		GitHubLogin:  row.GithubLogin,
+		GitHubUserID: row.GithubUserID,
+		Scopes:       row.Scopes,
+		ConnectedBy:  row.ConnectedBy,
+		CreatedAt:    row.CreatedAt,
+		UpdatedAt:    row.UpdatedAt,
+	}, nil
+}
+
+func (s *postgresStore) InstallationForWorkspace(ctx context.Context, workspaceID string) (string, bool, error) {
+	row, err := db.New(s.pool).GetInstallationByWorkspace(ctx, workspaceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	if row == nil || *row == "" {
+		return "", false, nil
+	}
+	return *row, true, nil
+}
+
 func (s *postgresStore) GetConnection(ctx context.Context, workspaceID, provider string) (Connection, bool, error) {
 	row, err := db.New(s.pool).GetSourceConnectionByWorkspace(ctx, db.GetSourceConnectionByWorkspaceParams{
 		WorkspaceID: workspaceID,

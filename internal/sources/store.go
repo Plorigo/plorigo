@@ -18,12 +18,28 @@ type ConnectionWrite struct {
 	ConnectedBy     *string
 }
 
+// AppConnectionWrite is the data UpsertAppConnection persists for a GitHub App installation. There
+// is no token — per-installation tokens are minted on demand from the App private key.
+type AppConnectionWrite struct {
+	WorkspaceID    string
+	GitHubLogin    string // the installation account (user or org) login
+	GitHubUserID   *int64 // the installation account id
+	InstallationID string
+	ConnectedBy    *string
+}
+
 // Store is the repository port the service needs. Implemented by postgres.go, faked in
 // tests. Mutations take a database.Tx so they commit with the audit row. The store only
 // ever sees the sealed token — the service seals before calling it and opens after
 // reading the ciphertext back.
 type Store interface {
 	UpsertConnection(ctx context.Context, tx database.Tx, c ConnectionWrite) (Connection, error)
+	// UpsertAppConnection persists a GitHub App connection (provider='github_app', installation_id,
+	// no token). Reconnecting a workspace to a new installation refreshes the row.
+	UpsertAppConnection(ctx context.Context, tx database.Tx, c AppConnectionWrite) (Connection, error)
+	// InstallationForWorkspace returns the workspace's connected App installation id. ok is false
+	// (nil error) when no App installation is connected.
+	InstallationForWorkspace(ctx context.Context, workspaceID string) (installationID string, ok bool, err error)
 	// GetConnection returns the workspace's connection metadata (never the token). ok is
 	// false (nil error) when there is no connection.
 	GetConnection(ctx context.Context, workspaceID, provider string) (Connection, bool, error)
@@ -71,4 +87,9 @@ type GitHubClient interface {
 	ListUserRepos(ctx context.Context, token string, opts github.ListReposOptions) ([]github.RepoInfo, error)
 	ListBranches(ctx context.Context, token, owner, repo string) ([]string, error)
 	RevokeToken(ctx context.Context, clientID, clientSecret, token string) error
+
+	// GitHub App: resolve a new installation's account, and mint a short-lived per-installation
+	// access token for server-side private-repo reads. *github.Client satisfies these.
+	GetInstallation(ctx context.Context, installationID string) (github.Installation, error)
+	InstallationToken(ctx context.Context, installationID string) (string, error)
 }

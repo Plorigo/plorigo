@@ -38,6 +38,11 @@ func (a *App) router() http.Handler {
 	// that resolve the session themselves. See github_oauth.go.
 	mux.Handle("GET /api/github/connect", a.githubConnectHandler())
 	mux.Handle("GET /api/github/callback", a.githubCallbackHandler())
+	// GitHub App installation: begin redirects to GitHub's install page; the setup URL is where
+	// GitHub returns after an install (it carries installation_id). Both are plain HTTP (cookies +
+	// 302), like the OAuth flow. See github_app.go and docs/architecture/security.md.
+	mux.Handle("GET /api/github/app/install", a.githubAppInstallHandler())
+	mux.Handle("GET /api/github/app/setup", a.githubAppSetupHandler())
 	// The agent gateways: agent.v1 procedures are public (see auth_interceptor.go); the
 	// services validate the registration token / agent credential in the request body.
 	mux.Handle(a.agents.AgentRoute(ic))

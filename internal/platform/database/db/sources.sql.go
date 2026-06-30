@@ -50,6 +50,20 @@ func (q *Queries) GetConnectionTokenByWorkspace(ctx context.Context, arg GetConn
 	return access_token_ciphertext, err
 }
 
+const getInstallationByWorkspace = `-- name: GetInstallationByWorkspace :one
+SELECT installation_id FROM source_connections
+WHERE workspace_id = $1 AND provider = 'github_app'
+`
+
+// Returns the workspace's GitHub App installation id, for minting a per-installation token
+// server-side. INTERNAL — the id resolves a token that is never returned by an RPC.
+func (q *Queries) GetInstallationByWorkspace(ctx context.Context, workspaceID string) (*string, error) {
+	row := q.db.QueryRow(ctx, getInstallationByWorkspace, workspaceID)
+	var installation_id *string
+	err := row.Scan(&installation_id)
+	return installation_id, err
+}
+
 const getSourceConnectionByWorkspace = `-- name: GetSourceConnectionByWorkspace :one
 SELECT id, workspace_id, provider, github_login, github_user_id, scopes, connected_by, created_at, updated_at
 FROM source_connections
@@ -77,6 +91,67 @@ type GetSourceConnectionByWorkspaceRow struct {
 func (q *Queries) GetSourceConnectionByWorkspace(ctx context.Context, arg GetSourceConnectionByWorkspaceParams) (GetSourceConnectionByWorkspaceRow, error) {
 	row := q.db.QueryRow(ctx, getSourceConnectionByWorkspace, arg.WorkspaceID, arg.Provider)
 	var i GetSourceConnectionByWorkspaceRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Provider,
+		&i.GithubLogin,
+		&i.GithubUserID,
+		&i.Scopes,
+		&i.ConnectedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertAppConnection = `-- name: UpsertAppConnection :one
+INSERT INTO source_connections (
+    workspace_id, provider, github_login, github_user_id, installation_id, connected_by
+)
+VALUES ($1, 'github_app', $2, $3, $4, $5)
+ON CONFLICT (workspace_id, provider)
+DO UPDATE SET
+    github_login = EXCLUDED.github_login,
+    github_user_id = EXCLUDED.github_user_id,
+    installation_id = EXCLUDED.installation_id,
+    connected_by = EXCLUDED.connected_by,
+    updated_at = now()
+RETURNING id, workspace_id, provider, github_login, github_user_id, scopes, connected_by, created_at, updated_at
+`
+
+type UpsertAppConnectionParams struct {
+	WorkspaceID    string
+	GithubLogin    string
+	GithubUserID   *int64
+	InstallationID *string
+	ConnectedBy    *string
+}
+
+type UpsertAppConnectionRow struct {
+	ID           string
+	WorkspaceID  string
+	Provider     string
+	GithubLogin  string
+	GithubUserID *int64
+	Scopes       string
+	ConnectedBy  *string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// Create-or-update the workspace's GitHub App connection (provider='github_app'). It carries an
+// installation_id and no token (per-installation tokens are minted on demand). Reconnecting (a new
+// installation) refreshes the row. RETURNING yields metadata only.
+func (q *Queries) UpsertAppConnection(ctx context.Context, arg UpsertAppConnectionParams) (UpsertAppConnectionRow, error) {
+	row := q.db.QueryRow(ctx, upsertAppConnection,
+		arg.WorkspaceID,
+		arg.GithubLogin,
+		arg.GithubUserID,
+		arg.InstallationID,
+		arg.ConnectedBy,
+	)
+	var i UpsertAppConnectionRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,

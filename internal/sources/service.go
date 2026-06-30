@@ -33,13 +33,14 @@ type service struct {
 	box        SecretBox
 	gh         GitHubClient
 	oauth      OAuthConfig
+	app        AppConfig
 	authorizer authz.Authorizer
 	audit      Recorder
 	log        *slog.Logger
 }
 
-func newService(tx TxRunner, store Store, box SecretBox, gh GitHubClient, oauth OAuthConfig, authorizer authz.Authorizer, audit Recorder, log *slog.Logger) *service {
-	return &service{tx: tx, store: store, box: box, gh: gh, oauth: oauth, authorizer: authorizer, audit: audit, log: log}
+func newService(tx TxRunner, store Store, box SecretBox, gh GitHubClient, oauth OAuthConfig, app AppConfig, authorizer authz.Authorizer, audit Recorder, log *slog.Logger) *service {
+	return &service{tx: tx, store: store, box: box, gh: gh, oauth: oauth, app: app, authorizer: authorizer, audit: audit, log: log}
 }
 
 var _ Service = (*service)(nil)
@@ -173,7 +174,17 @@ func (s *service) GetConnection(ctx context.Context, workspaceID string) (Connec
 	if err != nil {
 		return ConnectionStatus{}, problem.Internalf(err, "get connection")
 	}
-	return ConnectionStatus{Configured: s.oauth.Configured(), Connected: ok, Connection: conn}, nil
+	_, appConnected, err := s.store.InstallationForWorkspace(ctx, workspaceID)
+	if err != nil {
+		return ConnectionStatus{}, problem.Internalf(err, "get connection")
+	}
+	return ConnectionStatus{
+		Configured:    s.oauth.Configured(),
+		Connected:     ok,
+		Connection:    conn,
+		AppConfigured: s.app.Configured(),
+		AppConnected:  appConnected,
+	}, nil
 }
 
 func (s *service) DisconnectGitHub(ctx context.Context, workspaceID string) error {

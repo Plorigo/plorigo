@@ -37,6 +37,12 @@ message GetConnectionResponse {
   // Whether this workspace has an active connection; connection is set when true.
   bool connected = 2;
   Connection connection = 3;
+  // Whether the server has a GitHub App configured (app id + private key + slug present), and
+  // whether this workspace has an App installation connected. The App enables PRIVATE-repo previews
+  // (via short-lived per-installation tokens) and webhook-driven previews. The install flow is the
+  // plain HTTP endpoint /api/github/app/install (it redirects to GitHub's install page).
+  bool app_configured = 4;
+  bool app_connected = 5;
 }
 
 message ListRepositoriesRequest {
