@@ -34,6 +34,13 @@ message Deployment {
   // Set when this deployment was created by rolling back to an earlier one: the id of the
   // previous healthy deployment it reproduces. Empty for a normal deploy.
   string rolled_back_from = 21;
+  // Preview deployments. kind is "production" or "preview". A preview is a build of a branch
+  // or pull-request head ref that runs alongside production with its own URL and isolated
+  // network. pr_number / pr_url link a PR preview back to its GitHub pull request (0 / "" for
+  // a branch preview or a production deployment). See docs/architecture/deployment-engine.md.
+  string kind = 22;       // "production" | "preview"
+  int32 pr_number = 23;   // the GitHub PR number (PR previews only)
+  string pr_url = 24;     // the GitHub PR URL (PR previews only)
 }
 
 // A DeploymentEvent is one entry in a deployment's timeline: either a status
@@ -67,6 +74,24 @@ message CreateDeploymentForServiceRequest {
 }
 
 message CreateDeploymentForServiceResponse {
+  Deployment deployment = 1;
+}
+
+// CreatePreviewDeployment creates a PREVIEW deployment of an existing service: a build of a
+// branch, or of a pull request's head ref, that runs alongside the service's production
+// deployment with its own URL and an isolated network — it never supersedes production.
+// Provide exactly one of branch or pr_number; a pr_number is resolved to its head ref and the
+// PR is linked back via the deployment's pr_url. Previews build PUBLIC git services only in
+// this slice (the service's source is resolved server-side; a caller can't smuggle one in).
+message CreatePreviewDeploymentRequest {
+  string service_id = 1;
+  string server_id = 2;
+  string branch = 3;        // build this branch (mutually exclusive with pr_number)
+  int32 pr_number = 4;      // build this pull request's head ref (mutually exclusive with branch)
+  int32 container_port = 5; // optional override; 0 = the service's configured port
+}
+
+message CreatePreviewDeploymentResponse {
   Deployment deployment = 1;
 }
 
@@ -141,6 +166,7 @@ message ListDeploymentEventsResponse {
 // redeploying an existing service.
 service DeploymentService {
   rpc CreateDeploymentForService(CreateDeploymentForServiceRequest) returns (CreateDeploymentForServiceResponse);
+  rpc CreatePreviewDeployment(CreatePreviewDeploymentRequest) returns (CreatePreviewDeploymentResponse);
   rpc RollbackDeployment(RollbackDeploymentRequest) returns (RollbackDeploymentResponse);
   rpc GetDeployment(GetDeploymentRequest) returns (GetDeploymentResponse);
   rpc ListDeploymentsByService(ListDeploymentsByServiceRequest) returns (ListDeploymentsByServiceResponse);

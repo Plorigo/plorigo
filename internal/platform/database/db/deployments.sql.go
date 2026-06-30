@@ -55,7 +55,7 @@ WHERE id = (
     FOR UPDATE SKIP LOCKED
     LIMIT 1
 )
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url
 `
 
 // ClaimNextDeploymentForServer atomically claims the oldest queued deployment for a
@@ -88,18 +88,23 @@ func (q *Queries) ClaimNextDeploymentForServer(ctx context.Context, serverID str
 		&i.RouteUrl,
 		&i.ServiceID,
 		&i.RolledBackFrom,
+		&i.Kind,
+		&i.RouteKey,
+		&i.PrNumber,
+		&i.PrUrl,
 	)
 	return i, err
 }
 
 const createDeployment = `-- name: CreateDeployment :one
-INSERT INTO deployments (service_id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, rolled_back_from)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from
+INSERT INTO deployments (service_id, route_key, environment_id, project_id, workspace_id, server_id, image_ref, container_port, rolled_back_from)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url
 `
 
 type CreateDeploymentParams struct {
 	ServiceID      string
+	RouteKey       string
 	EnvironmentID  string
 	ProjectID      string
 	WorkspaceID    string
@@ -110,10 +115,13 @@ type CreateDeploymentParams struct {
 }
 
 // rolled_back_from is NULL for a normal deploy and set to the restored deployment's id when
-// this row is a rollback (see RollbackDeployment).
+// this row is a rollback (see RollbackDeployment). route_key = the service id for a production
+// deployment, so its Caddy route, container-replacement group, and supersede scope are keyed
+// by service exactly as before previews existed.
 func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentParams) (Deployment, error) {
 	row := q.db.QueryRow(ctx, createDeployment,
 		arg.ServiceID,
+		arg.RouteKey,
 		arg.EnvironmentID,
 		arg.ProjectID,
 		arg.WorkspaceID,
@@ -146,21 +154,26 @@ func (q *Queries) CreateDeployment(ctx context.Context, arg CreateDeploymentPara
 		&i.RouteUrl,
 		&i.ServiceID,
 		&i.RolledBackFrom,
+		&i.Kind,
+		&i.RouteKey,
+		&i.PrNumber,
+		&i.PrUrl,
 	)
 	return i, err
 }
 
 const createDeploymentFromGit = `-- name: CreateDeploymentFromGit :one
 INSERT INTO deployments (
-    service_id, environment_id, project_id, workspace_id, server_id,
+    service_id, route_key, environment_id, project_id, workspace_id, server_id,
     container_port, source_kind, source_access, clone_url, git_ref, rolled_back_from
 )
-VALUES ($1, $2, $3, $4, $5, $6, 'git', $7, $8, $9, $10)
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from
+VALUES ($1, $2, $3, $4, $5, $6, $7, 'git', $8, $9, $10, $11)
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url
 `
 
 type CreateDeploymentFromGitParams struct {
 	ServiceID      string
+	RouteKey       string
 	EnvironmentID  string
 	ProjectID      string
 	WorkspaceID    string
@@ -173,11 +186,12 @@ type CreateDeploymentFromGitParams struct {
 }
 
 // CreateDeploymentFromGit records a queued deployment whose source is a repo+ref to clone
-// and build on the server (image_ref is filled in by the agent after the build). See
-// docs/architecture/deployment-engine.md.
+// and build on the server (image_ref is filled in by the agent after the build). route_key =
+// the service id (a production deployment). See docs/architecture/deployment-engine.md.
 func (q *Queries) CreateDeploymentFromGit(ctx context.Context, arg CreateDeploymentFromGitParams) (Deployment, error) {
 	row := q.db.QueryRow(ctx, createDeploymentFromGit,
 		arg.ServiceID,
+		arg.RouteKey,
 		arg.EnvironmentID,
 		arg.ProjectID,
 		arg.WorkspaceID,
@@ -212,6 +226,86 @@ func (q *Queries) CreateDeploymentFromGit(ctx context.Context, arg CreateDeploym
 		&i.RouteUrl,
 		&i.ServiceID,
 		&i.RolledBackFrom,
+		&i.Kind,
+		&i.RouteKey,
+		&i.PrNumber,
+		&i.PrUrl,
+	)
+	return i, err
+}
+
+const createPreviewDeployment = `-- name: CreatePreviewDeployment :one
+INSERT INTO deployments (
+    service_id, route_key, kind, environment_id, project_id, workspace_id, server_id,
+    container_port, source_kind, source_access, clone_url, git_ref, pr_number, pr_url
+)
+VALUES ($1, $2, 'preview', $3, $4, $5, $6, $7, 'git', $8, $9, $10, $11, $12)
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url
+`
+
+type CreatePreviewDeploymentParams struct {
+	ServiceID     string
+	RouteKey      string
+	EnvironmentID string
+	ProjectID     string
+	WorkspaceID   string
+	ServerID      string
+	ContainerPort int32
+	SourceAccess  string
+	CloneUrl      string
+	GitRef        string
+	PrNumber      int32
+	PrUrl         string
+}
+
+// CreatePreviewDeployment records a queued PREVIEW deployment of a service: a build of a
+// branch or pull-request head ref, isolated from the service's production deployment by its
+// own route_key (which drives a distinct Caddy route, container-replacement group, and
+// supersede scope). pr_number / pr_url link it to a GitHub pull request (0 / ” for a plain
+// branch preview). Previews build PUBLIC git sources only in this slice.
+func (q *Queries) CreatePreviewDeployment(ctx context.Context, arg CreatePreviewDeploymentParams) (Deployment, error) {
+	row := q.db.QueryRow(ctx, createPreviewDeployment,
+		arg.ServiceID,
+		arg.RouteKey,
+		arg.EnvironmentID,
+		arg.ProjectID,
+		arg.WorkspaceID,
+		arg.ServerID,
+		arg.ContainerPort,
+		arg.SourceAccess,
+		arg.CloneUrl,
+		arg.GitRef,
+		arg.PrNumber,
+		arg.PrUrl,
+	)
+	var i Deployment
+	err := row.Scan(
+		&i.ID,
+		&i.EnvironmentID,
+		&i.ProjectID,
+		&i.WorkspaceID,
+		&i.ServerID,
+		&i.ImageRef,
+		&i.ContainerPort,
+		&i.HostPort,
+		&i.ContainerID,
+		&i.Status,
+		&i.Message,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.SourceKind,
+		&i.SourceAccess,
+		&i.CloneUrl,
+		&i.GitRef,
+		&i.CommitSha,
+		&i.BuiltImageRef,
+		&i.RouteUrl,
+		&i.ServiceID,
+		&i.RolledBackFrom,
+		&i.Kind,
+		&i.RouteKey,
+		&i.PrNumber,
+		&i.PrUrl,
 	)
 	return i, err
 }
@@ -237,7 +331,7 @@ func (q *Queries) GetAgentServerByCredential(ctx context.Context, credentialHash
 }
 
 const getDeployment = `-- name: GetDeployment :one
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from FROM deployments WHERE id = $1
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments WHERE id = $1
 `
 
 func (q *Queries) GetDeployment(ctx context.Context, id string) (Deployment, error) {
@@ -266,6 +360,10 @@ func (q *Queries) GetDeployment(ctx context.Context, id string) (Deployment, err
 		&i.RouteUrl,
 		&i.ServiceID,
 		&i.RolledBackFrom,
+		&i.Kind,
+		&i.RouteKey,
+		&i.PrNumber,
+		&i.PrUrl,
 	)
 	return i, err
 }
@@ -333,7 +431,7 @@ func (q *Queries) ListDeploymentEvents(ctx context.Context, arg ListDeploymentEv
 }
 
 const listDeploymentsByEnvironment = `-- name: ListDeploymentsByEnvironment :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from FROM deployments WHERE environment_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments WHERE environment_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByEnvironment(ctx context.Context, environmentID string) ([]Deployment, error) {
@@ -368,6 +466,10 @@ func (q *Queries) ListDeploymentsByEnvironment(ctx context.Context, environmentI
 			&i.RouteUrl,
 			&i.ServiceID,
 			&i.RolledBackFrom,
+			&i.Kind,
+			&i.RouteKey,
+			&i.PrNumber,
+			&i.PrUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -380,7 +482,7 @@ func (q *Queries) ListDeploymentsByEnvironment(ctx context.Context, environmentI
 }
 
 const listDeploymentsByProject = `-- name: ListDeploymentsByProject :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from FROM deployments WHERE project_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments WHERE project_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByProject(ctx context.Context, projectID string) ([]Deployment, error) {
@@ -415,6 +517,10 @@ func (q *Queries) ListDeploymentsByProject(ctx context.Context, projectID string
 			&i.RouteUrl,
 			&i.ServiceID,
 			&i.RolledBackFrom,
+			&i.Kind,
+			&i.RouteKey,
+			&i.PrNumber,
+			&i.PrUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -427,7 +533,7 @@ func (q *Queries) ListDeploymentsByProject(ctx context.Context, projectID string
 }
 
 const listDeploymentsByService = `-- name: ListDeploymentsByService :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from FROM deployments WHERE service_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments WHERE service_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByService(ctx context.Context, serviceID string) ([]Deployment, error) {
@@ -462,6 +568,10 @@ func (q *Queries) ListDeploymentsByService(ctx context.Context, serviceID string
 			&i.RouteUrl,
 			&i.ServiceID,
 			&i.RolledBackFrom,
+			&i.Kind,
+			&i.RouteKey,
+			&i.PrNumber,
+			&i.PrUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -474,7 +584,7 @@ func (q *Queries) ListDeploymentsByService(ctx context.Context, serviceID string
 }
 
 const listDeploymentsByWorkspace = `-- name: ListDeploymentsByWorkspace :many
-SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from FROM deployments WHERE workspace_id = $1 ORDER BY created_at DESC
+SELECT id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url FROM deployments WHERE workspace_id = $1 ORDER BY created_at DESC
 `
 
 func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID string) ([]Deployment, error) {
@@ -509,6 +619,10 @@ func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID st
 			&i.RouteUrl,
 			&i.ServiceID,
 			&i.RolledBackFrom,
+			&i.Kind,
+			&i.RouteKey,
+			&i.PrNumber,
+			&i.PrUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -523,21 +637,22 @@ func (q *Queries) ListDeploymentsByWorkspace(ctx context.Context, workspaceID st
 const supersedePreviousRunning = `-- name: SupersedePreviousRunning :exec
 UPDATE deployments
 SET status = 'superseded', updated_at = now()
-WHERE service_id = $1 AND server_id = $2 AND status = 'running' AND id <> $3
+WHERE route_key = $1 AND server_id = $2 AND status = 'running' AND id <> $3
 `
 
 type SupersedePreviousRunningParams struct {
-	ServiceID string
-	ServerID  string
-	ID        string
+	RouteKey string
+	ServerID string
+	ID       string
 }
 
-// SupersedePreviousRunning marks the SERVICE's prior running deployment on this server as
-// superseded once a newer one reaches 'running', so "current" is unambiguous. Keyed by
-// service (not environment) so deploying one service never supersedes a sibling service
-// running in the same environment.
+// SupersedePreviousRunning marks the prior running deployment with the same route_key on this
+// server as superseded once a newer one reaches 'running', so "current" is unambiguous. Keyed
+// by route_key (= the service id for a production deployment, a distinct key per preview) so a
+// preview never supersedes production (or another preview), and a sibling service in the same
+// environment is never superseded.
 func (q *Queries) SupersedePreviousRunning(ctx context.Context, arg SupersedePreviousRunningParams) error {
-	_, err := q.db.Exec(ctx, supersedePreviousRunning, arg.ServiceID, arg.ServerID, arg.ID)
+	_, err := q.db.Exec(ctx, supersedePreviousRunning, arg.RouteKey, arg.ServerID, arg.ID)
 	return err
 }
 
@@ -552,7 +667,7 @@ SET status = $1,
     route_url = CASE WHEN $7::text <> '' THEN $7::text ELSE route_url END,
     updated_at = now()
 WHERE id = $8
-RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from
+RETURNING id, environment_id, project_id, workspace_id, server_id, image_ref, container_port, host_port, container_id, status, message, created_at, updated_at, source_kind, source_access, clone_url, git_ref, commit_sha, built_image_ref, route_url, service_id, rolled_back_from, kind, route_key, pr_number, pr_url
 `
 
 type UpdateDeploymentStatusParams struct {
@@ -606,6 +721,10 @@ func (q *Queries) UpdateDeploymentStatus(ctx context.Context, arg UpdateDeployme
 		&i.RouteUrl,
 		&i.ServiceID,
 		&i.RolledBackFrom,
+		&i.Kind,
+		&i.RouteKey,
+		&i.PrNumber,
+		&i.PrUrl,
 	)
 	return i, err
 }

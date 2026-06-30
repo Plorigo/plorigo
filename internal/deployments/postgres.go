@@ -133,7 +133,9 @@ func (s *postgresStore) serviceForDeploy(ctx context.Context, q db.DBTX, service
 
 func (s *postgresStore) InsertDeployment(ctx context.Context, tx database.Tx, d NewDeployment) (Deployment, error) {
 	row, err := db.New(tx).CreateDeployment(ctx, db.CreateDeploymentParams{
-		ServiceID:      d.ServiceID,
+		ServiceID: d.ServiceID,
+		// A production deployment is keyed by its service id (see SupersedePreviousRunning).
+		RouteKey:       d.ServiceID,
 		EnvironmentID:  d.EnvironmentID,
 		ProjectID:      d.ProjectID,
 		WorkspaceID:    d.WorkspaceID,
@@ -151,6 +153,7 @@ func (s *postgresStore) InsertDeployment(ctx context.Context, tx database.Tx, d 
 func (s *postgresStore) InsertDeploymentFromGit(ctx context.Context, tx database.Tx, d NewDeploymentFromGit) (Deployment, error) {
 	row, err := db.New(tx).CreateDeploymentFromGit(ctx, db.CreateDeploymentFromGitParams{
 		ServiceID:      d.ServiceID,
+		RouteKey:       d.ServiceID,
 		EnvironmentID:  d.EnvironmentID,
 		ProjectID:      d.ProjectID,
 		WorkspaceID:    d.WorkspaceID,
@@ -160,6 +163,27 @@ func (s *postgresStore) InsertDeploymentFromGit(ctx context.Context, tx database
 		CloneUrl:       d.CloneURL,
 		GitRef:         d.GitRef,
 		RolledBackFrom: nullableID(d.RolledBackFrom),
+	})
+	if err != nil {
+		return Deployment{}, err
+	}
+	return deploymentFromRow(row), nil
+}
+
+func (s *postgresStore) InsertPreviewDeployment(ctx context.Context, tx database.Tx, d NewPreviewDeployment) (Deployment, error) {
+	row, err := db.New(tx).CreatePreviewDeployment(ctx, db.CreatePreviewDeploymentParams{
+		ServiceID:     d.ServiceID,
+		RouteKey:      d.RouteKey,
+		EnvironmentID: d.EnvironmentID,
+		ProjectID:     d.ProjectID,
+		WorkspaceID:   d.WorkspaceID,
+		ServerID:      d.ServerID,
+		ContainerPort: d.ContainerPort,
+		SourceAccess:  d.SourceAccess,
+		CloneUrl:      d.CloneURL,
+		GitRef:        d.GitRef,
+		PrNumber:      d.PRNumber,
+		PrUrl:         d.PRURL,
 	})
 	if err != nil {
 		return Deployment{}, err
@@ -250,11 +274,11 @@ func (s *postgresStore) UpdateStatus(ctx context.Context, tx database.Tx, u Stat
 	return err
 }
 
-func (s *postgresStore) SupersedePreviousRunning(ctx context.Context, tx database.Tx, serviceID, serverID, deploymentID string) error {
+func (s *postgresStore) SupersedePreviousRunning(ctx context.Context, tx database.Tx, routeKey, serverID, deploymentID string) error {
 	return db.New(tx).SupersedePreviousRunning(ctx, db.SupersedePreviousRunningParams{
-		ServiceID: serviceID,
-		ServerID:  serverID,
-		ID:        deploymentID,
+		RouteKey: routeKey,
+		ServerID: serverID,
+		ID:       deploymentID,
 	})
 }
 
@@ -335,6 +359,10 @@ func deploymentFromRow(r db.Deployment) Deployment {
 		BuiltImageRef:  r.BuiltImageRef,
 		RouteURL:       r.RouteUrl,
 		RolledBackFrom: derefStr(r.RolledBackFrom),
+		Kind:           r.Kind,
+		RouteKey:       r.RouteKey,
+		PRNumber:       r.PrNumber,
+		PRURL:          r.PrUrl,
 	}
 }
 

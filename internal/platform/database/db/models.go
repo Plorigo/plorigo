@@ -120,6 +120,10 @@ type Deployment struct {
 	RouteUrl       string
 	ServiceID      string
 	RolledBackFrom *string
+	Kind           string
+	RouteKey       string
+	PrNumber       int32
+	PrUrl          string
 }
 
 type DeploymentEvent struct {

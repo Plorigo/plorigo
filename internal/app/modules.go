@@ -140,6 +140,9 @@ func (a *App) buildModules() error {
 		// Decrypts environment/service secrets at deploy time so their plaintext can be
 		// injected into the container (the same box that config seals them with).
 		Crypto: box,
+		// Resolves a pull request to its head ref + URL when creating a PR preview (public
+		// repos only in this slice; *github.Client satisfies the consumer-defined port).
+		GitHub: github.NewClient(github.Config{}),
 		Log:    a.log,
 	})
 

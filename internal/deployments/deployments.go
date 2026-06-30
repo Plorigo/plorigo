@@ -41,6 +41,16 @@ const (
 	SourceGit   = "git"
 )
 
+// Deployment kinds. A production deployment is the service's main release (route_key = the
+// service id). A preview deployment is a build of a branch or pull-request head ref that runs
+// alongside production with its own route_key — its own Caddy route, container-replacement
+// group, supersede scope, and isolated network — so it never disturbs production. See
+// docs/architecture/deployment-engine.md.
+const (
+	KindProduction = "production"
+	KindPreview    = "preview"
+)
+
 // Deployment event kinds.
 const (
 	KindStatus = "status" // a status transition
@@ -84,7 +94,7 @@ type Deployment struct {
 	CommitSha     string
 	BuiltImageRef string
 
-	// RouteURL is the real deployment URL (e.g. http://{service-id}.localhost:8083) computed
+	// RouteURL is the real deployment URL (e.g. http://{route-key}.localhost:8083) computed
 	// by the agent for a PUBLIC service and stored so the dashboard can display a clickable
 	// link. Empty for a private service (no public route).
 	RouteURL string
@@ -92,6 +102,15 @@ type Deployment struct {
 	// RolledBackFrom is the id of the previous healthy deployment this one reproduces, set
 	// when it was created by a rollback. Empty for a normal deploy.
 	RolledBackFrom string
+
+	// Preview fields. Kind is KindProduction or KindPreview. RouteKey is the service id for a
+	// production deployment and a distinct, DNS-safe key per preview (it drives the Caddy route,
+	// the container-replacement group, the supersede scope, and the isolated network). PRNumber
+	// and PRURL link a pull-request preview back to its GitHub PR (0 / "" for a branch preview).
+	Kind     string
+	RouteKey string
+	PRNumber int32
+	PRURL    string
 }
 
 // Event is one entry in a deployment's timeline: a status transition (KindStatus) or
@@ -118,6 +137,18 @@ type CreateForServiceInput struct {
 	ServerID      string
 	ContainerPort int32
 	GitRef        string
+}
+
+// CreatePreviewInput is what the dashboard supplies to create a PREVIEW deployment of an
+// existing git service. Exactly one of Branch or PRNumber identifies what to build; a PRNumber
+// is resolved to its head ref and the PR is linked back via the deployment's pr_url.
+// ContainerPort is an optional override (0 = the service's configured port).
+type CreatePreviewInput struct {
+	ServiceID     string
+	ServerID      string
+	Branch        string
+	PRNumber      int32
+	ContainerPort int32
 }
 
 // ServiceForDeploy is a service's source + routing facts, resolved when enqueuing a deploy.
@@ -231,6 +262,11 @@ type ReportRouteSyncInput struct {
 // controlplane.v1.DeploymentService and the agent-facing agent.v1.DeployService.
 type Service interface {
 	CreateForService(ctx context.Context, in CreateForServiceInput) (Deployment, error)
+	// CreatePreview enqueues a preview deployment of an existing git service — a build of a
+	// branch or a pull request's head ref — that runs alongside production with its own
+	// route_key (isolated URL + network) and never supersedes production. Public git services
+	// only in this slice.
+	CreatePreview(ctx context.Context, in CreatePreviewInput) (Deployment, error)
 	// RollbackToDeployment enqueues a new deployment that reproduces a previous healthy
 	// deployment's artifact (same image, or same repo pinned to the built commit) on the
 	// same service and server, linked back via rolled_back_from. The target must be running

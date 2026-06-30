@@ -100,6 +100,11 @@ verification time; automatic HTTPS is a later slice.
   dashboard triggers a redeploy with `DeploymentService.CreateDeploymentForService`, which
   resolves the service's source **server-side** (the request carries no repo URL) — see
   [deployment-engine.md](./deployment-engine.md).
+- A `deployments` row also records a **`kind`** (`production` | `preview`) and a **`route_key`**.
+  A production deployment sets `route_key = service_id`; a **preview** (a branch/PR build created
+  by `DeploymentService.CreatePreviewDeployment`) sets a distinct key plus `pr_number` / `pr_url`,
+  which isolates its Caddy route, container-replacement group, supersede scope, and network from
+  production — see [Preview deployments](./deployment-engine.md#preview-deployments).
 
 ## API: ConnectRPC + Protocol Buffers
 

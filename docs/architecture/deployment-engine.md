@@ -15,7 +15,9 @@ reversibly. Read this before changing build, deploy, rollback, runtime, or proxy
 A deployment is one deploy attempt **of a service** (the deployable component — see
 [data-and-api.md](./data-and-api.md)); it inherits that service's source, port, and
 visibility. Creating a service with `deploy_now` enqueues the first deployment;
-`DeploymentService.CreateDeploymentForService` enqueues a **redeploy** of an existing one.
+`DeploymentService.CreateDeploymentForService` enqueues a **redeploy** of an existing one, and
+`DeploymentService.CreatePreviewDeployment` enqueues a **branch/PR preview** that runs alongside
+production (see [Preview deployments](#preview-deployments)).
 
 1. A Git event or manual action **triggers** a deploy.
 2. The control plane creates a **deployment record** and a **job**.
@@ -128,12 +130,14 @@ Caddy handles app routing, preview URLs, custom domains, automatic HTTPS, HTTP�
 redirects, WebSocket proxying, and the route switch during deploy/rollback. The **agent** owns
 generating, validating, reloading, and reporting Caddy config — details in [agent.md](./agent.md).
 
-The Caddy **route key is the service id**: the generated host is `{service-id}.{baseDomain}`
-(it was `{env-id}.{baseDomain}`), so two services in one environment get distinct routes. The
-control plane carries this to the agent as the job's **`app_label`** (now the service id), and
-the agent stamps it on the container as the `plorigo.service` label — what it matches on to
-find and supersede the service's previous container. Only a **public** service gets a route at
-all (see below).
+The Caddy **route key is the deployment's `route_key`**, which for a production deployment is
+the **service id**: the generated host is `{service-id}.{baseDomain}` (it was
+`{env-id}.{baseDomain}`), so two services in one environment get distinct routes. The control
+plane carries this to the agent as the job's **`app_label`**, and the agent stamps it on the
+container as the `plorigo.service` label — what it matches on to find and supersede the
+previous container with the same key. A **preview** deployment overrides `route_key` so it gets
+its own host and replacement group (see [Preview deployments](#preview-deployments)). Only a
+**public** service gets a route at all (see below).
 
 Custom domains layer onto that generated route. Users attach one or more hostnames to a
 service; the dashboard shows the exact DNS record to point at the generated host and verifies
@@ -157,6 +161,46 @@ A service's **visibility** decides what is exposed to the outside:
 - **`private`** — publishes **nothing** to the host and has **no Caddy route** (so no
   `route_url`). It is reachable only by its siblings over the per-environment network — the
   shape for a database, cache, or internal worker.
+
+## Preview deployments
+
+A **preview** is a deployment of a service built from a **branch or pull request** that runs
+**alongside** the service's production deployment — Plorigo's take on Vercel-style previews,
+without a separate environment or service row. `DeploymentService.CreatePreviewDeployment`
+enqueues one: it resolves the service's source server-side (public git only in this slice) and
+takes either a `branch` or a `pr_number` (resolved through the GitHub API to its head ref, and
+linked back via `pr_url`).
+
+A deployment carries a **`kind`** (`production` | `preview`) and a **`route_key`**. The
+`route_key` is what isolates a preview, because it is what the deploy flow keys on in the three
+places that were previously keyed by service id:
+
+- **Routing** — the agent's `app_label` is the `route_key`, so the Caddy host is
+  `{route_key}.{baseDomain}`. Production keeps `route_key = {service-id}` (its URL is
+  unchanged); a preview gets a distinct, DNS-safe key (`{service-id}-pr-{n}`, or a slug of the
+  branch, truncated with a hash tail when long), so it gets its **own URL** and never fights
+  production for the route.
+- **Supersede** — a new running deployment supersedes only the prior one with the **same
+  `route_key`**, so re-pushing a preview replaces that preview, and a preview never supersedes
+  production (or another PR's preview).
+- **Network isolation** — a preview joins its **own** network `plorigo-preview-{route_key}`
+  rather than the per-environment network, so it **cannot reach production's siblings** (e.g.
+  the production database). The agent creates that network lazily, like any other.
+
+A preview is isolated further by **withholding the environment's secrets**: it receives the
+service's non-secret variables but not decrypted secrets, since it builds untrusted branch/PR
+code. The service's cached live `route_url` always tracks **production**, never a preview. None
+of this requires an agent change — the agent already derives the route, the replacement group,
+and the network from the job's `app_label` and `network_name`, which the control plane sets.
+
+> [!NOTE]
+> **What's built so far.** Previews are created **manually** (dashboard or RPC) for **public**
+> git services. Webhook-driven previews (auto-create on PR open/sync, **teardown** on close),
+> the **GitHub App** for private repos, and preview expiration are later slices — see
+> [ROADMAP.md](../../ROADMAP.md). There is no teardown job yet: a preview's container is
+> replaced when the preview is re-pushed, but is not torn down on its own. Note the two senses
+> of "preview": an **environment** of `type = 'preview'` (a long-lived environment) is distinct
+> from a **deployment** of `kind = 'preview'` (the ephemeral branch/PR build described here).
 
 ## Managed database services
 

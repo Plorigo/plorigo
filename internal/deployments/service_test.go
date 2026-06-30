@@ -9,6 +9,7 @@ import (
 
 	"github.com/plorigo/plorigo/internal/platform/authz"
 	"github.com/plorigo/plorigo/internal/platform/database"
+	"github.com/plorigo/plorigo/internal/platform/github"
 	"github.com/plorigo/plorigo/internal/platform/principal"
 	"github.com/plorigo/plorigo/internal/platform/problem"
 )
@@ -48,9 +49,10 @@ type fakeStore struct {
 
 	config []ConfigForDeploy
 
-	inserted    NewDeployment
-	insertedGit NewDeploymentFromGit
-	insertErr   error
+	inserted        NewDeployment
+	insertedGit     NewDeploymentFromGit
+	insertedPreview NewPreviewDeployment
+	insertErr       error
 
 	getDep Deployment
 	getOK  bool
@@ -60,7 +62,7 @@ type fakeStore struct {
 
 	statusUpdates    []StatusUpdate
 	events           []NewEvent
-	supersededWith   string // service id passed to SupersedePreviousRunning
+	supersededWith   string // route_key passed to SupersedePreviousRunning
 	superseded       bool
 	routeServiceID   string
 	routeURLReported string
@@ -131,6 +133,30 @@ func (f *fakeStore) InsertDeploymentFromGit(_ context.Context, _ database.Tx, d 
 		GitRef:        d.GitRef,
 	}, nil
 }
+func (f *fakeStore) InsertPreviewDeployment(_ context.Context, _ database.Tx, d NewPreviewDeployment) (Deployment, error) {
+	f.insertedPreview = d
+	if f.insertErr != nil {
+		return Deployment{}, f.insertErr
+	}
+	return Deployment{
+		ID:            testDeployID,
+		ServiceID:     d.ServiceID,
+		RouteKey:      d.RouteKey,
+		Kind:          KindPreview,
+		EnvironmentID: d.EnvironmentID,
+		ProjectID:     d.ProjectID,
+		WorkspaceID:   d.WorkspaceID,
+		ServerID:      d.ServerID,
+		ContainerPort: d.ContainerPort,
+		Status:        StatusQueued,
+		SourceKind:    SourceGit,
+		SourceAccess:  d.SourceAccess,
+		CloneURL:      d.CloneURL,
+		GitRef:        d.GitRef,
+		PRNumber:      d.PRNumber,
+		PRURL:         d.PRURL,
+	}, nil
+}
 func (f *fakeStore) GetDeployment(_ context.Context, _ string) (Deployment, bool, error) {
 	return f.getDep, f.getOK, nil
 }
@@ -152,9 +178,9 @@ func (f *fakeStore) UpdateStatus(_ context.Context, _ database.Tx, u StatusUpdat
 	f.statusUpdates = append(f.statusUpdates, u)
 	return nil
 }
-func (f *fakeStore) SupersedePreviousRunning(_ context.Context, _ database.Tx, serviceID, _, _ string) error {
+func (f *fakeStore) SupersedePreviousRunning(_ context.Context, _ database.Tx, routeKey, _, _ string) error {
 	f.superseded = true
-	f.supersededWith = serviceID
+	f.supersededWith = routeKey
 	return nil
 }
 func (f *fakeStore) UpdateServiceRouteURL(_ context.Context, _ database.Tx, serviceID, routeURL string) error {
@@ -206,7 +232,22 @@ func authedCtx() context.Context {
 }
 
 func newSvc(store Store, authorizer authz.Authorizer, rec Recorder) *service {
-	return newService(fakeTx{}, store, authorizer, rec, fakeOpener{}, slog.Default())
+	return newService(fakeTx{}, store, authorizer, rec, fakeOpener{}, fakeGitHub{}, slog.Default())
+}
+
+// newSvcGH builds the service with a specific GitHub fake + recorder (preview tests).
+func newSvcGH(store Store, gh GitHubClient, rec Recorder) *service {
+	return newService(fakeTx{}, store, fakeAuthz{}, rec, fakeOpener{}, gh, slog.Default())
+}
+
+// fakeGitHub stubs the GitHubClient port; pr/prErr drive GetPullRequest.
+type fakeGitHub struct {
+	pr    github.PullRequest
+	prErr error
+}
+
+func (f fakeGitHub) GetPullRequest(_ context.Context, _, _, _ string, _ int) (github.PullRequest, error) {
+	return f.pr, f.prErr
 }
 
 // fakeOpener returns the sealed bytes with a "sealed:" prefix stripped, mirroring fakeSealer
@@ -390,6 +431,124 @@ func TestCreateForService_RejectsPrivateGit(t *testing.T) {
 	wantKind(t, err, problem.KindInvalidInput)
 	if store.insertedGit.CloneURL != "" {
 		t.Error("a private git source must not insert a deployment (public-first)")
+	}
+}
+
+// gitPublicService is a resolved public git service used across CreatePreview tests.
+func gitPublicService() ServiceForDeploy {
+	return ServiceForDeploy{
+		EnvironmentID: testEnvID, ProjectID: testProjectID, WorkspaceID: testWorkspace,
+		SourceKind: SourceGit, SourceAccess: "public", Owner: "o", Repo: "r",
+		Branch: "main", DefaultBranch: "main", ContainerPort: 3000, Slug: "web",
+	}
+}
+
+func previewStore() *fakeStore {
+	return &fakeStore{
+		svcWs: testWorkspace, svcProj: testProjectID, svcMetaOK: true,
+		svc: gitPublicService(), svcOK: true, serverWs: testWorkspace, serverOK: true,
+	}
+}
+
+func TestCreatePreview_BranchInsertsPreviewWithRouteKey(t *testing.T) {
+	store := previewStore()
+	rec := &fakeRecorder{}
+	svc := newSvcGH(store, fakeGitHub{}, rec)
+
+	dep, err := svc.CreatePreview(authedCtx(), CreatePreviewInput{ServiceID: testServiceID, ServerID: testServerID, Branch: "feature/x"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dep.Kind != KindPreview {
+		t.Errorf("kind = %q, want preview", dep.Kind)
+	}
+	p := store.insertedPreview
+	if p.RouteKey != testServiceID+"-feature-x" {
+		t.Errorf("route_key = %q, want service id + slugified branch", p.RouteKey)
+	}
+	if p.GitRef != "feature/x" || p.PRNumber != 0 || p.PRURL != "" {
+		t.Errorf("inserted = %+v, want the branch ref and no PR linkage", p)
+	}
+	if p.CloneURL != "https://github.com/o/r.git" || p.SourceAccess != "public" {
+		t.Errorf("inserted = %+v, want the service's public clone url", p)
+	}
+	if !rec.called || rec.action != "deployment.preview" {
+		t.Errorf("audit = (%v, %q), want deployment.preview", rec.called, rec.action)
+	}
+}
+
+func TestCreatePreview_PRResolvesHeadRefAndLinks(t *testing.T) {
+	store := previewStore()
+	gh := fakeGitHub{pr: github.PullRequest{Number: 7, State: "open", HeadRef: "contributor:feat", HTMLURL: "https://github.com/o/r/pull/7"}}
+	svc := newSvcGH(store, gh, &fakeRecorder{})
+
+	if _, err := svc.CreatePreview(authedCtx(), CreatePreviewInput{ServiceID: testServiceID, ServerID: testServerID, PRNumber: 7}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	p := store.insertedPreview
+	// The PR's head ref is what gets built; the route_key is keyed by PR number (stable across
+	// pushes); the PR is linked back via its URL.
+	if p.GitRef != "contributor:feat" {
+		t.Errorf("git_ref = %q, want the PR head ref", p.GitRef)
+	}
+	if p.RouteKey != testServiceID+"-pr-7" {
+		t.Errorf("route_key = %q, want service id + pr-7", p.RouteKey)
+	}
+	if p.PRNumber != 7 || p.PRURL != "https://github.com/o/r/pull/7" {
+		t.Errorf("inserted = %+v, want PR number + URL linked", p)
+	}
+}
+
+func TestCreatePreview_RequiresExactlyOneOfBranchOrPR(t *testing.T) {
+	svc := newSvcGH(previewStore(), fakeGitHub{}, &fakeRecorder{})
+	// Neither.
+	_, err := svc.CreatePreview(authedCtx(), CreatePreviewInput{ServiceID: testServiceID, ServerID: testServerID})
+	wantKind(t, err, problem.KindInvalidInput)
+	// Both.
+	_, err = svc.CreatePreview(authedCtx(), CreatePreviewInput{ServiceID: testServiceID, ServerID: testServerID, Branch: "x", PRNumber: 3})
+	wantKind(t, err, problem.KindInvalidInput)
+}
+
+func TestCreatePreview_RejectsNonPublicGit(t *testing.T) {
+	store := previewStore()
+	oauth := gitPublicService()
+	oauth.SourceAccess = "oauth"
+	store.svc = oauth
+	svc := newSvcGH(store, fakeGitHub{}, &fakeRecorder{})
+	_, err := svc.CreatePreview(authedCtx(), CreatePreviewInput{ServiceID: testServiceID, ServerID: testServerID, Branch: "x"})
+	wantKind(t, err, problem.KindInvalidInput)
+	if store.insertedPreview.RouteKey != "" {
+		t.Error("a non-public git service must not insert a preview")
+	}
+}
+
+func TestCreatePreview_RejectsNonGitService(t *testing.T) {
+	store := previewStore()
+	store.svc = imageService()
+	svc := newSvcGH(store, fakeGitHub{}, &fakeRecorder{})
+	_, err := svc.CreatePreview(authedCtx(), CreatePreviewInput{ServiceID: testServiceID, ServerID: testServerID, Branch: "x"})
+	wantKind(t, err, problem.KindInvalidInput)
+}
+
+func TestCreatePreview_PRNotFoundSurfaces(t *testing.T) {
+	store := previewStore()
+	svc := newSvcGH(store, fakeGitHub{prErr: github.ErrNotFound}, &fakeRecorder{})
+	_, err := svc.CreatePreview(authedCtx(), CreatePreviewInput{ServiceID: testServiceID, ServerID: testServerID, PRNumber: 99})
+	wantKind(t, err, problem.KindNotFound)
+	if store.insertedPreview.RouteKey != "" {
+		t.Error("a failed PR lookup must not insert a preview")
+	}
+}
+
+func TestPreviewRouteKey_TruncatesLongBranchWithHash(t *testing.T) {
+	long := strings.Repeat("very-long-branch-name", 5)
+	key := previewRouteKey(testServiceID, 0, long)
+	if len(key) > maxRouteKeyLen {
+		t.Errorf("route_key length = %d, want <= %d", len(key), maxRouteKeyLen)
+	}
+	// Distinct long refs must produce distinct keys (hash tail).
+	if other := previewRouteKey(testServiceID, 0, long+"-x"); other == key {
+		t.Error("distinct long refs collided on the same route_key")
 	}
 }
 
@@ -595,6 +754,74 @@ func TestPollDeployment_GitClaimCarriesSourceAndBuildTag(t *testing.T) {
 	}
 	if claimed.BuiltImageTag != "plorigo-build:"+testDeployID {
 		t.Errorf("built tag = %q, want deterministic per-deployment tag", claimed.BuiltImageTag)
+	}
+}
+
+func TestPollDeployment_PreviewIsolatesNetworkAndWithholdsSecrets(t *testing.T) {
+	const routeKey = testServiceID + "-pr-7"
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		claimDep: Deployment{
+			ID: testDeployID, ServiceID: testServiceID, EnvironmentID: testEnvID, ContainerPort: 8080,
+			Kind: KindPreview, RouteKey: routeKey,
+			SourceKind: SourceGit, CloneURL: "https://github.com/o/r.git", GitRef: "feature",
+		},
+		claimOK: true,
+		config: []ConfigForDeploy{
+			{Type: "variable", Scope: "service", Key: "FOO", Value: strptr("bar")},
+			{Type: "secret", Scope: "environment", Key: "TOKEN", Ciphertext: []byte("sealed:s3cr3t")},
+		},
+		svc: ServiceForDeploy{Slug: "web", Visibility: "public"}, svcOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+
+	claimed, err := svc.PollDeployment(context.Background(), PollInput{AgentID: testAgentID, Credential: "plag_x"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// A preview routes and replaces by its own route_key, not the bare service id.
+	if claimed.AppLabel != routeKey {
+		t.Errorf("app label = %q, want the preview route_key %q", claimed.AppLabel, routeKey)
+	}
+	// It joins its OWN isolated network so it cannot reach production's siblings.
+	if claimed.NetworkName != "plorigo-preview-"+routeKey {
+		t.Errorf("network = %q, want the isolated preview network", claimed.NetworkName)
+	}
+	// Non-secret variables still flow; the environment's decrypted secrets are withheld.
+	if claimed.Env["FOO"] != "bar" {
+		t.Errorf("FOO = %q, want non-secret variable injected", claimed.Env["FOO"])
+	}
+	if _, ok := claimed.Env["TOKEN"]; ok {
+		t.Errorf("TOKEN present in preview env (%q); secrets must be withheld from previews", claimed.Env["TOKEN"])
+	}
+}
+
+func TestReportDeployment_PreviewSupersedesByRouteKeyAndKeepsServiceURL(t *testing.T) {
+	const routeKey = testServiceID + "-pr-7"
+	store := &fakeStore{
+		credAgentID: testAgentID, credServerID: testServerID, credOK: true,
+		getDep: Deployment{
+			ID: testDeployID, ServiceID: testServiceID, ServerID: testServerID, EnvironmentID: testEnvID,
+			Kind: KindPreview, RouteKey: routeKey,
+		},
+		getOK: true,
+	}
+	svc := newSvc(store, fakeAuthz{}, &fakeRecorder{})
+	err := svc.ReportDeployment(context.Background(), ReportInput{
+		AgentID: testAgentID, Credential: "plag_x", DeploymentID: testDeployID,
+		Status: StatusRunning, HostPort: 32768, ContainerID: "abc",
+		RouteURL: "http://" + routeKey + ".localhost:8083",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Supersede is keyed by the preview's route_key, so it never touches production.
+	if !store.superseded || store.supersededWith != routeKey {
+		t.Errorf("supersede = (%v, %q), want keyed by the preview route_key", store.superseded, store.supersededWith)
+	}
+	// A preview must NOT overwrite the service's cached live URL (that tracks production only).
+	if store.routeServiceID != "" || store.routeURLReported != "" {
+		t.Errorf("route cache = (%q, %q), want untouched for a preview", store.routeServiceID, store.routeURLReported)
 	}
 }
 
