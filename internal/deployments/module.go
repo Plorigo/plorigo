@@ -25,7 +25,10 @@ type Deps struct {
 	// GitHub resolves a pull request to its head ref + URL when creating a PR preview.
 	// Satisfied by *github.Client (the same client the sources module uses).
 	GitHub GitHubClient
-	Log    *slog.Logger
+	// Sources mints a short-lived installation token for a private (GitHub App-backed) source at
+	// deploy time. Satisfied by *sources.Service (deployments never imports the sources module).
+	Sources SourceTokens
+	Log     *slog.Logger
 }
 
 // Module is the deployments module: the only wiring surface other code touches. It
@@ -38,7 +41,7 @@ type Module struct {
 func New(d Deps) *Module {
 	store := newPostgresStore(d.DB)
 	return &Module{
-		service: newService(d.DB, store, d.Policy, d.Audit, d.Crypto, d.GitHub, d.Log),
+		service: newService(d.DB, store, d.Policy, d.Audit, d.Crypto, d.GitHub, d.Sources, d.Log),
 	}
 }
 

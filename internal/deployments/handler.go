@@ -165,6 +165,7 @@ func (h *gatewayHandler) PollDeployment(ctx context.Context, req *connect.Reques
 		BasicAuthUser: claimed.BasicAuthUser,
 		BasicAuthHash: claimed.BasicAuthHash,
 		RouteHost:     claimed.RouteHost,
+		GitCredential: claimed.GitCredential,
 	}), nil
 }
 

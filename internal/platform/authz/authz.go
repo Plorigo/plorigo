@@ -88,6 +88,12 @@ const (
 	ActionServerSetupKeyRotate Action = "server_setup.key.rotate"
 	ActionServerSetupKeyRevoke Action = "server_setup.key.revoke"
 	ActionServerSetupKeyRead   Action = "server_setup.key.read"
+	// ActionGitHubAppRegister governs registering (or replacing) the instance's server-wide GitHub
+	// App via the manifest flow. The App is shared by every workspace, so this is a high-privilege,
+	// owner-only setup action; it is authorized against the caller's own workspace (any workspace
+	// owner may run it). The resulting App private key + webhook secret are sealed at rest and never
+	// returned, so there is no separate read action. See docs/architecture/sources.md.
+	ActionGitHubAppRegister Action = "github_app.register"
 )
 
 // Workspace roles, most privileged first. Stored in workspace_members.role and

@@ -36,9 +36,9 @@ import { serviceClient } from "@/lib/clients";
 import {
   useAgents,
   useBranches,
+  useConnections,
   useEnvironments,
   useFrameworkDetection,
-  useGitHubConnection,
   useProjects,
   useRepositories,
   useServers,
@@ -93,14 +93,8 @@ export function NewDeploymentPage() {
   const projects = useProjects(workspaceId);
   const servers = useServers(workspaceId);
   const agents = useAgents(workspaceId);
-  const connection = useGitHubConnection(workspaceId);
-  const configured = connection.data?.configured ?? false;
-  const connected = connection.data?.connected ?? false;
-  const githubLogin = connection.data?.connection?.githubLogin ?? "";
-  // The GitHub App is independent of OAuth: it enables PRIVATE-repo previews (short-lived
-  // per-installation tokens) and webhook-driven previews.
-  const appConfigured = connection.data?.appConfigured ?? false;
-  const appConnected = connection.data?.appConnected ?? false;
+  // A workspace's integrations (connections). The import lane picks one, then lists its repos.
+  const connections = useConnections(workspaceId);
 
   // Target. Selections use an override-or-default shape: an empty override means "follow the
   // computed default" (derived below from freshly loaded data); the Select onChange records an
@@ -120,7 +114,8 @@ export function NewDeploymentPage() {
   const [quickPort, setQuickPort] = useState("80");
   // The debounced repo URL fed to framework detection (empty disables the preview).
   const [detectRepo, setDetectRepo] = useState("");
-  // Import-a-repo (the connected account).
+  // Import-a-repo (from a chosen integration).
+  const [selectedConnectionId, setSelectedConnectionId] = useState("");
   const [repoFilter, setRepoFilter] = useState("");
   const [selectedRepoFullName, setSelectedRepoFullName] = useState("");
   const [repoBranch, setRepoBranch] = useState("");
@@ -144,12 +139,18 @@ export function NewDeploymentPage() {
         : (projectList[0]?.id ?? "");
 
   const environments = useEnvironments(projectId);
-  const repos = useRepositories(workspaceId, connected);
+  // Default to the workspace's first connection; an explicit pick wins.
+  const connList = connections.data?.connections ?? [];
+  const connectionId =
+    selectedConnectionId && connList.some((c) => c.id === selectedConnectionId)
+      ? selectedConnectionId
+      : (connList[0]?.id ?? "");
+  const repos = useRepositories(connectionId);
   const selectedRepo = useMemo(
     () => repos.data?.find((r) => r.fullName === selectedRepoFullName),
     [repos.data, selectedRepoFullName],
   );
-  const branches = useBranches(workspaceId, selectedRepo?.owner ?? "", selectedRepo?.name ?? "");
+  const branches = useBranches(connectionId, selectedRepo?.owner ?? "", selectedRepo?.name ?? "");
   // Preview how the quick-deploy Git URL would build (server-side framework detection — the
   // same internal/builder logic the agent runs, so the preview matches what gets built).
   const detection = useFrameworkDetection(detectRepo, "");
@@ -160,14 +161,11 @@ export function NewDeploymentPage() {
     const params = new URLSearchParams(window.location.search);
     const status = params.get("github");
     if (!status) return;
-    if (status === "connected") {
-      toast.success("GitHub connected");
-      void queryClient.invalidateQueries({ queryKey: ["githubConnection"] });
-    } else if (status === "app_connected") {
-      toast.success("GitHub App installed");
-      void queryClient.invalidateQueries({ queryKey: ["githubConnection"] });
+    if (status === "connected" || status === "app_connected" || status === "app_registered") {
+      toast.success("Integration connected");
+      void queryClient.invalidateQueries({ queryKey: ["connections"] });
     } else if (status === "error") {
-      toast.error(params.get("reason") || "Could not connect GitHub");
+      toast.error(params.get("reason") || "Could not connect");
     }
     params.delete("github");
     params.delete("reason");
@@ -271,25 +269,6 @@ export function NewDeploymentPage() {
   const slugPreview = slugify(name);
   const serverLabel = (servers.data ?? []).find((s) => s.id === serverId)?.name ?? "the selected server";
 
-  function startConnect() {
-    // Return to this add-service flow after GitHub authorizes — the OAuth handler defaults to
-    // /projects otherwise. The server's safeReturnPath strips any query, so we send a clean
-    // path; the page re-resolves the target project from the active scope on return.
-    const returnTo = encodeURIComponent("/deployments/new");
-    window.location.assign(
-      `/api/github/connect?workspace_id=${encodeURIComponent(workspaceId)}&return_to=${returnTo}`,
-    );
-  }
-
-  // startAppInstall sends the browser to GitHub's App install page; on return the setup callback
-  // ties the new installation to this workspace, enabling private-repo previews.
-  function startAppInstall() {
-    if (!workspaceId) return;
-    const returnTo = encodeURIComponent("/deployments/new");
-    window.location.assign(
-      `/api/github/app/install?workspace_id=${encodeURIComponent(workspaceId)}&return_to=${returnTo}`,
-    );
-  }
 
   // After creating a service: a build that enqueued lands on the deployment; otherwise (an
   // OAuth/private git service that can't build yet) lands on the new service detail page.
@@ -332,7 +311,7 @@ export function NewDeploymentPage() {
   // environment + the shared visibility/server/deployNow).
   type ServiceSource = Pick<
     Parameters<typeof serviceClient.createService>[0],
-    "name" | "sourceKind" | "imageRef" | "repoUrl" | "owner" | "repo" | "branch" | "containerPort"
+    "name" | "sourceKind" | "imageRef" | "repoUrl" | "connectionId" | "owner" | "repo" | "branch" | "containerPort"
   >;
 
   // createInEnvironments creates the SAME service in EVERY selected environment (each gets its
@@ -416,12 +395,11 @@ export function NewDeploymentPage() {
     );
   }
 
-  // Create a service from a connected-account (OAuth) repository. Building an OAuth repo isn't
-  // supported yet (the agent gets no credential this slice), so deployNow can't enqueue a
-  // build — each service is created and (for one environment) the user lands on its detail page.
-  function createOAuthGitService(owner: string, repo: string, branch: string, key: string) {
+  // Create a service from a repo reached through the chosen integration. An App-backed connection is
+  // buildable (deployNow enqueues a build); an OAuth connection is recorded without a first build.
+  function createConnectionGitService(owner: string, repo: string, branch: string, key: string) {
     void runCreate(
-      { name: name.trim() || repo, sourceKind: "git", owner, repo, branch: branch.trim() },
+      { name: name.trim() || repo, sourceKind: "git", connectionId, owner, repo, branch: branch.trim() },
       key,
       "Could not create the service",
     );
@@ -730,66 +708,58 @@ export function NewDeploymentPage() {
           </Panel>
 
           <div className="grid gap-6 lg:grid-cols-2">
-            {/* Import Git Repository — the connected account's repos. */}
+            {/* Import Git Repository — from a connected integration. */}
             <Panel className="flex flex-col overflow-hidden">
               <SectionHeader
                 icon={GitFork}
                 title="Import Git Repository"
-                subtitle={connected && githubLogin ? `Connected as ${githubLogin}` : "Connect GitHub to import your repos."}
-                count={connected ? filteredRepos.length : undefined}
+                subtitle={connList.length ? "Pick an integration, then a repository." : "Connect an integration to import repositories."}
+                count={connList.length ? filteredRepos.length : undefined}
               >
-                {connected && (
+                {connList.length > 0 && (
                   <SearchInput value={repoFilter} onChange={setRepoFilter} placeholder="Search repositories…" />
                 )}
               </SectionHeader>
 
-              {appConfigured && (
-                <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground">
-                  {appConnected ? (
-                    <span>GitHub App installed — private-repo previews are enabled for this workspace.</span>
-                  ) : (
-                    <>
-                      <span>Install the GitHub App to enable private-repo previews.</span>
-                      <button
-                        type="button"
-                        onClick={startAppInstall}
-                        disabled={!workspaceId}
-                        className="shrink-0 font-medium text-blue-400 hover:text-blue-300 hover:underline disabled:opacity-50"
-                      >
-                        Install GitHub App
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {!configured && !connection.isLoading ? (
-                <div className="p-4 text-sm text-muted-foreground">
-                  GitHub OAuth isn't configured on this server. Set <code>GITHUB_OAUTH_CLIENT_ID</code> and{" "}
-                  <code>GITHUB_OAUTH_CLIENT_SECRET</code> to import account repos, or paste a public repository URL in
-                  the box above.
-                </div>
-              ) : connection.isLoading ? (
+              {connections.isLoading ? (
                 <ListSkeleton />
-              ) : !connected ? (
-                <div className="space-y-3 p-4">
-                  <p className="text-sm text-muted-foreground">
-                    Connect your GitHub account to import a repository. You'll be redirected to GitHub to authorize,
-                    then back here.
+              ) : connList.length === 0 ? (
+                <div className="space-y-3 p-4 text-sm text-muted-foreground">
+                  <p>
+                    No integrations connected. Add one to import repositories (and deploy private repos with previews),
+                    or paste a public repository URL in the box above.
                   </p>
-                  <Button type="button" onClick={startConnect} disabled={!workspaceId}>
+                  <Button type="button" onClick={() => window.location.assign("/integrations")}>
                     <GitFork className="h-4 w-4" aria-hidden="true" />
-                    Connect GitHub
+                    Manage integrations
                   </Button>
                 </div>
-              ) : repos.isLoading ? (
-                <ListSkeleton />
-              ) : filteredRepos.length === 0 ? (
-                <p className="p-4 text-sm text-muted-foreground">
-                  {repos.data?.length ? "No repositories match your search." : "No repositories found on this account."}
-                </p>
               ) : (
-                <div className="max-h-[24rem] divide-y divide-border overflow-y-auto">
+                <>
+                  <div className="border-b border-border px-4 py-2.5">
+                    <Select
+                      value={connectionId}
+                      onChange={(e) => {
+                        setSelectedConnectionId(e.target.value);
+                        setSelectedRepoFullName("");
+                      }}
+                      aria-label="Integration"
+                    >
+                      {connList.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {(c.accountLogin || c.provider) + (c.kind === "app" ? " (App)" : " (OAuth)")}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  {repos.isLoading ? (
+                    <ListSkeleton />
+                  ) : filteredRepos.length === 0 ? (
+                    <p className="p-4 text-sm text-muted-foreground">
+                      {repos.data?.length ? "No repositories match your search." : "No repositories found for this integration."}
+                    </p>
+                  ) : (
+                    <div className="max-h-[24rem] divide-y divide-border overflow-y-auto">
                   {filteredRepos.map((r) => {
                     const isSel = selectedRepoFullName === r.fullName;
                     return (
@@ -847,7 +817,7 @@ export function NewDeploymentPage() {
                             <Button
                               size="sm"
                               disabled={busy || !canDeploy || !repoBranch}
-                              onClick={() => createOAuthGitService(r.owner, r.name, repoBranch, `repo:${r.fullName}`)}
+                              onClick={() => createConnectionGitService(r.owner, r.name, repoBranch, `repo:${r.fullName}`)}
                             >
                               {busyKey === `repo:${r.fullName}` ? "Adding…" : "Add service"}
                             </Button>
@@ -856,12 +826,14 @@ export function NewDeploymentPage() {
                       </div>
                     );
                   })}
-                </div>
-              )}
-              {connected && (repos.data?.length ?? 0) >= 100 && (
-                <p className="border-t border-border p-3 text-xs text-muted-foreground">
-                  Showing the 100 most recently updated repositories. Use search to find others.
-                </p>
+                    </div>
+                  )}
+                  {(repos.data?.length ?? 0) >= 100 && (
+                    <p className="border-t border-border p-3 text-xs text-muted-foreground">
+                      Showing the 100 most recently updated repositories. Use search to find others.
+                    </p>
+                  )}
+                </>
               )}
             </Panel>
 

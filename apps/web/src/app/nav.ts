@@ -5,6 +5,7 @@ import {
   HardDrive,
   Home,
   Layers3,
+  Plug,
   Rocket,
   Server,
   Shield,
@@ -23,6 +24,7 @@ export type NavTo =
   | "/servers"
   | "/variables"
   | "/backups"
+  | "/integrations"
   | "/security"
   | "/team"
   | "/activity";
@@ -53,6 +55,7 @@ export const navItems: NavItem[] = [
   { label: "Servers", to: "/servers", icon: Server, description: "Owned infrastructure", scope: "workspace" },
   { label: "Environment Variables", to: "/variables", projectTo: "/projects/$projectId/variables", icon: Layers3, description: "Variables and secrets", scope: "project" },
   { label: "Backups", to: "/backups", icon: HardDrive, description: "Recovery and restore", scope: "workspace" },
+  { label: "Integrations", to: "/integrations", icon: Plug, description: "GitHub App and OAuth", scope: "workspace" },
   { label: "Security", to: "/security", icon: Shield, description: "Production guardrails", scope: "workspace" },
   { label: "Team", to: "/team", icon: Users, description: "Members and access", scope: "workspace" },
   { label: "Activity", to: "/activity", projectTo: "/projects/$projectId/activity", icon: Clock3, description: "Audit-ready timeline", scope: "project" },

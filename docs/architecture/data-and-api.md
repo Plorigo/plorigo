@@ -90,13 +90,20 @@ verification time; automatic HTTPS is a later slice.
   management key is **write-only** (no RPC returns it); only its fingerprint, public key, and
   lifecycle timestamps are readable — see [server-management.md](./server-management.md). A `git` **service** records how the repo is reached in an `access` column
   (`oauth` | `public` | `app`); a **public** source has a **NULL `connection_id`** and stores no
-  credential at all, so `connection_id` is nullable and the reads `LEFT JOIN source_connections`.
+  credential at all, so `connection_id` is nullable and the reads `LEFT JOIN source_connections`. A
+  **public** and an **app** (App-backed, private) source are **buildable**; an **oauth** source is
+  discovery-only. A workspace may hold **many** `source_connections` (rows keyed by `provider` +
+  `kind` + account/installation, no one-per-workspace UNIQUE); an `app`/`oauth` service links the
+  **specific** connection it builds from, and the deploy path mints that connection's short-lived
+  token per claim (see [sources.md](./sources.md)).
 - **`env_vars` are service-scoped** (`env_vars.service_id`), since each service is its own app.
   **`secrets` stay environment-scoped** — a deliberate asymmetry this round; a follow-up may
   align them (see [security.md](./security.md)).
 - A `deployments` row records a **`source_kind`** (`image` | `git`). A `git` deployment also
-  stores `clone_url`, `git_ref`, `source_access` (`public` only for now), and the
+  stores `clone_url`, `git_ref`, `source_access` (`public` or `app`), and the
   agent-reported `commit_sha` / `built_image_ref`; `image_ref` is empty until/unless built. The
+  clone URL is always credential-free; a private (`app`) build's token is sent to the agent
+  out-of-band in the claim, never stored on the row. The
   dashboard triggers a redeploy with `DeploymentService.CreateDeploymentForService`, which
   resolves the service's source **server-side** (the request carries no repo URL) — see
   [deployment-engine.md](./deployment-engine.md).

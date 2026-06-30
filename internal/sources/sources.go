@@ -1,59 +1,61 @@
-// Package sources owns a workspace's connection to a Git provider (GitHub via OAuth in
-// this slice) and each project's connected repository + branch. It is a PRIVILEGED,
-// project-scoped module: every mutation is authorized via the neutral authz.Authorizer
-// port (satisfied by the policy module) before it runs, and audited in the same
-// transaction. A project source is project-scoped, so the owning workspace is resolved
-// through the parent project (see store.go).
+// Package sources owns a workspace's integrations — its connections to Git providers (GitHub today;
+// GitLab/etc. via the providers seam later). A workspace may have MANY connections: several OAuth
+// accounts and/or App installations, across providers. Each connection is one row; a service
+// references the specific connection it builds from (services.connection_id). All VCS access goes
+// through the providers.Registry, so this module is the single provider-aware seam — services,
+// deployments, and webhooks reach providers only through it.
 //
-// The OAuth access token is ENCRYPTED at rest (AES-256-GCM via the SecretBox port,
-// keyed by APP_MASTER_KEY). Unlike a secret it is OPENED server-side to call the
-// provider on the user's behalf, but it remains WRITE-ONLY on the API: no RPC returns
-// it and it is never logged. Building/cloning from a connected source is a later slice;
-// this module records and displays the connection only. See
-// docs/architecture/security.md and modules.md.
+// Credentials are control-plane-only: an OAuth token is sealed at rest (AES-256-GCM via SecretBox)
+// and opened only to call the provider; an App connection stores only an installation_id and mints
+// short-lived tokens on demand. Neither is ever returned by an RPC or logged. See
+// docs/architecture/security.md and sources.md.
 package sources
 
 import (
 	"context"
-	"net/url"
 	"time"
 )
 
-// provider is the OAuth Git provider; providerApp is a GitHub App installation. Both are stored on
-// source_connections rows (one of each per workspace) so the schema and queries stay
-// provider-agnostic. See 00030_github_app.sql.
+// Connection kinds. A connection is reached either with an OAuth token or via an App installation.
 const (
-	provider    = "github"
-	providerApp = "github_app"
+	kindOAuth = "oauth"
+	kindApp   = "app"
 )
 
-// Connection is a workspace's link to a Git provider account (one per workspace). It
-// carries metadata only — the sealed OAuth token never appears here.
+// Connection is one integration: a workspace's link to a provider account (oauth) or App
+// installation (app). Metadata only — the sealed token never appears here.
 type Connection struct {
-	ID           string
-	WorkspaceID  string
-	Provider     string
-	GitHubLogin  string
-	GitHubUserID *int64
-	Scopes       string
-	ConnectedBy  *string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID             string
+	WorkspaceID    string
+	Provider       string // "github" (providers.Registry id)
+	Kind           string // "oauth" | "app"
+	AccountLogin   string // the connected account/org login
+	AccountID      *int64
+	InstallationID *string // app connections only
+	Scopes         string  // oauth connections only
+	ConnectedBy    *string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
-// ConnectionStatus is what GetConnection returns: whether the server has OAuth configured at all,
-// whether this workspace is connected (Connection set if so), and the same for the GitHub App
-// (configured server-side + an installation connected for this workspace).
-type ConnectionStatus struct {
-	Configured    bool
-	Connected     bool
-	Connection    Connection
-	AppConfigured bool
-	AppConnected  bool
+// ProviderStatus reports, per provider, what the SERVER has configured so the dashboard can offer
+// the right connect actions (and show "coming soon" for providers that exist but aren't configured).
+type ProviderStatus struct {
+	Provider        string
+	DisplayName     string
+	OAuthConfigured bool
+	AppConfigured   bool
+	Available       bool // implemented at all (true for GitHub)
 }
 
-// Repository is a candidate repo the connected account can access, offered in the
-// dashboard's picker. It is never persisted.
+// ListConnectionsResult is what ListConnections returns: the workspace's connections plus the
+// per-provider server-config status.
+type ListConnectionsResult struct {
+	Connections []Connection
+	Providers   []ProviderStatus
+}
+
+// Repository is a candidate repo a connection can access, offered in the dashboard's picker.
 type Repository struct {
 	Owner         string
 	Name          string
@@ -64,103 +66,94 @@ type Repository struct {
 	Description   string
 }
 
-// ListReposInput lists repositories the workspace's connection can access. Query is an
-// optional case-insensitive filter on full name; Page is 1-based (0 = first page).
+// ResolvedRepo is the validated repo facts the services module needs to record a git service from a
+// chosen connection (returned by ValidateRepo). Buildable comes from the provider (App installs are
+// buildable; OAuth is discovery-only for GitHub).
+type ResolvedRepo struct {
+	Owner         string
+	Name          string
+	FullName      string
+	DefaultBranch string
+	HTMLURL       string
+	IsPrivate     bool
+	Branch        string // resolved (validated, or defaulted to DefaultBranch)
+	Provider      string
+	Kind          string
+	AccountLogin  string
+	Buildable     bool
+}
+
+// ListReposInput lists repositories a connection can access. Query filters full name
+// (case-insensitive); Page is 1-based (0 = first page).
 type ListReposInput struct {
-	WorkspaceID string
-	Query       string
-	Page        int
+	ConnectionID string
+	Query        string
+	Page         int
 }
 
-// BeginAuthInput starts the OAuth flow for a workspace.
-type BeginAuthInput struct {
+// BeginConnectInput starts a connect flow (OAuth or App install) for a workspace + provider.
+type BeginConnectInput struct {
 	WorkspaceID string
+	Provider    string
 }
 
-// BeginAuthResult is what the OAuth begin step returns: the provider URL to redirect
-// the browser to, and the sealed state to set as a cookie and verify on callback.
+// BeginAuthResult is what a begin step returns: the URL to redirect the browser to and the sealed
+// state to set as a cookie and verify on callback.
 type BeginAuthResult struct {
 	AuthorizeURL string
 	State        string
 }
 
-// CompleteAuthInput carries the OAuth callback parameters and the sealed state cookie.
-type CompleteAuthInput struct {
+// CompleteOAuthInput carries the OAuth callback params + sealed state cookie. Provider comes from the
+// route the callback was served on.
+type CompleteOAuthInput struct {
+	Provider    string
 	Code        string
-	State       string // the state query param echoed back by the provider
-	CookieState string // the sealed state set by the begin step
+	State       string
+	CookieState string
 }
 
-// CompleteAuthResult is what the OAuth callback step returns, for the redirect back to
-// the dashboard.
-type CompleteAuthResult struct {
-	WorkspaceID string
-	GitHubLogin string
-}
-
-// OAuthConfig is the server's GitHub OAuth App configuration, injected from config.
-type OAuthConfig struct {
-	ClientID     string
-	ClientSecret string
-	Scopes       string
-	RedirectURL  string
-}
-
-// Configured reports whether an OAuth App is configured (gates the connect flow).
-func (c OAuthConfig) Configured() bool {
-	return c.ClientID != "" && c.ClientSecret != ""
-}
-
-// AppConfig is the server's GitHub App configuration, injected from config. Slug builds the
-// installation URL; the App id + private key live on the GitHubClient (for minting tokens).
-type AppConfig struct {
-	AppID string
-	Slug  string
-}
-
-// Configured reports whether a GitHub App is configured (gates the install flow).
-func (c AppConfig) Configured() bool {
-	return c.AppID != "" && c.Slug != ""
-}
-
-// InstallURL is the URL that starts a GitHub App installation, carrying state so the setup callback
-// can tie the installation to the requesting workspace.
-func (c AppConfig) InstallURL(state string) string {
-	return "https://github.com/apps/" + c.Slug + "/installations/new?state=" + url.QueryEscape(state)
-}
-
-// CompleteAppInput carries the GitHub App setup-callback parameters and the sealed state cookie.
+// CompleteAppInput carries the App setup-callback params + sealed state cookie.
 type CompleteAppInput struct {
-	InstallationID string // the installation_id GitHub appends to the setup URL
-	SetupAction    string // "install" | "update" | "request"
-	State          string // the nonce echoed back by GitHub
-	CookieState    string // the sealed state set by the begin step
+	Provider       string
+	InstallationID string
+	SetupAction    string
+	State          string
+	CookieState    string
 }
 
-// Service is the surface other code (handlers, the OAuth HTTP handlers, internal/app,
-// tests) depends on. BeginGitHubAuth/CompleteGitHubAuth drive the browser OAuth flow
-// (called by the plain HTTP handlers); the rest back the SourceService RPCs — workspace
-// connection + repository/branch DISCOVERY. Connecting a repository to a service lives in
-// the services module (the repo is folded onto the service). No method ever returns the
-// access token.
-type Service interface {
-	BeginGitHubAuth(ctx context.Context, in BeginAuthInput) (BeginAuthResult, error)
-	CompleteGitHubAuth(ctx context.Context, in CompleteAuthInput) (CompleteAuthResult, error)
+// CompleteAuthResult is what a complete step returns, for the redirect back to the dashboard.
+type CompleteAuthResult struct {
+	WorkspaceID  string
+	AccountLogin string
+}
 
-	// GitHub App installation flow (mirrors the OAuth flow, but connects an installation rather
-	// than minting a user token). BeginAppInstall returns the install URL + sealed state;
-	// CompleteAppInstall stores the installation for the workspace on the setup callback.
-	BeginAppInstall(ctx context.Context, in BeginAuthInput) (BeginAuthResult, error)
+// Service is the surface other code depends on. Begin/Complete drive the browser connect flows
+// (called by the per-provider HTTP handlers); ListConnections/ListRepositories/ListBranches/
+// DisconnectConnection back the SourceService RPCs. InstallationToken/GetConnectionMeta/ValidateRepo
+// are internal seams (not policy-authorized) for the deployments + services modules. No method ever
+// returns a token.
+type Service interface {
+	BeginOAuth(ctx context.Context, in BeginConnectInput) (BeginAuthResult, error)
+	CompleteOAuth(ctx context.Context, in CompleteOAuthInput) (CompleteAuthResult, error)
+	BeginAppInstall(ctx context.Context, in BeginConnectInput) (BeginAuthResult, error)
 	CompleteAppInstall(ctx context.Context, in CompleteAppInput) (CompleteAuthResult, error)
 
-	GetConnection(ctx context.Context, workspaceID string) (ConnectionStatus, error)
-	DisconnectGitHub(ctx context.Context, workspaceID string) error
+	ListConnections(ctx context.Context, workspaceID string) (ListConnectionsResult, error)
+	DisconnectConnection(ctx context.Context, connectionID string) error
 	ListRepositories(ctx context.Context, in ListReposInput) ([]Repository, error)
-	ListBranches(ctx context.Context, workspaceID, owner, repo string) ([]string, error)
+	ListBranches(ctx context.Context, connectionID, owner, repo string) ([]string, error)
 
-	// InstallationToken mints a short-lived GitHub App installation access token for a workspace's
-	// connected installation, for server-side PRIVATE-repo reads (the deploy/preview path). It is
-	// NEVER returned by an RPC, logged, or sent to the agent. ok is false when no App installation
-	// is connected. This is an internal seam (credential-resolution), not policy-authorized.
-	InstallationToken(ctx context.Context, workspaceID string) (token string, ok bool, err error)
+	// InstallationToken mints a short-lived App installation token for the given connection, for
+	// server-side PRIVATE-repo reads (the deploy/preview path). ok is false when the connection is
+	// not an App connection. Internal seam — never returned by an RPC, logged, or (here) sent to the
+	// agent; the deployments service forwards it to the agent in the signed job.
+	InstallationToken(ctx context.Context, connectionID string) (token string, ok bool, err error)
+	// GetConnectionMeta returns a connection's metadata by id (provider, kind, workspace, account).
+	// Internal seam for the services module. ok is false when the connection does not exist.
+	GetConnectionMeta(ctx context.Context, connectionID string) (Connection, bool, error)
+	// ValidateRepo validates owner/repo (+ optional branch) against a connection's provider and
+	// returns the repo facts the services module records. Internal seam (the caller authorizes the
+	// service create).
+	ValidateRepo(ctx context.Context, connectionID, owner, repo, branch string) (ResolvedRepo, error)
 }

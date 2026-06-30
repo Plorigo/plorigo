@@ -27,6 +27,7 @@ func (h *handler) CreateService(ctx context.Context, req *connect.Request[contro
 		ImageRef:      req.Msg.GetImageRef(),
 		TemplateID:    req.Msg.GetTemplateId(),
 		RepoURL:       req.Msg.GetRepoUrl(),
+		ConnectionID:  req.Msg.GetConnectionId(),
 		Owner:         req.Msg.GetOwner(),
 		Repo:          req.Msg.GetRepo(),
 		Branch:        req.Msg.GetBranch(),

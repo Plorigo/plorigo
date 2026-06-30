@@ -258,6 +258,48 @@ func TestListUserRepos_QueryAndMapping(t *testing.T) {
 	}
 }
 
+func TestConvertManifest_ParsesNewAppCredentials(t *testing.T) {
+	var gotPath, gotMethod string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod = r.URL.Path, r.Method
+		_, _ = w.Write([]byte(`{"id":123,"slug":"plorigo-abc","name":"Plorigo","pem":"-----BEGIN RSA PRIVATE KEY-----\nx\n-----END RSA PRIVATE KEY-----\n","webhook_secret":"whsec","client_id":"Iv1.abc","client_secret":"cs","html_url":"https://github.com/apps/plorigo-abc"}`))
+	}))
+	defer ts.Close()
+
+	conv, err := newTestClient(ts).ConvertManifest(context.Background(), "tempcode")
+	if err != nil {
+		t.Fatalf("ConvertManifest: %v", err)
+	}
+	if conv.AppID != 123 || conv.Slug != "plorigo-abc" || conv.WebhookSecret != "whsec" || conv.ClientID != "Iv1.abc" || conv.PrivateKeyPEM == "" {
+		t.Fatalf("unexpected conversion: %+v", conv)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/app-manifests/tempcode/conversions" {
+		t.Errorf("request %s %q, want POST /app-manifests/tempcode/conversions", gotMethod, gotPath)
+	}
+}
+
+func TestListInstallationRepos_UnwrapsAndMaps(t *testing.T) {
+	var gotPath, gotPerPage string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotPerPage = r.URL.Query().Get("per_page")
+		// /installation/repositories wraps the array in a "repositories" object.
+		_, _ = w.Write([]byte(`{"total_count":1,"repositories":[{"name":"priv","full_name":"o/priv","owner":{"login":"o"},"private":true}]}`))
+	}))
+	defer ts.Close()
+
+	repos, err := newTestClient(ts).ListInstallationRepos(context.Background(), "ghs_installtok", ListReposOptions{})
+	if err != nil {
+		t.Fatalf("ListInstallationRepos: %v", err)
+	}
+	if len(repos) != 1 || repos[0].FullName != "o/priv" || !repos[0].Private {
+		t.Fatalf("unexpected repos: %+v", repos)
+	}
+	if gotPath != "/installation/repositories" || gotPerPage != "100" {
+		t.Errorf("request path=%q per_page=%q", gotPath, gotPerPage)
+	}
+}
+
 func TestGetAuthenticatedUser(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/user" {

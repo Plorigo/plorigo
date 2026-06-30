@@ -20,6 +20,17 @@ services:
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       EMAIL_FROM: ${EMAIL_FROM:-no-reply@plorigo.local}
+      # GitHub source integration is optional; unset values make the dashboard hide the connect
+      # options. OAuth = repo discovery/import; the App = private-repo deploys + PR previews.
+      # See docs/architecture/sources.md.
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      GITHUB_OAUTH_SCOPES: ${GITHUB_OAUTH_SCOPES:-repo}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_APP_PRIVATE_KEY: ${GITHUB_APP_PRIVATE_KEY:-}
+      GITHUB_APP_SLUG: ${GITHUB_APP_SLUG:-}
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      PLORIGO_PREVIEW_TTL_HOURS: ${PLORIGO_PREVIEW_TTL_HOURS:-72}
     ports:
       - "8080:8080"
     depends_on:

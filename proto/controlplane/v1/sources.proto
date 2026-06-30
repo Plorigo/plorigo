@@ -2,21 +2,36 @@ syntax = "proto3";
 
 package controlplane.v1;
 
-// A Connection is a workspace's link to a Git provider account (one per workspace).
-// It carries metadata only — the OAuth access token is sealed at rest and never
-// returned by any RPC (write-only, cf. Secret). See docs/architecture/security.md.
+// A Connection is one integration: a workspace's link to a Git provider account (kind "oauth") or
+// App installation (kind "app"). A workspace may have many. Metadata only — the OAuth access token
+// and App installation tokens are never returned by any RPC (write-only, cf. Secret). See
+// docs/architecture/security.md.
 message Connection {
-  string workspace_id = 1;
-  string provider = 2; // "github"
-  string github_login = 3;
-  string scopes = 4;
-  string connected_by = 5; // user id that authorized the connection
-  string created_at = 6; // RFC 3339
-  string updated_at = 7; // RFC 3339
+  string id = 1;
+  string workspace_id = 2;
+  string provider = 3;       // "github" (future: "gitlab")
+  string kind = 4;           // "oauth" | "app"
+  string account_login = 5;  // the connected account/org login
+  int64 account_id = 6;      // the provider's numeric account id (0 when unknown)
+  string installation_id = 7; // App connections only (non-secret id)
+  string scopes = 8;          // OAuth connections only
+  string connected_by = 9;    // user id that authorized the connection
+  string created_at = 10;     // RFC 3339
+  string updated_at = 11;     // RFC 3339
 }
 
-// A Repository is a candidate repo the connected account can access, returned by
-// ListRepositories so the dashboard can offer a picker. It is not persisted.
+// ProviderStatus reports, per provider, what the SERVER has configured, so the dashboard offers the
+// right connect actions (and shows providers that exist but aren't configured).
+message ProviderStatus {
+  string provider = 1;          // "github"
+  string display_name = 2;      // "GitHub"
+  bool oauth_configured = 3;     // server has OAuth client id/secret
+  bool app_configured = 4;       // server has an App (env or registered)
+  bool available = 5;            // provider implemented at all
+}
+
+// A Repository is a candidate repo a connection can access, returned by ListRepositories so the
+// dashboard can offer a picker. It is not persisted.
 message Repository {
   string owner = 1;
   string name = 2;
@@ -27,28 +42,19 @@ message Repository {
   string description = 7;
 }
 
-message GetConnectionRequest {
+message ListConnectionsRequest {
   string workspace_id = 1;
 }
 
-message GetConnectionResponse {
-  // Whether the server has GitHub OAuth configured (client id + secret present).
-  bool configured = 1;
-  // Whether this workspace has an active connection; connection is set when true.
-  bool connected = 2;
-  Connection connection = 3;
-  // Whether the server has a GitHub App configured (app id + private key + slug present), and
-  // whether this workspace has an App installation connected. The App enables PRIVATE-repo previews
-  // (via short-lived per-installation tokens) and webhook-driven previews. The install flow is the
-  // plain HTTP endpoint /api/github/app/install (it redirects to GitHub's install page).
-  bool app_configured = 4;
-  bool app_connected = 5;
+message ListConnectionsResponse {
+  repeated Connection connections = 1;
+  repeated ProviderStatus providers = 2;
 }
 
 message ListRepositoriesRequest {
-  string workspace_id = 1;
+  string connection_id = 1;
   string query = 2; // optional case-insensitive filter on full_name
-  int32 page = 3; // 1-based; 0 means the first page
+  int32 page = 3;   // 1-based; 0 means the first page
 }
 
 message ListRepositoriesResponse {
@@ -56,7 +62,7 @@ message ListRepositoriesResponse {
 }
 
 message ListBranchesRequest {
-  string workspace_id = 1;
+  string connection_id = 1;
   string owner = 2;
   string repo = 3;
 }
@@ -65,22 +71,22 @@ message ListBranchesResponse {
   repeated string branches = 1;
 }
 
-message DisconnectGitHubRequest {
-  string workspace_id = 1;
+message DisconnectConnectionRequest {
+  string connection_id = 1;
 }
 
-message DisconnectGitHubResponse {}
+message DisconnectConnectionResponse {}
 
-// SourceService manages a workspace's Git provider connection (GitHub OAuth, one per
-// workspace) and surfaces the repositories + branches it can access, for the dashboard's
-// pickers. The OAuth token is sealed at rest and used server-side to reach the provider; it
-// is never returned by any RPC. Connecting a repository to a SERVICE lives in
-// ServiceService (the repo is folded onto the service). The browser OAuth begin/callback
-// steps are plain HTTP endpoints (/api/github/connect, /api/github/callback), not RPCs,
-// because they set cookies and redirect. See docs/architecture/security.md.
+// SourceService manages a workspace's Git provider integrations (multiple per workspace, across
+// providers) and surfaces the repositories + branches each connection can access, for the
+// dashboard's pickers. Tokens are sealed/minted server-side and never returned by any RPC. Connecting
+// a repository to a SERVICE lives in ServiceService (the repo + chosen connection are folded onto the
+// service). The browser connect begin/callback steps are plain HTTP endpoints (e.g.
+// /api/github/connect, /api/github/app/install), not RPCs, because they set cookies and redirect.
+// See docs/architecture/security.md and sources.md.
 service SourceService {
-  rpc GetConnection(GetConnectionRequest) returns (GetConnectionResponse);
+  rpc ListConnections(ListConnectionsRequest) returns (ListConnectionsResponse);
   rpc ListRepositories(ListRepositoriesRequest) returns (ListRepositoriesResponse);
   rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse);
-  rpc DisconnectGitHub(DisconnectGitHubRequest) returns (DisconnectGitHubResponse);
+  rpc DisconnectConnection(DisconnectConnectionRequest) returns (DisconnectConnectionResponse);
 }

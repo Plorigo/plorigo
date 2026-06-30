@@ -27,8 +27,9 @@ func (a *App) githubConnectHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		returnTo := safeReturnPath(r.URL.Query().Get("return_to"))
 		ctx := principal.NewContext(r.Context(), a.resolveBrowserPrincipal(r))
-		res, err := a.sources.Service().BeginGitHubAuth(ctx, sources.BeginAuthInput{
+		res, err := a.sources.Service().BeginOAuth(ctx, sources.BeginConnectInput{
 			WorkspaceID: r.URL.Query().Get("workspace_id"),
+			Provider:    "github",
 		})
 		if err != nil {
 			a.redirectToDashboard(w, r, returnTo, "error", reasonFor(err))
@@ -74,7 +75,8 @@ func (a *App) githubCallbackHandler() http.Handler {
 		http.SetCookie(w, &http.Cookie{Name: oauthReturnCookie, Path: "/api/github", MaxAge: -1, HttpOnly: true, Secure: !a.cfg.Dev, SameSite: http.SameSiteLaxMode})
 
 		ctx := principal.NewContext(r.Context(), a.resolveBrowserPrincipal(r))
-		_, err := a.sources.Service().CompleteGitHubAuth(ctx, sources.CompleteAuthInput{
+		_, err := a.sources.Service().CompleteOAuth(ctx, sources.CompleteOAuthInput{
+			Provider:    "github",
 			Code:        r.URL.Query().Get("code"),
 			State:       r.URL.Query().Get("state"),
 			CookieState: cookieState,

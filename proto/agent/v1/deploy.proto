@@ -48,7 +48,8 @@ message PollDeploymentResponse {
   string app_label = 6;
   // Build-from-Git fields, set only when source_kind == "git". The agent clones
   // clone_url at git_ref, builds the Dockerfile to built_image_tag, then runs that tag.
-  // No credential is sent: this slice builds PUBLIC repositories only.
+  // A PUBLIC repo carries no credential (anonymous clone); a PRIVATE repo backed by the
+  // GitHub App carries a short-lived installation token in git_credential (below).
   string source_kind = 7;      // "image" | "git"
   string clone_url = 8;        // the repo to clone (git)
   string git_ref = 9;          // the branch/tag to build (git)
@@ -70,6 +71,12 @@ message PollDeploymentResponse {
   // ({slug}-pr-{n}-{hash}) so the URL reads nicely; empty for production, where the agent uses
   // app_label (the service id) for the host exactly as before.
   string route_host = 16;
+  // Short-lived git credential for cloning a PRIVATE repo, set only when source_kind == "git"
+  // and the service is backed by a GitHub App installation. It is a GitHub App installation
+  // access token (GitHub expires it within the hour), minted per claim by the control plane and
+  // used by the agent as the password of an x-access-token basic-auth on the clone — never
+  // embedded in clone_url, never logged, never persisted. Empty for public repos.
+  string git_credential = 17;
 }
 
 message ReportDeploymentRequest {

@@ -64,10 +64,10 @@ discriminator on the service's folded source (`oauth` | `public` | `app`; see
 - The per-workspace OAuth **access token** (`access = 'oauth'`) is **sealed at rest** with the
   same AES-256-GCM box and `APP_MASTER_KEY` as secrets. It is **write-only through the API**: no
   RPC returns it and it is **never logged**. It is decrypted only in-process to call the provider
-  (list repositories, read a repo/branch). It is **never sent to the agent**: building from a
-  private/OAuth repo is **not implemented**, so creating a service with a non-public git source
-  is rejected. Private reads use a short-lived **GitHub App installation token** minted per use
-  (below), not this broad, long-lived OAuth token.
+  (list repositories, read a repo/branch). It is **never sent to the agent**: an OAuth source is
+  **discovery only** (browse + import), so an `access = 'oauth'` service is recorded but **not
+  built** — this broad, long-lived token never leaves the control plane. **Private builds** use the
+  narrower, short-lived **GitHub App installation token** minted per use (below), not this token.
 - **Public repositories (`access = 'public'`) carry no credential at all.** The repo is read
   **unauthenticated** (empty token, no connection), so only genuinely public repos resolve — a
   private or missing repo is invisible to an anonymous request and surfaces as "not found". The
@@ -92,18 +92,35 @@ A workspace can also connect a **GitHub App installation** (`provider = 'github_
 narrower, per-repo, read-only path for **private** repositories and the basis for webhook-driven
 previews. Its credential model is deliberately tighter than OAuth's:
 
-- The **App private key** (`GITHUB_APP_PRIVATE_KEY`), **app id** (`GITHUB_APP_ID`), and **webhook
-  secret** (`GITHUB_WEBHOOK_SECRET`) are **server config**, held only in the control plane. None is
-  ever returned by an RPC, **logged**, or **sent to the agent**. When unset, the App features report
-  themselves as not configured and the UI hides them.
+- The **App private key**, **app id**, **slug**, and **webhook secret** are **server-wide config**,
+  held only in the control plane. They come from one of two places, **env first**: the
+  `GITHUB_APP_*` environment variables (operator-set, takes precedence), or — when those are unset —
+  a **sealed singleton row** (`github_app_config`) written by the dashboard's **automated
+  registration** (GitHub's App-manifest flow). When stored, the private key, webhook secret, and
+  OAuth client secret are **sealed at rest** (AES-256-GCM, `APP_MASTER_KEY`) and **write-only**: no
+  RPC returns them, they are never **logged**, and the private key/secret are never **sent to the
+  agent**. Registering is **owner-only** (`github_app.register`) since the app serves every
+  workspace; it is **audited**, and a DB leak exposes only ciphertext. When neither source is
+  configured, the App features report themselves as not configured and the UI offers registration.
 - **No long-lived token is stored.** Unlike OAuth, an App connection stores only the
-  **`installation_id`** (and the account login, for display) — never a token. To read a private
-  repo, the control plane signs a short-lived **RS256 app JWT** with the private key (≤10-minute
-  lifetime, held in memory only) and exchanges it for a **per-installation access token** that
+  **`installation_id`** (and the account login, for display) — never a token. A workspace may hold
+  **many** App connections (one per org it installs on) + OAuth connections; a service references the
+  specific connection it builds from. To read a private repo, the control plane signs a short-lived
+  **RS256 app JWT** with the private key (≤10-minute lifetime, held in memory only) and exchanges it
+  for that connection's **per-installation access token** that
   GitHub expires within the hour. The token is **cached in memory** until shortly before expiry,
-  used in-process to call GitHub, and **never persisted, returned, or sent to the agent**. So a
-  database leak exposes no GitHub credential for an App connection, and the blast radius is one
-  installation's granted repositories for at most an hour.
+  used in-process to call GitHub (repo/branch listing, validation), and **never persisted or
+  returned by an RPC**. So a database leak exposes no GitHub credential for an App connection, and
+  the blast radius is one installation's granted repositories for at most an hour.
+- **Private builds hand the agent a fresh token, scoped to one deploy.** To clone a private
+  (`access = 'app'`) repo, the control plane mints an installation token **when the agent claims the
+  deploy** and includes it in the signed job as `git_credential`. The agent applies it as the
+  password of an `x-access-token` HTTP basic-auth — it is **never embedded in the clone URL** (so it
+  can't leak into a log line or the stored URL), never written to the build log, and discarded after
+  the clone. This is the one credential that does reach the agent, and only for an App source: it is
+  short-lived (≤1h), single-deploy, and travels over the agent's TLS transport. The broad OAuth
+  token is still never sent. If no installation is connected when a private deploy is claimed, the
+  deployment is **failed** with a recoverable message instead of falling back to an anonymous clone.
 - The install handshake reuses the OAuth flow's protection: a **sealed, expiring, single-use
   `state`** bound to the initiating workspace + user (an `HttpOnly` cookie), verified on the setup
   callback (`/api/github/app/setup`) before the installation is recorded and **audited**.
@@ -121,11 +138,10 @@ previews. Its credential model is deliberately tighter than OAuth's:
 > grant with an OAuth App. The token is encrypted at rest and revoked on disconnect, but a
 > highly-privileged credential still exists while connected. Set `GITHUB_OAUTH_SCOPES=public_repo`
 > to limit it to public repositories. For an open-source app, the **public-repo path** avoids the
-> credential entirely (connect by URL, read anonymously) — and public **clone/build already needs
-> no credential**, since the agent only ever receives a clone URL. The narrower, per-repo,
-> read-only path for **private** clone/build is a **GitHub App** (a short-lived installation token
-> minted per use, no stored token — see above); wiring it into the build path lands with private
-> previews — see [ROADMAP.md](../../ROADMAP.md).
+> credential entirely (connect by URL, read anonymously) — the agent receives only a clone URL. The
+> narrower, per-repo, read-only path for **private** clone/build is a **GitHub App**: a short-lived
+> installation token is minted per claim and handed to the agent for that one deploy (no stored
+> token — see above). Connecting GitHub is covered in [sources.md](./sources.md).
 
 ### Server access & remote management (SSH)
 

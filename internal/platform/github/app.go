@@ -39,10 +39,22 @@ type instToken struct {
 	expires time.Time
 }
 
-// AppConfigured reports whether the client has GitHub App credentials and can mint installation
-// tokens. The OAuth/public methods work regardless.
-func (c *Client) AppConfigured() bool {
-	return c.appID != "" && c.appKeyPEM != ""
+// appCreds resolves the active GitHub App credentials: the dynamic provider when set (re-checked on
+// each call, so an App registered at runtime takes effect without a restart), otherwise the static
+// config. ok is false unless both an app id and a private key are present.
+func (c *Client) appCreds(ctx context.Context) (appID, privateKeyPEM string, ok bool) {
+	if c.appCredsFn != nil {
+		id, pem, present := c.appCredsFn(ctx)
+		return id, pem, present && id != "" && pem != ""
+	}
+	return c.appID, c.appKeyPEM, c.appID != "" && c.appKeyPEM != ""
+}
+
+// AppConfigured reports whether the client can act as a GitHub App (mint installation tokens). The
+// OAuth/public methods work regardless.
+func (c *Client) AppConfigured(ctx context.Context) bool {
+	_, _, ok := c.appCreds(ctx)
+	return ok
 }
 
 // InstallationToken returns a short-lived access token for a GitHub App installation, minting a new
@@ -50,7 +62,7 @@ func (c *Client) AppConfigured() bool {
 // App's repository permissions on that installation — the path by which Plorigo reads a PRIVATE
 // repo/PR. Callers must never return it through an RPC, log it, or send it to the agent.
 func (c *Client) InstallationToken(ctx context.Context, installationID string) (string, error) {
-	if !c.AppConfigured() {
+	if !c.AppConfigured(ctx) {
 		return "", errors.New("github: app credentials are not configured")
 	}
 	if strings.TrimSpace(installationID) == "" {
@@ -64,7 +76,7 @@ func (c *Client) InstallationToken(ctx context.Context, installationID string) (
 		return t.token, nil
 	}
 
-	jwt, err := c.appJWT(now)
+	jwt, err := c.appJWT(ctx, now)
 	if err != nil {
 		return "", err
 	}
@@ -127,10 +139,10 @@ type Installation struct {
 // GetInstallation reads a GitHub App installation by id, authenticating as the App (JWT). It is how
 // the install callback resolves the account a new installation belongs to.
 func (c *Client) GetInstallation(ctx context.Context, installationID string) (Installation, error) {
-	if !c.AppConfigured() {
+	if !c.AppConfigured(ctx) {
 		return Installation{}, errors.New("github: app credentials are not configured")
 	}
-	jwt, err := c.appJWT(time.Now())
+	jwt, err := c.appJWT(ctx, time.Now())
 	if err != nil {
 		return Installation{}, err
 	}
@@ -164,11 +176,82 @@ func (c *Client) GetInstallation(ctx context.Context, installationID string) (In
 	return Installation{ID: body.ID, Account: body.Account.Login, AccountID: body.Account.ID}, nil
 }
 
+// ManifestConversion is the result of exchanging a temporary manifest code for a freshly created
+// GitHub App: the new App's id, slug, private key PEM, webhook secret, and OAuth client
+// credentials. This is the one-time payload of GitHub's App-manifest flow — the private key and
+// webhook secret are sensitive and must be sealed at rest, never logged or returned by an RPC.
+type ManifestConversion struct {
+	AppID         int64
+	Slug          string
+	Name          string
+	PrivateKeyPEM string
+	WebhookSecret string
+	ClientID      string
+	ClientSecret  string
+	HTMLURL       string
+}
+
+// ConvertManifest exchanges the temporary code GitHub appends to the manifest redirect for the new
+// App's credentials (POST /app-manifests/{code}/conversions). The call needs no authentication —
+// the single-use code is the credential, and it expires within an hour. See
+// https://docs.github.com/apps/sharing-github-apps/registering-a-github-app-from-a-manifest.
+func (c *Client) ConvertManifest(ctx context.Context, code string) (ManifestConversion, error) {
+	if strings.TrimSpace(code) == "" {
+		return ManifestConversion{}, errors.New("github: a manifest code is required")
+	}
+	endpoint := c.apiBaseURL + "/app-manifests/" + url.PathEscape(code) + "/conversions"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return ManifestConversion{}, fmt.Errorf("github: build manifest conversion request: %w", err)
+	}
+	req.Header.Set("Accept", acceptJSON)
+	req.Header.Set("X-GitHub-Api-Version", apiVersion)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return ManifestConversion{}, fmt.Errorf("github: convert manifest: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode/100 != 2 {
+		return ManifestConversion{}, classify(resp)
+	}
+	var body struct {
+		ID            int64  `json:"id"`
+		Slug          string `json:"slug"`
+		Name          string `json:"name"`
+		PEM           string `json:"pem"`
+		WebhookSecret string `json:"webhook_secret"`
+		ClientID      string `json:"client_id"`
+		ClientSecret  string `json:"client_secret"`
+		HTMLURL       string `json:"html_url"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return ManifestConversion{}, fmt.Errorf("github: decode manifest conversion: %w", err)
+	}
+	if body.ID == 0 || body.PEM == "" {
+		return ManifestConversion{}, errors.New("github: manifest conversion response was missing the app id or private key")
+	}
+	return ManifestConversion{
+		AppID:         body.ID,
+		Slug:          body.Slug,
+		Name:          body.Name,
+		PrivateKeyPEM: body.PEM,
+		WebhookSecret: body.WebhookSecret,
+		ClientID:      body.ClientID,
+		ClientSecret:  body.ClientSecret,
+		HTMLURL:       body.HTMLURL,
+	}, nil
+}
+
 // appJWT mints a short-lived RS256 JSON Web Token that identifies the App to GitHub (the
-// credential used to request installation tokens). iat is backdated 60s to tolerate clock skew
-// between Plorigo and GitHub, per GitHub's guidance.
-func (c *Client) appJWT(now time.Time) (string, error) {
-	key, err := c.appPrivateKey()
+// credential used to request installation tokens), using the active credentials. iat is backdated
+// 60s to tolerate clock skew between Plorigo and GitHub, per GitHub's guidance.
+func (c *Client) appJWT(ctx context.Context, now time.Time) (string, error) {
+	appID, pem, ok := c.appCreds(ctx)
+	if !ok {
+		return "", errors.New("github: app credentials are not configured")
+	}
+	key, err := c.appPrivateKey(pem)
 	if err != nil {
 		return "", err
 	}
@@ -176,17 +259,27 @@ func (c *Client) appJWT(now time.Time) (string, error) {
 	claims := map[string]any{
 		"iat": now.Add(-60 * time.Second).Unix(),
 		"exp": now.Add(appJWTTTL).Unix(),
-		"iss": c.appID,
+		"iss": appID,
 	}
 	return signRS256(header, claims, key)
 }
 
-// appPrivateKey parses (once) and caches the App's RSA private key from its PEM.
-func (c *Client) appPrivateKey() (*rsa.PrivateKey, error) {
-	c.appKeyOnce.Do(func() {
-		c.appKey, c.appKeyErr = parseRSAPrivateKey(c.appKeyPEM)
-	})
-	return c.appKey, c.appKeyErr
+// appPrivateKey parses + caches the App's RSA private key, keyed by the PEM it came from. It
+// re-parses only when the PEM changes (e.g. after a runtime re-registration), so the common path is
+// a cache hit without paying the parse on every token mint.
+func (c *Client) appPrivateKey(pem string) (*rsa.PrivateKey, error) {
+	c.appKeyMu.Lock()
+	defer c.appKeyMu.Unlock()
+	if c.appKey != nil && c.appKeyPEMCached == pem {
+		return c.appKey, nil
+	}
+	key, err := parseRSAPrivateKey(pem)
+	if err != nil {
+		return nil, err
+	}
+	c.appKey = key
+	c.appKeyPEMCached = pem
+	return key, nil
 }
 
 // VerifyWebhookSignature reports whether signatureHeader is a valid HMAC-SHA256 of body keyed by

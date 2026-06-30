@@ -55,6 +55,7 @@ public too. When writing or expanding documentation:
 | The server **agent** (registration, signed jobs, Docker/Caddy management, policy checks) | [docs/architecture/agent.md](./docs/architecture/agent.md) |
 | **Connecting/preparing a server** (dashboard-managed setup, the SSH bootstrap/management channel, its security model) | [docs/architecture/server-management.md](./docs/architecture/server-management.md) |
 | The **deploy / build / rollback** flow, build detection, container runtime, or Caddy routing | [docs/architecture/deployment-engine.md](./docs/architecture/deployment-engine.md) |
+| **Connecting GitHub** (OAuth App, GitHub App, public repos; private-repo deploys; setup/env vars) | [docs/architecture/sources.md](./docs/architecture/sources.md) |
 | The **database** (pgx/sqlc/goose, schema, migrations) or the **API** (proto/ConnectRPC/buf) | [docs/architecture/data-and-api.md](./docs/architecture/data-and-api.md) |
 | **Background jobs** (Postgres queue) or **realtime** (SSE / WebSockets) | [docs/architecture/jobs-and-realtime.md](./docs/architecture/jobs-and-realtime.md) |
 | The **dashboard** (React/Vite/TanStack/Tailwind/shadcn, realtime UI) | [docs/architecture/dashboard.md](./docs/architecture/dashboard.md) |

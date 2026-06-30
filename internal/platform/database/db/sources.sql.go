@@ -10,154 +10,150 @@ import (
 	"time"
 )
 
-const deleteSourceConnection = `-- name: DeleteSourceConnection :one
+const deleteConnectionByID = `-- name: DeleteConnectionByID :one
 DELETE FROM source_connections
-WHERE workspace_id = $1 AND provider = $2
+WHERE id = $1
 RETURNING id
 `
 
-type DeleteSourceConnectionParams struct {
-	WorkspaceID string
-	Provider    string
+// RETURNING id distinguishes a real delete from a no-op (no row -> ErrNoRows -> NotFound), so a
+// delete that removed nothing is never audited as a change.
+func (q *Queries) DeleteConnectionByID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, deleteConnectionByID, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
 }
 
-// RETURNING id distinguishes a real delete from a no-op (no row -> ErrNoRows ->
-// NotFound), so a delete that removed nothing is never audited as a change.
-func (q *Queries) DeleteSourceConnection(ctx context.Context, arg DeleteSourceConnectionParams) (string, error) {
-	row := q.db.QueryRow(ctx, deleteSourceConnection, arg.WorkspaceID, arg.Provider)
-	var id string
-	err := row.Scan(&id)
-	return id, err
-}
-
-const getConnectionTokenByWorkspace = `-- name: GetConnectionTokenByWorkspace :one
-SELECT access_token_ciphertext
+const getConnectionByID = `-- name: GetConnectionByID :one
+SELECT id, workspace_id, provider, kind, account_login, account_id, installation_id, scopes, connected_by, created_at, updated_at
 FROM source_connections
-WHERE workspace_id = $1 AND provider = $2
+WHERE id = $1
 `
 
-type GetConnectionTokenByWorkspaceParams struct {
-	WorkspaceID string
-	Provider    string
+type GetConnectionByIDRow struct {
+	ID             string
+	WorkspaceID    string
+	Provider       string
+	Kind           string
+	AccountLogin   string
+	AccountID      *int64
+	InstallationID *string
+	Scopes         string
+	ConnectedBy    *string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
-// Returns the sealed token for server-side provider calls. INTERNAL — the ciphertext
-// is never wired to a handler or returned by any RPC.
-func (q *Queries) GetConnectionTokenByWorkspace(ctx context.Context, arg GetConnectionTokenByWorkspaceParams) ([]byte, error) {
-	row := q.db.QueryRow(ctx, getConnectionTokenByWorkspace, arg.WorkspaceID, arg.Provider)
-	var access_token_ciphertext []byte
-	err := row.Scan(&access_token_ciphertext)
-	return access_token_ciphertext, err
+// One integration's metadata by id (to authorize via its workspace + display it). Never the token.
+func (q *Queries) GetConnectionByID(ctx context.Context, id string) (GetConnectionByIDRow, error) {
+	row := q.db.QueryRow(ctx, getConnectionByID, id)
+	var i GetConnectionByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Provider,
+		&i.Kind,
+		&i.AccountLogin,
+		&i.AccountID,
+		&i.InstallationID,
+		&i.Scopes,
+		&i.ConnectedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
-const getInstallationByWorkspace = `-- name: GetInstallationByWorkspace :one
-SELECT installation_id FROM source_connections
-WHERE workspace_id = $1 AND provider = 'github_app'
+const getInstallationByConnection = `-- name: GetInstallationByConnection :one
+SELECT installation_id
+FROM source_connections
+WHERE id = $1
 `
 
-// Returns the workspace's GitHub App installation id, for minting a per-installation token
-// server-side. INTERNAL — the id resolves a token that is never returned by an RPC.
-func (q *Queries) GetInstallationByWorkspace(ctx context.Context, workspaceID string) (*string, error) {
-	row := q.db.QueryRow(ctx, getInstallationByWorkspace, workspaceID)
+// The App installation id for one connection, to mint a per-installation token. INTERNAL — the id
+// resolves a token that is never returned by an RPC.
+func (q *Queries) GetInstallationByConnection(ctx context.Context, id string) (*string, error) {
+	row := q.db.QueryRow(ctx, getInstallationByConnection, id)
 	var installation_id *string
 	err := row.Scan(&installation_id)
 	return installation_id, err
 }
 
-const getSourceConnectionByWorkspace = `-- name: GetSourceConnectionByWorkspace :one
-SELECT id, workspace_id, provider, github_login, github_user_id, scopes, connected_by, created_at, updated_at
+const getSealedTokenByConnection = `-- name: GetSealedTokenByConnection :one
+SELECT access_token_ciphertext
 FROM source_connections
-WHERE workspace_id = $1 AND provider = $2
+WHERE id = $1
 `
 
-type GetSourceConnectionByWorkspaceParams struct {
-	WorkspaceID string
-	Provider    string
+// The sealed OAuth token for one connection, for server-side provider calls. INTERNAL — the
+// ciphertext is never wired to a handler or returned by any RPC.
+func (q *Queries) GetSealedTokenByConnection(ctx context.Context, id string) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getSealedTokenByConnection, id)
+	var access_token_ciphertext []byte
+	err := row.Scan(&access_token_ciphertext)
+	return access_token_ciphertext, err
 }
 
-type GetSourceConnectionByWorkspaceRow struct {
-	ID           string
-	WorkspaceID  string
-	Provider     string
-	GithubLogin  string
-	GithubUserID *int64
-	Scopes       string
-	ConnectedBy  *string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-}
-
-// Metadata only — never the access token (write-only).
-func (q *Queries) GetSourceConnectionByWorkspace(ctx context.Context, arg GetSourceConnectionByWorkspaceParams) (GetSourceConnectionByWorkspaceRow, error) {
-	row := q.db.QueryRow(ctx, getSourceConnectionByWorkspace, arg.WorkspaceID, arg.Provider)
-	var i GetSourceConnectionByWorkspaceRow
-	err := row.Scan(
-		&i.ID,
-		&i.WorkspaceID,
-		&i.Provider,
-		&i.GithubLogin,
-		&i.GithubUserID,
-		&i.Scopes,
-		&i.ConnectedBy,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const upsertAppConnection = `-- name: UpsertAppConnection :one
+const insertAppConnection = `-- name: InsertAppConnection :one
 INSERT INTO source_connections (
-    workspace_id, provider, github_login, github_user_id, installation_id, connected_by
+    workspace_id, provider, kind, account_login, account_id, installation_id, connected_by
 )
-VALUES ($1, 'github_app', $2, $3, $4, $5)
-ON CONFLICT (workspace_id, provider)
+VALUES ($1, $2, 'app', $3, $4, $5, $6)
+ON CONFLICT (provider, installation_id) WHERE installation_id IS NOT NULL
 DO UPDATE SET
-    github_login = EXCLUDED.github_login,
-    github_user_id = EXCLUDED.github_user_id,
-    installation_id = EXCLUDED.installation_id,
+    workspace_id = EXCLUDED.workspace_id,
+    account_login = EXCLUDED.account_login,
+    account_id = EXCLUDED.account_id,
     connected_by = EXCLUDED.connected_by,
     updated_at = now()
-RETURNING id, workspace_id, provider, github_login, github_user_id, scopes, connected_by, created_at, updated_at
+RETURNING id, workspace_id, provider, kind, account_login, account_id, installation_id, scopes, connected_by, created_at, updated_at
 `
 
-type UpsertAppConnectionParams struct {
+type InsertAppConnectionParams struct {
 	WorkspaceID    string
-	GithubLogin    string
-	GithubUserID   *int64
+	Provider       string
+	AccountLogin   string
+	AccountID      *int64
 	InstallationID *string
 	ConnectedBy    *string
 }
 
-type UpsertAppConnectionRow struct {
-	ID           string
-	WorkspaceID  string
-	Provider     string
-	GithubLogin  string
-	GithubUserID *int64
-	Scopes       string
-	ConnectedBy  *string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+type InsertAppConnectionRow struct {
+	ID             string
+	WorkspaceID    string
+	Provider       string
+	Kind           string
+	AccountLogin   string
+	AccountID      *int64
+	InstallationID *string
+	Scopes         string
+	ConnectedBy    *string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
-// Create-or-update the workspace's GitHub App connection (provider='github_app'). It carries an
-// installation_id and no token (per-installation tokens are minted on demand). Reconnecting (a new
-// installation) refreshes the row. RETURNING yields metadata only.
-func (q *Queries) UpsertAppConnection(ctx context.Context, arg UpsertAppConnectionParams) (UpsertAppConnectionRow, error) {
-	row := q.db.QueryRow(ctx, upsertAppConnection,
+// Create-or-refresh an App-installation integration. The installation id is globally unique, so a
+// re-install of the same installation refreshes the existing row (and re-homes it to this workspace)
+// via the partial unique index. RETURNING is metadata only.
+func (q *Queries) InsertAppConnection(ctx context.Context, arg InsertAppConnectionParams) (InsertAppConnectionRow, error) {
+	row := q.db.QueryRow(ctx, insertAppConnection,
 		arg.WorkspaceID,
-		arg.GithubLogin,
-		arg.GithubUserID,
+		arg.Provider,
+		arg.AccountLogin,
+		arg.AccountID,
 		arg.InstallationID,
 		arg.ConnectedBy,
 	)
-	var i UpsertAppConnectionRow
+	var i InsertAppConnectionRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
 		&i.Provider,
-		&i.GithubLogin,
-		&i.GithubUserID,
+		&i.Kind,
+		&i.AccountLogin,
+		&i.AccountID,
+		&i.InstallationID,
 		&i.Scopes,
 		&i.ConnectedBy,
 		&i.CreatedAt,
@@ -166,69 +162,126 @@ func (q *Queries) UpsertAppConnection(ctx context.Context, arg UpsertAppConnecti
 	return i, err
 }
 
-const upsertSourceConnection = `-- name: UpsertSourceConnection :one
+const insertOAuthConnection = `-- name: InsertOAuthConnection :one
 INSERT INTO source_connections (
-    workspace_id, provider, github_login, github_user_id, access_token_ciphertext, scopes, connected_by
+    workspace_id, provider, kind, account_login, account_id, access_token_ciphertext, scopes, connected_by
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-ON CONFLICT (workspace_id, provider)
+VALUES ($1, $2, 'oauth', $3, $4, $5, $6, $7)
+ON CONFLICT (workspace_id, provider, kind, account_id) WHERE account_id IS NOT NULL
 DO UPDATE SET
-    github_login = EXCLUDED.github_login,
-    github_user_id = EXCLUDED.github_user_id,
+    account_login = EXCLUDED.account_login,
     access_token_ciphertext = EXCLUDED.access_token_ciphertext,
     scopes = EXCLUDED.scopes,
     connected_by = EXCLUDED.connected_by,
     updated_at = now()
-RETURNING id, workspace_id, provider, github_login, github_user_id, scopes, connected_by, created_at, updated_at
+RETURNING id, workspace_id, provider, kind, account_login, account_id, installation_id, scopes, connected_by, created_at, updated_at
 `
 
-type UpsertSourceConnectionParams struct {
+type InsertOAuthConnectionParams struct {
 	WorkspaceID           string
 	Provider              string
-	GithubLogin           string
-	GithubUserID          *int64
+	AccountLogin          string
+	AccountID             *int64
 	AccessTokenCiphertext []byte
 	Scopes                string
 	ConnectedBy           *string
 }
 
-type UpsertSourceConnectionRow struct {
-	ID           string
-	WorkspaceID  string
-	Provider     string
-	GithubLogin  string
-	GithubUserID *int64
-	Scopes       string
-	ConnectedBy  *string
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+type InsertOAuthConnectionRow struct {
+	ID             string
+	WorkspaceID    string
+	Provider       string
+	Kind           string
+	AccountLogin   string
+	AccountID      *int64
+	InstallationID *string
+	Scopes         string
+	ConnectedBy    *string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
-// Create-or-update the workspace's provider connection (one per workspace + provider).
-// The conflict is the success path (reconnecting refreshes the token and identity), so
-// callers never see AlreadyExists. RETURNING yields metadata only — never the token,
-// which is write-only and leaves the database only to call the provider server-side.
-func (q *Queries) UpsertSourceConnection(ctx context.Context, arg UpsertSourceConnectionParams) (UpsertSourceConnectionRow, error) {
-	row := q.db.QueryRow(ctx, upsertSourceConnection,
+// Create-or-refresh an OAuth integration. Reconnecting the SAME account (workspace+provider+kind+
+// account_id) refreshes the row via the partial unique index, so callers never see AlreadyExists; a
+// different account adds another integration. RETURNING is metadata only — never the token.
+func (q *Queries) InsertOAuthConnection(ctx context.Context, arg InsertOAuthConnectionParams) (InsertOAuthConnectionRow, error) {
+	row := q.db.QueryRow(ctx, insertOAuthConnection,
 		arg.WorkspaceID,
 		arg.Provider,
-		arg.GithubLogin,
-		arg.GithubUserID,
+		arg.AccountLogin,
+		arg.AccountID,
 		arg.AccessTokenCiphertext,
 		arg.Scopes,
 		arg.ConnectedBy,
 	)
-	var i UpsertSourceConnectionRow
+	var i InsertOAuthConnectionRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,
 		&i.Provider,
-		&i.GithubLogin,
-		&i.GithubUserID,
+		&i.Kind,
+		&i.AccountLogin,
+		&i.AccountID,
+		&i.InstallationID,
 		&i.Scopes,
 		&i.ConnectedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const listConnectionsByWorkspace = `-- name: ListConnectionsByWorkspace :many
+SELECT id, workspace_id, provider, kind, account_login, account_id, installation_id, scopes, connected_by, created_at, updated_at
+FROM source_connections
+WHERE workspace_id = $1
+ORDER BY created_at DESC
+`
+
+type ListConnectionsByWorkspaceRow struct {
+	ID             string
+	WorkspaceID    string
+	Provider       string
+	Kind           string
+	AccountLogin   string
+	AccountID      *int64
+	InstallationID *string
+	Scopes         string
+	ConnectedBy    *string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// All integrations (connections) for a workspace, newest first. Metadata only — never the sealed
+// token, which is write-only and leaves the database only to call the provider server-side.
+func (q *Queries) ListConnectionsByWorkspace(ctx context.Context, workspaceID string) ([]ListConnectionsByWorkspaceRow, error) {
+	rows, err := q.db.Query(ctx, listConnectionsByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConnectionsByWorkspaceRow{}
+	for rows.Next() {
+		var i ListConnectionsByWorkspaceRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Provider,
+			&i.Kind,
+			&i.AccountLogin,
+			&i.AccountID,
+			&i.InstallationID,
+			&i.Scopes,
+			&i.ConnectedBy,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

@@ -5,78 +5,69 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/plorigo/plorigo/internal/platform/authz"
 	"github.com/plorigo/plorigo/internal/platform/database"
-	"github.com/plorigo/plorigo/internal/platform/github"
 	"github.com/plorigo/plorigo/internal/platform/principal"
 	"github.com/plorigo/plorigo/internal/platform/problem"
 )
 
 const (
-	testWorkspaceID  = "11111111-1111-1111-1111-111111111111"
-	testConnectionID = "33333333-3333-3333-3333-333333333333"
-	testUserID       = "user-1"
+	testWorkspaceID = "11111111-1111-1111-1111-111111111111"
+	testConnID      = "22222222-2222-2222-2222-222222222222"
+	testUserID      = "user-1"
 )
 
+// --- fakes ---
+
 type fakeStore struct {
-	conn          Connection
-	connOK        bool
-	tokenCipher   []byte
-	tokenOK       bool
-	upsertedConn  *ConnectionWrite
-	deletedConnOK bool
-	countByConn   int64
-
-	upsertedApp       *AppConnectionWrite
-	appInstallationID string
-	appInstallOK      bool
+	conns         []Connection
+	byID          map[string]Connection
+	sealed        []byte
+	sealedOK      bool
+	insertedOAuth *OAuthConnectionWrite
+	insertedApp   *AppConnectionWrite
+	deletedOK     bool
+	count         int64
 }
 
-// newFakeStore has an active connection with a stored token and deletes successfully —
-// tests override fields to exercise other paths.
-func newFakeStore() *fakeStore {
-	return &fakeStore{
-		conn:          Connection{ID: testConnectionID, WorkspaceID: testWorkspaceID, Provider: provider, GitHubLogin: "octocat"},
-		connOK:        true,
-		tokenCipher:   []byte("sealed:gho_stored"),
-		tokenOK:       true,
-		deletedConnOK: true,
-	}
+func (f *fakeStore) ListConnectionsByWorkspace(_ context.Context, _ string) ([]Connection, error) {
+	return f.conns, nil
 }
-
-func (f *fakeStore) UpsertConnection(_ context.Context, _ database.Tx, c ConnectionWrite) (Connection, error) {
-	f.upsertedConn = &c
-	return Connection{ID: testConnectionID, WorkspaceID: c.WorkspaceID, Provider: c.Provider, GitHubLogin: c.GitHubLogin}, nil
+func (f *fakeStore) GetConnectionByID(_ context.Context, id string) (Connection, bool, error) {
+	c, ok := f.byID[id]
+	return c, ok, nil
 }
-func (f *fakeStore) GetConnection(_ context.Context, _, _ string) (Connection, bool, error) {
-	return f.conn, f.connOK, nil
+func (f *fakeStore) GetSealedTokenByConnection(_ context.Context, _ string) ([]byte, bool, error) {
+	return f.sealed, f.sealedOK, nil
 }
-func (f *fakeStore) GetConnectionToken(_ context.Context, _, _ string) ([]byte, bool, error) {
-	return f.tokenCipher, f.tokenOK, nil
+func (f *fakeStore) InsertOAuthConnection(_ context.Context, _ database.Tx, c OAuthConnectionWrite) (Connection, error) {
+	f.insertedOAuth = &c
+	return Connection{ID: "conn-oauth", WorkspaceID: c.WorkspaceID, Provider: c.Provider, Kind: kindOAuth, AccountLogin: c.AccountLogin}, nil
 }
-func (f *fakeStore) DeleteConnection(_ context.Context, _ database.Tx, _, _ string) (string, bool, error) {
-	return testConnectionID, f.deletedConnOK, nil
+func (f *fakeStore) InsertAppConnection(_ context.Context, _ database.Tx, c AppConnectionWrite) (Connection, error) {
+	f.insertedApp = &c
+	iid := c.InstallationID
+	return Connection{ID: "conn-app", WorkspaceID: c.WorkspaceID, Provider: c.Provider, Kind: kindApp, AccountLogin: c.AccountLogin, InstallationID: &iid}, nil
+}
+func (f *fakeStore) DeleteConnectionByID(_ context.Context, _ database.Tx, id string) (string, bool, error) {
+	return id, f.deletedOK, nil
 }
 func (f *fakeStore) CountServicesByConnection(_ context.Context, _ string) (int64, error) {
-	return f.countByConn, nil
-}
-func (f *fakeStore) UpsertAppConnection(_ context.Context, _ database.Tx, c AppConnectionWrite) (Connection, error) {
-	f.upsertedApp = &c
-	return Connection{ID: testConnectionID, WorkspaceID: c.WorkspaceID, Provider: providerApp, GitHubLogin: c.GitHubLogin}, nil
-}
-func (f *fakeStore) InstallationForWorkspace(_ context.Context, _ string) (string, bool, error) {
-	return f.appInstallationID, f.appInstallOK, nil
+	return f.count, nil
 }
 
-type fakeRecorder struct {
-	called bool
-	action string
-}
+type fakeBox struct{}
+
+func (fakeBox) Seal(pt []byte) ([]byte, error) { return append([]byte("sealed:"), pt...), nil }
+func (fakeBox) Open(ct []byte) ([]byte, error) { return bytes.TrimPrefix(ct, []byte("sealed:")), nil }
+
+type fakeRecorder struct{ action string }
 
 func (f *fakeRecorder) Record(_ context.Context, _ database.Tx, action, _, _, _, _ string) error {
-	f.called = true
 	f.action = action
 	return nil
 }
@@ -87,93 +78,68 @@ func (f fakeAuthz) Authorize(_ context.Context, _ principal.Principal, _ authz.A
 	return f.err
 }
 
-// fakeBox seals by prefixing and opens by trimming, so the OAuth-state and token round-trips
-// work and tests can assert the store received the sealer's output.
-type fakeBox struct{ sealErr error }
-
-func (f *fakeBox) Seal(pt []byte) ([]byte, error) {
-	if f.sealErr != nil {
-		return nil, f.sealErr
-	}
-	return append([]byte("sealed:"), pt...), nil
-}
-func (f *fakeBox) Open(ct []byte) ([]byte, error) {
-	return bytes.TrimPrefix(ct, []byte("sealed:")), nil
-}
-
-// fakeGitHub returns canned values or configured errors and records whether the repo-listing
-// call (which needs a token) was made.
-type fakeGitHub struct {
-	branches        []string
-	repos           []github.RepoInfo
-	token           github.Token
-	user            github.User
-	reposErr        error
-	branchErr       error
-	exchangeErr     error
-	userErr         error
-	revokeErr       error
-	authorizeState  string
-	listReposCalled bool
-	revokedTokens   []string
-
-	installation    github.Installation
-	installErr      error
-	installToken    string
-	installTokenErr error
-}
-
-func (f *fakeGitHub) AuthorizeURL(_, _, _, state string) string {
-	f.authorizeState = state
-	return "https://github.test/login/oauth/authorize?state=" + state
-}
-func (f *fakeGitHub) ExchangeCode(_ context.Context, _, _, _, _ string) (github.Token, error) {
-	return f.token, f.exchangeErr
-}
-func (f *fakeGitHub) GetAuthenticatedUser(_ context.Context, _ string) (github.User, error) {
-	return f.user, f.userErr
-}
-func (f *fakeGitHub) ListUserRepos(_ context.Context, _ string, _ github.ListReposOptions) ([]github.RepoInfo, error) {
-	f.listReposCalled = true
-	return f.repos, f.reposErr
-}
-func (f *fakeGitHub) ListBranches(_ context.Context, _, _, _ string) ([]string, error) {
-	return f.branches, f.branchErr
-}
-func (f *fakeGitHub) RevokeToken(_ context.Context, _, _, token string) error {
-	f.revokedTokens = append(f.revokedTokens, token)
-	return f.revokeErr
-}
-func (f *fakeGitHub) GetInstallation(_ context.Context, _ string) (github.Installation, error) {
-	return f.installation, f.installErr
-}
-func (f *fakeGitHub) InstallationToken(_ context.Context, _ string) (string, error) {
-	return f.installToken, f.installTokenErr
-}
-
 type fakeTx struct{}
 
 func (fakeTx) WithinTx(_ context.Context, fn func(tx database.Tx) error) error { return fn(nil) }
 
-func authedCtx() context.Context { return authedCtxFor(testUserID) }
-
-func authedCtxFor(userID string) context.Context {
-	return principal.NewContext(context.Background(), principal.Principal{UserID: userID, Method: principal.MethodSession})
+// fakeProvider implements Provider with canned values.
+type fakeProvider struct {
+	oauthConfigured bool
+	appConfigured   bool
+	account         Account
+	repos           []Repo
+	branches        []string
+	repo            Repo
+	token           string
 }
 
-func testOAuth() OAuthConfig {
-	return OAuthConfig{ClientID: "cid", ClientSecret: "csec", Scopes: "repo", RedirectURL: "https://app/api/github/callback"}
+func (f *fakeProvider) ID() string                         { return "github" }
+func (f *fakeProvider) DisplayName() string                { return "GitHub" }
+func (f *fakeProvider) OAuthConfigured() bool              { return f.oauthConfigured }
+func (f *fakeProvider) AppConfigured(context.Context) bool { return f.appConfigured }
+func (f *fakeProvider) AuthorizeURL(state string) string {
+	return "https://gh.test/oauth?state=" + state
+}
+func (f *fakeProvider) ExchangeCode(_ context.Context, _ string) (string, string, Account, error) {
+	return "tok", "repo", f.account, nil
+}
+func (f *fakeProvider) RevokeToken(context.Context, string) error { return nil }
+func (f *fakeProvider) InstallURL(_ context.Context, state string) (string, bool) {
+	if !f.appConfigured {
+		return "", false
+	}
+	return "https://gh.test/apps/x/installations/new?state=" + state, true
+}
+func (f *fakeProvider) ResolveInstallation(context.Context, string) (Account, error) {
+	return f.account, nil
+}
+func (f *fakeProvider) InstallationToken(context.Context, string) (string, error) {
+	return f.token, nil
+}
+func (f *fakeProvider) ListRepos(context.Context, Conn, string, int) ([]Repo, error) {
+	return f.repos, nil
+}
+func (f *fakeProvider) ListBranches(context.Context, Conn, string, string) ([]string, error) {
+	return f.branches, nil
+}
+func (f *fakeProvider) GetRepository(context.Context, Conn, string, string) (Repo, error) {
+	return f.repo, nil
+}
+func (f *fakeProvider) GetBranch(context.Context, Conn, string, string, string) error {
+	return nil
+}
+func (f *fakeProvider) GetPullRequest(context.Context, Conn, string, string, int) (PullRequest, error) {
+	return PullRequest{}, nil
+}
+func (f *fakeProvider) VerifyWebhook(string, []byte, string) bool { return true }
+func (f *fakeProvider) Buildable(kind string) bool                { return kind == kindApp }
+
+func authedCtx() context.Context {
+	return principal.NewContext(context.Background(), principal.Principal{UserID: testUserID, Method: principal.MethodSession})
 }
 
-func newSvc(store Store, box SecretBox, gh GitHubClient, oauth OAuthConfig, authorizer authz.Authorizer, rec Recorder) *service {
-	return newService(fakeTx{}, store, box, gh, oauth, AppConfig{}, authorizer, rec, slog.Default())
-}
-
-// testApp is a configured GitHub App (gates the install flow in tests).
-func testApp() AppConfig { return AppConfig{AppID: "12345", Slug: "plorigo-test"} }
-
-func newSvcApp(store Store, box SecretBox, gh GitHubClient, app AppConfig, authorizer authz.Authorizer, rec Recorder) *service {
-	return newService(fakeTx{}, store, box, gh, testOAuth(), app, authorizer, rec, slog.Default())
+func newSvc(store Store, p *fakeProvider, authorizer authz.Authorizer, rec Recorder) *service {
+	return newService(fakeTx{}, store, fakeBox{}, NewRegistry(p), authorizer, rec, slog.Default())
 }
 
 func isKind(err error, kind problem.Kind) bool {
@@ -181,192 +147,155 @@ func isKind(err error, kind problem.Kind) bool {
 	return errors.As(err, &pe) && pe.Kind == kind
 }
 
-// --- OAuth begin / complete ---
+func nonceFromURL(t *testing.T, raw string) string {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse url %q: %v", raw, err)
+	}
+	return u.Query().Get("state")
+}
 
-func TestBeginGitHubAuth_NotConfigured(t *testing.T) {
-	svc := newSvc(newFakeStore(), &fakeBox{}, &fakeGitHub{}, OAuthConfig{}, fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.BeginGitHubAuth(authedCtx(), BeginAuthInput{WorkspaceID: testWorkspaceID})
+// --- tests ---
+
+func TestListConnections_ReturnsConnsAndProviders(t *testing.T) {
+	store := &fakeStore{conns: []Connection{{ID: testConnID, Provider: "github", Kind: kindApp, AccountLogin: "acme"}}}
+	svc := newSvc(store, &fakeProvider{oauthConfigured: true, appConfigured: true}, fakeAuthz{}, &fakeRecorder{})
+	res, err := svc.ListConnections(authedCtx(), testWorkspaceID)
+	if err != nil {
+		t.Fatalf("ListConnections: %v", err)
+	}
+	if len(res.Connections) != 1 || res.Connections[0].AccountLogin != "acme" {
+		t.Fatalf("connections = %+v", res.Connections)
+	}
+	if len(res.Providers) != 1 || res.Providers[0].Provider != "github" || !res.Providers[0].AppConfigured {
+		t.Fatalf("providers = %+v", res.Providers)
+	}
+}
+
+func TestBeginOAuth_NotConfigured(t *testing.T) {
+	svc := newSvc(&fakeStore{}, &fakeProvider{oauthConfigured: false}, fakeAuthz{}, &fakeRecorder{})
+	_, err := svc.BeginOAuth(authedCtx(), BeginConnectInput{WorkspaceID: testWorkspaceID, Provider: "github"})
 	if !isKind(err, problem.KindInvalidInput) {
 		t.Fatalf("got %v, want InvalidInput", err)
 	}
 }
 
-func TestBeginGitHubAuth_DeniedWhenUnauthorized(t *testing.T) {
-	svc := newSvc(newFakeStore(), &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{err: problem.PermissionDenied("nope")}, &fakeRecorder{})
-	_, err := svc.BeginGitHubAuth(authedCtx(), BeginAuthInput{WorkspaceID: testWorkspaceID})
-	if !isKind(err, problem.KindPermissionDenied) {
-		t.Fatalf("got %v, want PermissionDenied", err)
-	}
-}
-
-func TestCompleteGitHubAuth_SealsTokenAndAudits(t *testing.T) {
-	store := newFakeStore()
-	store.tokenOK = false // a clean first-time connection (no prior token to revoke)
-	gh := &fakeGitHub{token: github.Token{AccessToken: "gho_secret_abc", Scope: "repo"}, user: github.User{Login: "octocat", ID: 42}}
+func TestOAuthRoundTrip_InsertsConnection(t *testing.T) {
+	store := &fakeStore{}
 	rec := &fakeRecorder{}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
+	id := int64(42)
+	p := &fakeProvider{oauthConfigured: true, account: Account{Login: "octocat", ID: &id}}
+	svc := newSvc(store, p, fakeAuthz{}, rec)
 
-	begin, err := svc.BeginGitHubAuth(authedCtx(), BeginAuthInput{WorkspaceID: testWorkspaceID})
+	begin, err := svc.BeginOAuth(authedCtx(), BeginConnectInput{WorkspaceID: testWorkspaceID, Provider: "github"})
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	res, err := svc.CompleteGitHubAuth(authedCtx(), CompleteAuthInput{Code: "code", State: gh.authorizeState, CookieState: begin.State})
+	res, err := svc.CompleteOAuth(authedCtx(), CompleteOAuthInput{Provider: "github", Code: "code", State: nonceFromURL(t, begin.AuthorizeURL), CookieState: begin.State})
 	if err != nil {
 		t.Fatalf("complete: %v", err)
 	}
-	if res.GitHubLogin != "octocat" || res.WorkspaceID != testWorkspaceID {
-		t.Fatalf("unexpected result: %+v", res)
+	if res.AccountLogin != "octocat" {
+		t.Errorf("account = %q", res.AccountLogin)
 	}
-	if store.upsertedConn == nil {
-		t.Fatal("connection was not upserted")
+	if store.insertedOAuth == nil || store.insertedOAuth.AccountLogin != "octocat" || string(store.insertedOAuth.TokenCipher) != "sealed:tok" {
+		t.Errorf("inserted = %+v, want sealed token", store.insertedOAuth)
 	}
-	if string(store.upsertedConn.TokenCiphertext) != "sealed:gho_secret_abc" {
-		t.Errorf("stored token = %q, want the sealer's output", store.upsertedConn.TokenCiphertext)
-	}
-	if !rec.called || rec.action != "source.github.connect" {
-		t.Errorf("audit not recorded: called=%v action=%q", rec.called, rec.action)
-	}
-	if len(gh.revokedTokens) != 0 {
-		t.Errorf("first connect must not revoke any token, revoked: %v", gh.revokedTokens)
+	if rec.action != "source.oauth.connect" {
+		t.Errorf("audit = %q", rec.action)
 	}
 }
 
-func TestCompleteGitHubAuth_RevokesSupersededToken(t *testing.T) {
-	store := newFakeStore()
-	store.tokenCipher = []byte("sealed:old_token") // a prior connection exists
-	gh := &fakeGitHub{token: github.Token{AccessToken: "new_token", Scope: "repo"}, user: github.User{Login: "octocat", ID: 42}}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
+func TestAppInstallRoundTrip_InsertsConnection(t *testing.T) {
+	store := &fakeStore{}
+	rec := &fakeRecorder{}
+	p := &fakeProvider{appConfigured: true, account: Account{Login: "acme-org"}}
+	svc := newSvc(store, p, fakeAuthz{}, rec)
 
-	begin, _ := svc.BeginGitHubAuth(authedCtx(), BeginAuthInput{WorkspaceID: testWorkspaceID})
-	if _, err := svc.CompleteGitHubAuth(authedCtx(), CompleteAuthInput{Code: "code", State: gh.authorizeState, CookieState: begin.State}); err != nil {
+	begin, err := svc.BeginAppInstall(authedCtx(), BeginConnectInput{WorkspaceID: testWorkspaceID, Provider: "github"})
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if !strings.Contains(begin.AuthorizeURL, "installations/new") {
+		t.Errorf("install url = %q", begin.AuthorizeURL)
+	}
+	_, err = svc.CompleteAppInstall(authedCtx(), CompleteAppInput{Provider: "github", InstallationID: "99", State: nonceFromURL(t, begin.AuthorizeURL), CookieState: begin.State})
+	if err != nil {
 		t.Fatalf("complete: %v", err)
 	}
-	if len(gh.revokedTokens) != 1 || gh.revokedTokens[0] != "old_token" {
-		t.Errorf("revoked = %v, want exactly [old_token]", gh.revokedTokens)
+	if store.insertedApp == nil || store.insertedApp.InstallationID != "99" || store.insertedApp.AccountLogin != "acme-org" {
+		t.Errorf("inserted = %+v", store.insertedApp)
 	}
 }
 
-func TestCompleteGitHubAuth_StateMismatch(t *testing.T) {
-	gh := &fakeGitHub{token: github.Token{AccessToken: "t"}, user: github.User{Login: "x"}}
-	svc := newSvc(newFakeStore(), &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	begin, _ := svc.BeginGitHubAuth(authedCtx(), BeginAuthInput{WorkspaceID: testWorkspaceID})
-	_, err := svc.CompleteGitHubAuth(authedCtx(), CompleteAuthInput{Code: "code", State: "wrong-nonce", CookieState: begin.State})
+func TestDisconnectConnection_BlockedWhenInUse(t *testing.T) {
+	store := &fakeStore{
+		byID:  map[string]Connection{testConnID: {ID: testConnID, WorkspaceID: testWorkspaceID, Provider: "github", Kind: kindApp}},
+		count: 2,
+	}
+	svc := newSvc(store, &fakeProvider{}, fakeAuthz{}, &fakeRecorder{})
+	err := svc.DisconnectConnection(authedCtx(), testConnID)
 	if !isKind(err, problem.KindInvalidInput) {
-		t.Fatalf("got %v, want InvalidInput", err)
+		t.Fatalf("got %v, want InvalidInput (in use)", err)
 	}
 }
 
-func TestCompleteGitHubAuth_DifferentUserRejected(t *testing.T) {
-	gh := &fakeGitHub{token: github.Token{AccessToken: "t"}, user: github.User{Login: "x"}}
+func TestDisconnectConnection_Deletes(t *testing.T) {
+	store := &fakeStore{
+		byID:      map[string]Connection{testConnID: {ID: testConnID, WorkspaceID: testWorkspaceID, Provider: "github", Kind: kindApp}},
+		deletedOK: true,
+	}
 	rec := &fakeRecorder{}
-	svc := newSvc(newFakeStore(), &fakeBox{}, gh, testOAuth(), fakeAuthz{}, rec)
-	begin, _ := svc.BeginGitHubAuth(authedCtxFor("user-1"), BeginAuthInput{WorkspaceID: testWorkspaceID})
-	_, err := svc.CompleteGitHubAuth(authedCtxFor("user-2"), CompleteAuthInput{Code: "code", State: gh.authorizeState, CookieState: begin.State})
-	if !isKind(err, problem.KindPermissionDenied) {
-		t.Fatalf("got %v, want PermissionDenied", err)
+	svc := newSvc(store, &fakeProvider{}, fakeAuthz{}, rec)
+	if err := svc.DisconnectConnection(authedCtx(), testConnID); err != nil {
+		t.Fatalf("disconnect: %v", err)
 	}
-	if rec.called {
-		t.Error("a rejected completion must not audit")
+	if rec.action != "source.disconnect" {
+		t.Errorf("audit = %q", rec.action)
 	}
 }
 
-// --- connection reads / disconnect ---
-
-func TestGetConnection_ReportsState(t *testing.T) {
-	store := newFakeStore()
-	svc := newSvc(store, &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	st, err := svc.GetConnection(authedCtx(), testWorkspaceID)
+func TestListRepositories_ByConnection(t *testing.T) {
+	store := &fakeStore{byID: map[string]Connection{testConnID: {ID: testConnID, WorkspaceID: testWorkspaceID, Provider: "github", Kind: kindApp, InstallationID: strptr("99")}}}
+	p := &fakeProvider{token: "ghs_x", repos: []Repo{{FullName: "acme/api", Owner: "acme", Name: "api"}}}
+	svc := newSvc(store, p, fakeAuthz{}, &fakeRecorder{})
+	repos, err := svc.ListRepositories(authedCtx(), ListReposInput{ConnectionID: testConnID})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("list repos: %v", err)
 	}
-	if !st.Configured || !st.Connected || st.Connection.GitHubLogin != "octocat" {
-		t.Fatalf("unexpected status: %+v", st)
-	}
-}
-
-func TestDisconnectGitHub_BlockedWhenInUse(t *testing.T) {
-	store := newFakeStore()
-	store.countByConn = 2
-	rec := &fakeRecorder{}
-	svc := newSvc(store, &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{}, rec)
-	err := svc.DisconnectGitHub(authedCtx(), testWorkspaceID)
-	if !isKind(err, problem.KindInvalidInput) {
-		t.Fatalf("got %v, want InvalidInput", err)
-	}
-	if rec.called {
-		t.Error("a blocked disconnect must not audit")
+	if len(repos) != 1 || repos[0].FullName != "acme/api" {
+		t.Fatalf("repos = %+v", repos)
 	}
 }
 
-func TestDisconnectGitHub_AuditsOnSuccess(t *testing.T) {
-	rec := &fakeRecorder{}
-	svc := newSvc(newFakeStore(), &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{}, rec)
-	if err := svc.DisconnectGitHub(authedCtx(), testWorkspaceID); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+func TestValidateRepo_AppIsBuildable(t *testing.T) {
+	store := &fakeStore{byID: map[string]Connection{testConnID: {ID: testConnID, WorkspaceID: testWorkspaceID, Provider: "github", Kind: kindApp, InstallationID: strptr("99"), AccountLogin: "acme"}}}
+	p := &fakeProvider{token: "ghs_x", repo: Repo{Owner: "acme", Name: "api", FullName: "acme/api", DefaultBranch: "main", Private: true}}
+	svc := newSvc(store, p, fakeAuthz{}, &fakeRecorder{})
+	rr, err := svc.ValidateRepo(authedCtx(), testConnID, "acme", "api", "")
+	if err != nil {
+		t.Fatalf("validate: %v", err)
 	}
-	if !rec.called || rec.action != "source.github.disconnect" {
-		t.Errorf("audit not recorded: called=%v action=%q", rec.called, rec.action)
-	}
-}
-
-func TestDisconnectGitHub_RevokesToken(t *testing.T) {
-	store := newFakeStore()
-	store.tokenCipher = []byte("sealed:gho_live")
-	gh := &fakeGitHub{}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	if err := svc.DisconnectGitHub(authedCtx(), testWorkspaceID); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(gh.revokedTokens) != 1 || gh.revokedTokens[0] != "gho_live" {
-		t.Errorf("revoked = %v, want exactly [gho_live]", gh.revokedTokens)
+	if rr.Branch != "main" || rr.Kind != kindApp || !rr.Buildable || !rr.IsPrivate {
+		t.Fatalf("resolved = %+v, want buildable app repo on default branch", rr)
 	}
 }
 
-// --- repository listing ---
-
-func TestListRepositories_DeniedDoesNotCallGitHub(t *testing.T) {
-	gh := &fakeGitHub{}
-	svc := newSvc(newFakeStore(), &fakeBox{}, gh, testOAuth(), fakeAuthz{err: problem.PermissionDenied("nope")}, &fakeRecorder{})
-	_, err := svc.ListRepositories(authedCtx(), ListReposInput{WorkspaceID: testWorkspaceID})
-	if !isKind(err, problem.KindPermissionDenied) {
-		t.Fatalf("got %v, want PermissionDenied", err)
-	}
-	if gh.listReposCalled {
-		t.Error("a denied list must not reach GitHub (no token oracle)")
-	}
-}
-
-func TestListRepositories_FiltersByQuery(t *testing.T) {
-	store := newFakeStore()
-	gh := &fakeGitHub{repos: []github.RepoInfo{
-		{FullName: "octocat/hello"}, {FullName: "octocat/world"}, {FullName: "octocat/help"},
+func TestInstallationToken_OnlyForApp(t *testing.T) {
+	store := &fakeStore{byID: map[string]Connection{
+		"oauth-conn": {ID: "oauth-conn", WorkspaceID: testWorkspaceID, Provider: "github", Kind: kindOAuth},
+		testConnID:   {ID: testConnID, WorkspaceID: testWorkspaceID, Provider: "github", Kind: kindApp, InstallationID: strptr("99")},
 	}}
-	svc := newSvc(store, &fakeBox{}, gh, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	repos, err := svc.ListRepositories(authedCtx(), ListReposInput{WorkspaceID: testWorkspaceID, Query: "hel"})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	svc := newSvc(store, &fakeProvider{token: "ghs_minted"}, fakeAuthz{}, &fakeRecorder{})
+
+	if _, ok, _ := svc.InstallationToken(context.Background(), "oauth-conn"); ok {
+		t.Error("oauth connection should not yield an installation token")
 	}
-	if len(repos) != 2 {
-		t.Fatalf("len = %d, want 2 (hello, help)", len(repos))
+	token, ok, err := svc.InstallationToken(context.Background(), testConnID)
+	if err != nil || !ok || token != "ghs_minted" {
+		t.Fatalf("app token = %q ok=%v err=%v", token, ok, err)
 	}
 }
 
-func TestListRepositories_NoConnection(t *testing.T) {
-	store := newFakeStore()
-	store.tokenOK = false
-	svc := newSvc(store, &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	_, err := svc.ListRepositories(authedCtx(), ListReposInput{WorkspaceID: testWorkspaceID})
-	if !isKind(err, problem.KindNotFound) {
-		t.Fatalf("got %v, want NotFound", err)
-	}
-}
-
-func TestInvalidIDsRejected(t *testing.T) {
-	svc := newSvc(newFakeStore(), &fakeBox{}, &fakeGitHub{}, testOAuth(), fakeAuthz{}, &fakeRecorder{})
-	if _, err := svc.GetConnection(authedCtx(), "not-a-uuid"); !isKind(err, problem.KindInvalidInput) {
-		t.Errorf("GetConnection bad id: got %v, want InvalidInput", err)
-	}
-	if _, err := svc.ListRepositories(authedCtx(), ListReposInput{WorkspaceID: "not-a-uuid"}); !isKind(err, problem.KindInvalidInput) {
-		t.Errorf("ListRepositories bad id: got %v, want InvalidInput", err)
-	}
-}
+func strptr(s string) *string { return &s }

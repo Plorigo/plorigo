@@ -43,6 +43,12 @@ func (a *App) router() http.Handler {
 	// 302), like the OAuth flow. See github_app.go and docs/architecture/security.md.
 	mux.Handle("GET /api/github/app/install", a.githubAppInstallHandler())
 	mux.Handle("GET /api/github/app/setup", a.githubAppSetupHandler())
+	// Automated GitHub App registration (the manifest flow): /new authorizes + returns an
+	// auto-submitting form that POSTs the manifest to GitHub; GitHub redirects to /manifest/callback
+	// with a temporary code the control plane exchanges for the App's credentials. See
+	// github_app_manifest.go and docs/architecture/sources.md.
+	mux.Handle("GET /api/github/app/manifest/new", a.githubAppManifestNewHandler())
+	mux.Handle("GET /api/github/app/manifest/callback", a.githubAppManifestCallbackHandler())
 	// Inbound GitHub App webhooks: the handler verifies the HMAC signature over the raw body before
 	// acting, so it is plain HTTP (outside the auth interceptor). See github_webhook.go.
 	mux.Handle("POST /api/github/webhook", a.githubWebhookHandler())

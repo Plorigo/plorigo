@@ -2,6 +2,7 @@ package app
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/plorigo/plorigo/internal/agents"
@@ -12,6 +13,7 @@ import (
 	"github.com/plorigo/plorigo/internal/deployments"
 	"github.com/plorigo/plorigo/internal/domains"
 	"github.com/plorigo/plorigo/internal/environments"
+	"github.com/plorigo/plorigo/internal/githubapp"
 	"github.com/plorigo/plorigo/internal/membership"
 	"github.com/plorigo/plorigo/internal/platform/crypto"
 	"github.com/plorigo/plorigo/internal/platform/github"
@@ -130,6 +132,56 @@ func (a *App) buildModules() error {
 		PublicURL: a.cfg.PublicURL,
 	})
 
+	// githubapp owns the instance's server-wide GitHub App credentials. They come from the
+	// GITHUB_APP_* env vars (operator-set, precedence) or — when those are unset — a sealed
+	// singleton row written by the dashboard's automated manifest-registration flow. It exposes
+	// resolvers the github client (app id + key), the webhook handler (secret), and the sources
+	// module (slug/configured + install URL) consume, so a runtime-registered App takes effect with
+	// no restart. Its own plain github client is only for the no-auth manifest conversion call.
+	// Built before sources + the App-aware client, which read credentials through it.
+	a.githubapp = githubapp.New(githubapp.Deps{
+		DB:     a.db,
+		Crypto: box,
+		GitHub: github.NewClient(github.Config{}),
+		Policy: policySvc,
+		Audit:  auditSvc,
+		Env: githubapp.EnvConfig{
+			AppID:         a.cfg.GitHubAppID,
+			PrivateKeyPEM: a.cfg.GitHubAppPrivateKey,
+			Slug:          a.cfg.GitHubAppSlug,
+			WebhookSecret: a.cfg.GitHubWebhookSecret,
+		},
+		BaseURL:    a.cfg.BaseURL,
+		WebhookURL: strings.TrimRight(a.cfg.BaseURL, "/") + "/api/github/webhook",
+		Log:        a.log,
+	}).Service()
+
+	// The App-aware GitHub client resolves its App id + private key dynamically through githubapp
+	// (env or the registered App), so installation tokens are minted for private builds without a
+	// restart after registration. The GitHub provider ADAPTER wraps it + the OAuth config + the App
+	// config resolver, and is the only GitHub-specific piece registered in the provider registry —
+	// adding GitLab later means registering another adapter, not changing sources.
+	githubClient := github.NewClient(github.Config{AppCredentials: a.githubapp.AppCredentials})
+	githubProvider := sources.NewGitHub(githubClient, sources.OAuthConfig{
+		ClientID:     a.cfg.GitHubClientID,
+		ClientSecret: a.cfg.GitHubClientSecret,
+		Scopes:       a.cfg.GitHubScopes,
+		RedirectURL:  a.cfg.GitHubRedirectURL(),
+	}, a.githubapp)
+	providerRegistry := sources.NewRegistry(githubProvider)
+
+	// sources owns a workspace's integrations (connections) across providers, going through the
+	// registry for all VCS access. The OAuth token is sealed by the same crypto box as secrets. Built
+	// before deployments + services, which reach providers only through it.
+	a.sources = sources.New(sources.Deps{
+		DB:        a.db,
+		Audit:     auditSvc,
+		Policy:    policySvc,
+		Crypto:    box,
+		Providers: providerRegistry,
+		Log:       a.log,
+	})
+
 	// deployments record an attempt to run an image in an environment on a server and
 	// dispatch it to that server's agent. Environment-scoped like env vars (workspace
 	// resolved through environment -> project); also serves the agent-facing
@@ -141,10 +193,13 @@ func (a *App) buildModules() error {
 		// Decrypts environment/service secrets at deploy time so their plaintext can be
 		// injected into the container (the same box that config seals them with).
 		Crypto: box,
-		// Resolves a pull request to its head ref + URL when creating a PR preview (public
-		// repos only in this slice; *github.Client satisfies the consumer-defined port).
+		// Resolves a pull request to its head ref + URL when creating a PR preview
+		// (*github.Client satisfies the consumer-defined port).
 		GitHub: github.NewClient(github.Config{}),
-		Log:    a.log,
+		// Mints a short-lived installation token for a private (GitHub App-backed) build at claim
+		// time (sources.Service satisfies the consumer-defined SourceTokens port).
+		Sources: a.sources.Service(),
+		Log:     a.log,
 	})
 
 	// domains attach one or more custom hostnames to a service. They authorize through the
@@ -156,33 +211,6 @@ func (a *App) buildModules() error {
 		Log:    a.log,
 	})
 
-	// sources connect a project to a GitHub repository via the workspace's OAuth
-	// connection. The OAuth token is sealed by the same crypto box as secrets (reused
-	// here); the GitHub client is the outbound adapter (*github.Client satisfies the
-	// module's GitHubClient port). The OAuth callback URL is derived from BaseURL (the
-	// dashboard origin, where the browser and the state cookie live).
-	a.sources = sources.New(sources.Deps{
-		DB:     a.db,
-		Audit:  auditSvc,
-		Policy: policySvc,
-		Crypto: box,
-		// An App-configured client so the install flow can resolve an installation and mint
-		// per-installation tokens (the App private key stays in this client, never leaves the
-		// control plane). When App credentials are unset it behaves like the plain client.
-		GitHub: github.NewClient(github.Config{AppID: a.cfg.GitHubAppID, AppPrivateKeyPEM: a.cfg.GitHubAppPrivateKey}),
-		OAuth: sources.OAuthConfig{
-			ClientID:     a.cfg.GitHubClientID,
-			ClientSecret: a.cfg.GitHubClientSecret,
-			Scopes:       a.cfg.GitHubScopes,
-			RedirectURL:  a.cfg.GitHubRedirectURL(),
-		},
-		App: sources.AppConfig{
-			AppID: a.cfg.GitHubAppID,
-			Slug:  a.cfg.GitHubAppSlug,
-		},
-		Log: a.log,
-	})
-
 	// services are a project's deployable components, each living in one environment and
 	// owning its source (folded onto the row), port, visibility, env vars, and deployment
 	// history. CreateService validates a git source through the same GitHub client as
@@ -190,11 +218,14 @@ func (a *App) buildModules() error {
 	// deployment through the deployments Enqueuer port (*deployments.Service) — built above,
 	// so this is constructed after it.
 	a.services = services.New(services.Deps{
-		DB:       a.db,
-		Audit:    auditSvc,
-		Policy:   policySvc,
-		Crypto:   box,
+		DB:     a.db,
+		Audit:  auditSvc,
+		Policy: policySvc,
+		Crypto: box,
+		// Public repos validate anonymously through this client; connected (oauth/app) repos validate
+		// through the sources module's provider seam.
 		GitHub:   github.NewClient(github.Config{}),
+		Sources:  sourcesForServices{svc: a.sources.Service()},
 		Enqueuer: a.deployments.Service(),
 		Config:   a.config.Service(),
 		Log:      a.log,
