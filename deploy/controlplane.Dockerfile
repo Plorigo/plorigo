@@ -15,7 +15,7 @@ COPY apps/web apps/web
 RUN pnpm --dir apps/web build
 
 # --- Stage 2: build the Go binary with the embedded dashboard ---
-FROM golang:1.26 AS build
+FROM golang:1.27 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
